@@ -1,0 +1,19 @@
+# Everything below is derived from the user's own disc or firmware and is never
+# tracked. The pre-commit hook refuses binaries; this list keeps them out of
+# the index in the first place.
+/out/
+/bin/
+/fw/
+/keys/
+/ref/
+/user/
+/blackbox/
+/build*/
+/dlss/
+*.elf
+*.sprx
+*.prx
+*.self
+*.SELF
+*.pkg
+*.pup
