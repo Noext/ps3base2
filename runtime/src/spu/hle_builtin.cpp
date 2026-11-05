@@ -371,7 +371,7 @@ void install_builtin() {
      * natives installs none, and whatever the guest actually calls is lifted
      * AOT like any other code. */
     game::current().install_spu_natives();
-    if (!std::getenv("PS3BASE_SPU_NATIVES") && game::current().name()[0] == 0) {
+    if (!std::getenv("PS3BASE_SPU_NATIVES")) {
         if (g_after_install) g_after_install();
         return;
     }
@@ -397,3 +397,29 @@ void install_builtin() {
 }
 
 }
+
+namespace spu {
+/* The God of War SPU job natives, in one entry point so a profile can switch
+ * them on. Everything inside is that title's own job code. */
+void install_gowa_natives()
+{
+#ifdef PS3BASE_PROFILE_GOWA
+    if (const char* e = std::getenv("GOWA_TEXCREATOR_HLE"); !e || e[0] != '0')
+        register_function({0x56E0, 32, nullptr, texcreator_compute, "TexCreator.compute", nullptr, kTexCreatorComputeHash});
+    install_edge();
+    install_ovl();
+    install_renjob();
+    install_scream();
+    install_screamjob();
+    install_cloth_shadows();
+    install_meshprep();
+    install_pm();
+    install_edgejob();
+    install_wws_job("GOWA_MESHHIER_HLE", "GOWA_MESHHIER_HLE_SKIP", "MeshHier", meshhier::hooks, meshhier::signature, meshhier::run_hook);
+    install_wws_job("GOWA_ANIM_HLE", "GOWA_ANIM_HLE_SKIP", "Anim", anim::hooks, anim::signature, anim::run_hook);
+    install_tasks();
+    install_mpjob();
+    wj::install_inplace();
+#endif
+}
+}  // namespace spu

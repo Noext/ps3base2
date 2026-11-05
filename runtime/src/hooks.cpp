@@ -644,7 +644,10 @@ void init() {
     for (const game::AddressHook& h : profile.address_hooks()) {
         LOG_INFO("hooks", "profile '%s': hook %s at 0x%08x",
                  profile.name(), h.what, h.guest_addr);
-        g_hooks[h.guest_addr] = h.what;
+        /* The map holds Hook* values; an address hook is a named watchpoint
+         * with no code of its own, so it registers with a null Hook and the
+         * name is only for the log. */
+        g_hooks[h.guest_addr] = nullptr;
     }
     profile.install_ppu_shims();
     if (!g_hooks.empty() && !ppu::hook_impl) ppu::hook_impl = impl;

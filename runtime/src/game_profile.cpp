@@ -33,6 +33,13 @@ const Profile& empty_profile() { return g_empty; }
 const Profile& current() { return *g_current; }
 void set_profile(const Profile* p) { g_current = p ? p : &g_empty; }
 
+unsigned profiles_available() { return (unsigned)registry().size(); }
+
+const Profile* first_profile()
+{
+    return registry().empty() ? nullptr : registry().front();
+}
+
 const Profile* find(const std::string& name)
 {
     /* Profiles are registered at static-init time by the files that define

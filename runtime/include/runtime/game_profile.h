@@ -54,11 +54,11 @@ public:
     /* Install the title's SPU job natives. Called once, lazily, by the first
      * SPU thread. A generic title installs nothing and its SPU work is AOT
      * lifted like any other code. */
-    virtual void install_spu_natives() {}
+    virtual void install_spu_natives() const {}
 
     /* Extra PPU work before the guest starts, if the title needs a shim.
      * Default: nothing. */
-    virtual void install_ppu_shims() {}
+    virtual void install_ppu_shims() const {}
 };
 
 /* The profile in force. Never null: an empty profile is the default. */
@@ -77,6 +77,11 @@ struct Registrar {
 /* Look a profile up by image name. Only the profiles this build was configured
  * with exist; anything else gets the empty one. */
 const Profile* find(const std::string& name);
+
+/* How many profiles this build compiled in, and the first of them. A build
+ * with exactly one does not need the operator to name it. */
+unsigned profiles_available();
+const Profile* first_profile();
 
 }  // namespace game
 

@@ -209,6 +209,22 @@ int main(int argc, char** argv) {
     /* The title image is whatever the profile names; a build with no profile
      * uses the first image in the manifest, which for a generated tree is the
      * game itself. The runtime never spells a game name. */
+    /* A profile is selected by name before anything else looks at one. The
+     * name comes from PS3BASE_PROFILE, or from the first image in the manifest
+     * when the build ships exactly one. A build with no profiles compiled in,
+     * or a name nothing registered, falls back to the empty profile and the
+     * generic runtime, which is a supported configuration rather than an
+     * error: that is how a foreign disc is measured. */
+    {
+        const char* want_profile = std::getenv("PS3BASE_PROFILE");
+        const game::Profile* chosen = want_profile ? game::find(want_profile) : nullptr;
+        if (!chosen && !want_profile && game::profiles_available() == 1)
+            chosen = game::first_profile();
+        game::set_profile(chosen);
+        const char* active = game::current().name();
+        LOG_INFO("main", "game profile: '%s'%s", active[0] ? active : "(none)",
+                 chosen ? "" : " -- generic runtime only");
+    }
     const game::Profile& profile = game::current();
     const char* want = profile.name()[0] ? profile.name() : nullptr;
     int game = want ? loader::find_image(want) : 0;
