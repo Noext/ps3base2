@@ -14,7 +14,14 @@ GOWA_SHA256 = {
     "1cb4f2533721acde768b7ad0c65ea4b3424f32c774c51daa35f3dac6847a0c18": "GOWA 01.12 patched",
 }
 
-GENERATORS = (
+# The generators below rewrite specific SPU jobs of ONE title by hand. They are
+# not part of a generic setup: a foreign disc has no such jobs, and running them
+# against its blocks feeds one game's addresses to another's code -- which is
+# exactly how "bad insn 073e4" used to abort the whole SPU stage.
+#
+# A profile names the generators it owns; everything outside a profile gets the
+# AOT lifter alone, which covers whatever the guest actually calls.
+GENERATORS_GOWA = (
     ("edge", "edge", ["tests/edge/spu_cgen.py", "73e0,d618", "{gen}/edge/edge_cull_gen.cpp"]),
     ("edge_softbody", "edge", ["tests/edge/sb_cgen.py", "{gen}/edge/edge_softbody_gen.inc"]),
     ("edge_ovl", "edge", ["tests/edge/ovl_cgen.py", "{gen}/edge/edge_ovl_gen.cpp", "{gen}/edge/edge_ovl_gen.h"]),
@@ -34,6 +41,11 @@ GENERATORS = (
     ("mpjob", "mpjob", ["tests/mpjob/mpj_cgen.py", "{gen}/mpjob"]),
     ("jwhole", "jwhole", ["tests/jobsys/whole_cgen.py", "{gen}/jwhole"]),
 )
+
+GENERATORS = ()
+PROFILE = os.environ.get("PS3BASE_PROFILE", "")
+if PROFILE == "gowa":
+    GENERATORS = GENERATORS_GOWA
 
 STAMP = "generated.txt"
 
@@ -114,6 +126,7 @@ def step_natives(args, blocks_dir):
     gen = os.path.join(args.gen_root, "spu")
     env = dict(os.environ, GOWA_ELF=os.path.abspath(args.elf), GOWA_SPU_BLOCKS=os.path.abspath(blocks_dir), GOWA_GEN_DIR=os.path.abspath(gen))
     stamp = os.path.join(gen, STAMP)
+    os.makedirs(gen, exist_ok=True)
     if os.path.exists(stamp):
         os.remove(stamp)
     want = set(args.only.split(",")) if args.only else None
