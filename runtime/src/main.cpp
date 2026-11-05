@@ -9,6 +9,7 @@
 #include "runtime/memory.h"
 #include "gpu/presenter.h"
 #include "runtime/thread.h"
+#include "runtime/game_profile.h"
 
 #include "runtime/vfs.h"
 #include "runtime/settings.h"
@@ -205,7 +206,12 @@ int main(int argc, char** argv) {
     }
     LOG_INFO("main", "GOWA-pc: %u images, %u functions, %u imports, %u exports, root %s", image::image_count, image::function_count, image::import_count, image::export_count, loader::g_root.c_str());
     if (!vm::init()) return 1;
-    int game = loader::find_image("gowa");
+    /* The title image is whatever the profile names; a build with no profile
+     * uses the first image in the manifest, which for a generated tree is the
+     * game itself. The runtime never spells a game name. */
+    const game::Profile& profile = game::current();
+    const char* want = profile.name()[0] ? profile.name() : nullptr;
+    int game = want ? loader::find_image(want) : 0;
     int lv2 = loader::find_image("liblv2");
     if (game < 0 || lv2 < 0 || !loader::load_image(game) || !loader::load_image(lv2)) return 1;
     const loader::ProcessInfo& pi = loader::g_process;
@@ -224,7 +230,16 @@ int main(int argc, char** argv) {
     auto main_thread = guest::create("main_thread", image::images[lv2].entry, 0, 0, pi.primary_prio, stack_size, 0, true);
     if (!main_thread) return 1;
     uint32_t sp = main_thread->stack_addr + main_thread->stack_size;
-    std::string self_path = vfs::patch_sfo().strings.empty() ? "/dev_bdvd/PS3_GAME/USRDIR/GOWA.SELF" : "/dev_hdd0/game/BCES01741/USRDIR/GOWA.SELF";
+    /* argv[0] for the CRT. A profile may override it; otherwise it is derived
+     * from the disc metadata, which is what a generic boot wants. */
+    std::string title_id = vfs::disc_sfo().str("TITLE_ID");
+    std::string self_path = profile.self_path(title_id);
+    if (self_path.empty()) {
+        const std::string dir = vfs::patch_sfo().strings.empty()
+            ? std::string("/dev_bdvd/PS3_GAME/USRDIR")
+            : "/dev_hdd0/game/" + (title_id.empty() ? std::string("UNKNOWN") : title_id) + "/USRDIR";
+        self_path = dir + "/" + (want ? want : "EBOOT") + ".SELF";
+    }
     std::vector<std::string> arg_list = {self_path};
     if (const char* extra = std::getenv("GOWA_ARGS")) {
         std::string e = extra;

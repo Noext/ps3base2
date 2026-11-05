@@ -2,6 +2,7 @@
 #include "runtime/host.h"
 #include "runtime/critpath.h"
 #include "runtime/hooks.h"
+#include "runtime/game_profile.h"
 #include "runtime/log.h"
 #include "runtime/memory.h"
 #include "runtime/jobsys.h"
@@ -634,6 +635,20 @@ void start_hogs(const char* spec) {
 }
 
 void init() {
+    /* Everything below is title-specific: patches by guest address, job
+     * intercepts, the jobsys edge, the critical-path hooks. A profile with
+     * nothing to declare gets none of it, and its guest runs on the generic
+     * runtime alone. This is the whole point of the seam -- the runtime must
+     * not know a game name, and a foreign disc must not inherit one. */
+    const game::Profile& profile = game::current();
+    for (const game::AddressHook& h : profile.address_hooks()) {
+        LOG_INFO("hooks", "profile '%s': hook %s at 0x%08x",
+                 profile.name(), h.what, h.guest_addr);
+        g_hooks[h.guest_addr] = h.what;
+    }
+    profile.install_ppu_shims();
+    if (!g_hooks.empty() && !ppu::hook_impl) ppu::hook_impl = impl;
+    if (std::getenv("PS3BASE_GAME_HOOKS") == nullptr) return;
     if (std::getenv("GOWA_BATCH_DIAG")) std::thread(batch_diag_thread).detach();
     if (const char* h = std::getenv("GOWA_TEST_HOG")) start_hogs(h);
     if (const char* n = std::getenv("GOWA_SYMBOLS")) load_names(n);

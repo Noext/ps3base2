@@ -1,4 +1,5 @@
 #include "hle.h"
+#include "runtime/game_profile.h"
 #include "texcreator_native.h"
 #include "edge/edge_adapters.h"
 #include "edge/edge_ovl.h"
@@ -365,6 +366,15 @@ const Function* lookup_dyn(const uint8_t* ls, uint32_t pc) {
 void (*g_after_install)() = nullptr;
 
 void install_builtin() {
+    /* The SPU job natives are handwritten rewrites of ONE title's jobs,
+     * registered by LS address against its own blocks. A profile with no
+     * natives installs none, and whatever the guest actually calls is lifted
+     * AOT like any other code. */
+    game::current().install_spu_natives();
+    if (!std::getenv("PS3BASE_SPU_NATIVES") && game::current().name()[0] == 0) {
+        if (g_after_install) g_after_install();
+        return;
+    }
     static std::once_flag once;
     std::call_once(once, [] {
         if (const char* e = std::getenv("GOWA_TEXCREATOR_HLE"); !e || e[0] != '0') register_function({0x56E0, 32, nullptr, texcreator_compute, "TexCreator.compute", nullptr, kTexCreatorComputeHash});
