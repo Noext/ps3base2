@@ -224,6 +224,14 @@ target_include_directories(lv2_enosys PRIVATE runtime/include "${CMAKE_SOURCE_DI
 target_compile_options(lv2_enosys PRIVATE ${PS3BASE_ARCH_FLAGS})
 add_test(NAME lv2_enosys COMMAND lv2_enosys)
 
+# The PS3 memory map. Every other subsystem stands on it and its failures are
+# silent, so the guarantees are checked rather than assumed.
+add_executable(memory_map tests/memory_map.cpp runtime/src/memory.cpp runtime/src/host.cpp runtime/src/log.cpp)
+target_include_directories(memory_map PRIVATE runtime/include)
+target_compile_options(memory_map PRIVATE ${PS3BASE_ARCH_FLAGS})
+target_link_libraries(memory_map PRIVATE ${CMAKE_DL_LIBS} pthread)
+add_test(NAME memory_map COMMAND memory_map)
+
 if(EXISTS "${CMAKE_SOURCE_DIR}/out/conformance/tests.cpp")
     add_executable(ppu_conformance tests/ppu_conformance/harness.cpp "${CMAKE_SOURCE_DIR}/out/conformance/tests.cpp")
     target_include_directories(ppu_conformance PRIVATE tests/ppu_conformance)

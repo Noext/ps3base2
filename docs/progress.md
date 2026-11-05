@@ -110,3 +110,25 @@ specification for the numbers and names, then scans this tree's own
 run reported 0/451 because it was looking for a definition named after the
 syscall and for `.c` files; this tree registers by number and its sources are
 `.cpp`. Both fixed, and the numbers above are the real state.
+
+### 1.2 The PS3 memory map, tested -- GREEN
+
+**Criterion:** the map's guarantees about the PS3 address space are checked,
+not assumed.
+
+```
+$ ./memory_map
+memory: 22 checks passed (0 failed)
+```
+
+Covers what fails silently: two allocations must not alias, an allocation
+honours its alignment, a store lands inside its own range and not in the
+neighbour's, the big-endian accessors round-trip (a byte-swapped load still
+looks plausible and is wrong), a range spanning an unmapped page is refused,
+freeing an unknown address is refused, and immutability is per-range.
+
+The test caught its own bad assumption first: it asserted that a range twice
+an allocation's size is unmapped, but the allocator legitimately places the
+next allocation there. The check now uses an address far from anything,
+because a test that encodes a layout it does not control is a test that will
+lie later.
