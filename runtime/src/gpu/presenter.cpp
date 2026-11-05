@@ -654,7 +654,7 @@ bool init() {
     if (const char* const* se = SDL_Vulkan_GetInstanceExtensions(&sdl_n)) exts.assign(se, se + sdl_n);
 #endif
     VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
-    app.pApplicationName = "gowa";
+    app.pApplicationName = "ps3base";
     app.apiVersion = VK_API_VERSION_1_3;
     VkInstanceCreateInfo ici{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
     ici.pApplicationInfo = &app;

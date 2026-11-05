@@ -141,7 +141,9 @@ HLE_FUNC(cellSysutil, cellAudioOutConfigure) {
 HLE_FUNC(cellSysutil, cellSysCacheMount) {
     uint32_t param = a32(ctx, 0);
     std::string id = gstr(param, 32);
-    std::string guest = "/dev_hdd1/caches/" + (id.empty() ? std::string("BCES01741") : id);
+    /* A cache path labelled with one specific title id makes every other disc
+     * share that title's cache -- and silently, because the path is internal. */
+    std::string guest = "/dev_hdd1/caches/" + (id.empty() ? std::string("ps3base") : id);
     std::error_code ec;
     std::filesystem::create_directories(vfs::host_path(guest), ec);
     put_str(param + 32, guest, 1024);

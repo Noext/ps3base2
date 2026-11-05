@@ -106,14 +106,19 @@ std::string disc_dir() {
             if (!v.empty()) return v;
         }
     }
-    if (const char* e = std::getenv("GOWA_RPCS3_DIR")) return std::string(e) + "/games/BCES01741";
+    /* The default disc folder is the RPCS3 games directory itself, not one
+     * particular game inside it: the launcher lets the user pick the title, so
+     * baking an id here would point every install at the same disc. */
+    const char* e = std::getenv("PS3BASE_RPCS3_DIR");
+    std::string rpcs3 = e ? std::string(e) : std::string();
+    if (!rpcs3.empty()) return rpcs3 + "/games";
     std::error_code ec;
-    if (fs::exists("rpcs3/games/BCES01741", ec)) return "rpcs3/games/BCES01741";
+    if (fs::exists("rpcs3/games", ec)) return "rpcs3/games";
 #ifdef _WIN32
-    return "rpcs3/games/BCES01741";
+    return "rpcs3/games";
 #else
     const char* home = std::getenv("HOME");
-    return std::string(home ? home : ".") + "/.config/rpcs3/games/BCES01741";
+    return std::string(home ? home : ".") + "/.config/rpcs3/games";
 #endif
 }
 

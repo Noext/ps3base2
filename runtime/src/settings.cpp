@@ -59,9 +59,9 @@ void set_env(const char* name, const std::string& value) {
 
 const std::vector<Option>& options() {
     static const std::vector<Option> o = {
-        {"game", "data_root", "GOWA_ROOT", Kind::Path, "", "Generated data folder", "Folder that contains bin/ and fw/ produced by tools/setup.py.", nullptr},
-        {"game", "disc_dir", "GOWA_DISC_DIR", Kind::Path, "", "Game disc folder", "Extracted disc, the folder that contains PS3_GAME.", nullptr},
-        {"game", "patch_dir", "GOWA_PATCH_DIR", Kind::Path, "", "Update folder", "Installed update BCES01741 (PARAM.SFO + USRDIR).", nullptr},
+        {"game", "data_root", "PS3BASE_ROOT", Kind::Path, "", "Generated data folder", "Folder that contains bin/ and fw/ produced by tools/setup.py.", nullptr},
+        {"game", "disc_dir", "PS3BASE_DISC_DIR", Kind::Path, "", "Game disc folder", "Extracted disc, the folder that contains PS3_GAME.", nullptr},
+        {"game", "patch_dir", "PS3BASE_PATCH_DIR", Kind::Path, "", "Update folder", "The installed update for your disc (PARAM.SFO + USRDIR).", nullptr},
         {"game", "fast_startup", "GOWA_TURBO", Kind::Choice, "1", "Fast startup", "Runs the logo and legal screens three times faster during the first 9 seconds (no sound meanwhile). Can leave the intro on a black screen.",
          "1=Off|3@9=On"},
         {"game", "flash_dir", "GOWA_FLASH_DIR", Kind::Path, "", "dev_flash folder", "Optional: a PS3 dev_flash copy (fonts, system files).", nullptr},

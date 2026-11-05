@@ -69,12 +69,19 @@ std::string fold_case(const std::string& root, const std::string& rest) {
 void init() {
     std::call_once(g_once, [] {
 #ifdef _WIN32
-        std::string rpcs3 = env_or("GOWA_RPCS3_DIR", "rpcs3");
+        std::string rpcs3 = env_or("PS3BASE_RPCS3_DIR", "rpcs3");
 #else
-        std::string rpcs3 = env_or("GOWA_RPCS3_DIR", (env_or("HOME", ".") + "/.config/rpcs3").c_str());
+        std::string rpcs3 = env_or("PS3BASE_RPCS3_DIR", (env_or("HOME", ".") + "/.config/rpcs3").c_str());
 #endif
-        std::string local = env_or("GOWA_VFS_DIR", "vfs");
-        g_disc = env_or("GOWA_DISC_DIR", (rpcs3 + "/games/BCES01741").c_str());
+        std::string local = env_or("PS3BASE_VFS_DIR", "vfs");
+        /* The disc folder is looked up by the title id the caller supplies, or
+         * by scanning the games directory. A hardcoded id here would make the
+         * runtime find one specific disc and silently fail on every other. */
+        const char* want = std::getenv("PS3BASE_TITLE_ID");
+        std::string disc = env_or("PS3BASE_DISC_DIR", "");
+        if (disc.empty() && want && *want)
+            disc = rpcs3 + "/games/" + want;
+        g_disc = disc;
         std::string rpcs3_hdd0 = rpcs3 + "/dev_hdd0";
         std::string hdd0 = env_or("GOWA_HDD0_DIR", (local + "/dev_hdd0").c_str());
         std::string hdd1 = env_or("GOWA_HDD1_DIR", (local + "/dev_hdd1").c_str());
@@ -84,7 +91,13 @@ void init() {
             std::error_code ec;
             std::filesystem::create_directories(d, ec);
         }
-        g_patch = env_or("GOWA_PATCH_DIR", (rpcs3_hdd0 + "/game/BCES01741").c_str());
+        /* Same rule as the disc folder: the update is found by the title id,
+         * never by a baked-in one. */
+        const char* want_patch = std::getenv("PS3BASE_TITLE_ID");
+        std::string patch = env_or("PS3BASE_PATCH_DIR", "");
+        if (patch.empty() && want_patch && *want_patch)
+            patch = rpcs3_hdd0 + "/game/" + want_patch;
+        g_patch = patch;
         g_mounts = {
             {"/dev_bdvd", g_disc},
             {"/dev_hdd0/game/bces01741", g_patch},
