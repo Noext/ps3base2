@@ -21,13 +21,15 @@ bool module_overridden(const std::string& file) {
     return it != overrides().end() && it->second();
 }
 
-void call_guest(ppu::Context& ctx, uint32_t opd, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3) {
+void call_guest(ppu::Context& ctx, uint32_t opd, uint64_t a0, uint64_t a1, uint64_t a2,
+                uint64_t a3, uint64_t a4) {
     ppu::Context saved = ctx;
     ctx.gpr[1] = (ctx.gpr[1] - 0x200) & ~0xFull;
     ctx.gpr[3] = a0;
     ctx.gpr[4] = a1;
     ctx.gpr[5] = a2;
     ctx.gpr[6] = a3;
+    ctx.gpr[7] = a4;
     guest::call_opd(ctx, vm::g_base, opd);
     uint64_t r3 = ctx.gpr[3];
     ctx = saved;

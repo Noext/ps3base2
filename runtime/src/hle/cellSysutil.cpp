@@ -192,4 +192,106 @@ HLE_FUNC(cellSysutilAvconfExt, cellVideoOutSetGamma) {
     ret(ctx, 0);
 }
 
+/* --- cellVideoOutGetDeviceInfo ------------------------------------------
+ *
+ * A title calls this to learn what its display can do, then picks a mode from
+ * the answer. Returning ENOSYS left it with an uninitialised structure, so it
+ * could not choose a resolution and submitted nothing -- which is exactly the
+ * shape of the empty frames this runtime was producing.
+ *
+ * The structure is CellVideoOutDeviceInfo: port type, colour space, latency,
+ * a mode count, the state, and an array of up to 32 display modes. Only the
+ * modes matter for choosing, so the array is filled with what this runtime
+ * actually supports and the count says how many.
+ */
+namespace {
+
+struct VideoMode {
+    uint8_t resolution_id;
+    uint8_t aspect;
+    uint16_t refresh_bits;   /* bit0 60 Hz, bit1 50 Hz, bit2 59.94 */
+};
+
+/* 1920x1080 and 1280x720 at 60 Hz, 720x480 and 720x576 for completeness.
+ * The ids are the console's, not an enum of ours: a title compares them
+ * against constants compiled into it. */
+constexpr VideoMode kModes[] = {
+    {1, 1, 0x0001},   /* 1920x1080, 16:9 */
+    {2, 1, 0x0001},   /* 1280x720,  16:9 */
+    {4, 2, 0x0001},   /* 720x480,   4:3  */
+    {5, 3, 0x0001},   /* 720x576,   4:3  */
+};
+
+/* The structure is exactly 0x1C8 bytes:
+ *   0x000 u8 portType, colorSpace; u16 latency; u8 availCount, state, rgbRange,
+ *         reserved[5]                                     (12)
+ *   0x00C CellVideoOutColorInfo: 8 x u16 + u32 gamma        (20)
+ *   0x020 CellVideoOutDisplayMode availableModes[32]        (256)
+ *   0x120 CellVideoOutKSVList: 160 + 4 + 4                  (168)
+ * An earlier value of 0x3A0 zeroed 0x1D8 bytes PAST the caller's structure and
+ * destroyed its stack frame -- the crash then appeared at a guest address of
+ * 0x6904, nowhere near this function. */
+constexpr uint32_t kDeviceInfoSize = 0x1C8;
+
+}  // namespace
+
+HLE_FUNC(cellSysutil, cellVideoOutGetDeviceInfo) {
+    const uint32_t video_out = a32(ctx, 0);
+    const uint32_t index = a32(ctx, 1);
+    const uint32_t out = a32(ctx, 2);
+
+    if (out == 0) return ret(ctx, static_cast<int32_t>(0x8002b222));  /* CELL_EINVAL */
+    if (video_out != 0) return ret(ctx, static_cast<int32_t>(0x8002b224));  /* CELL_VIDEO_OUT_ERROR_ILLEGAL_PARAMETER */
+    if (index != 0) return ret(ctx, static_cast<int32_t>(0x8002b225));  /* no such device */
+
+    /* Zero first: the caller may read fields this runtime has nothing to say
+     * about, and a stale stack value would be read as a capability. */
+    std::memset(vm::ptr(out), 0, kDeviceInfoSize);
+
+    uint8_t* p = vm::ptr(out);
+    p[0] = 1;    /* portType: HDMI */
+    p[1] = 1;    /* colorSpace: RGB */
+    vm::write16(out + 2, 0);            /* latency */
+    p[4] = static_cast<uint8_t>(sizeof(kModes) / sizeof(kModes[0]));
+    p[5] = 0;    /* state: 0 means "this device is available" */
+    p[6] = 1;    /* rgbOutputRange: full */
+
+    /* colorInfo at +0x0C: the sRGB primaries, scaled by 100000. A title that
+     * reads them only uses them for a colour conversion; leaving them zero
+     * makes it conclude the display has no gamut. */
+    const uint16_t primaries[8] = {64000, 33000, 30000, 60000, 15000, 6000, 31270, 32900};
+    for (int i = 0; i < 8; i++) vm::write16(out + 0x0C + i * 2, primaries[i]);
+    vm::write32(out + 0x1C, 2200);      /* gamma, x100 */
+
+    /* availableModes at +0x20, 8 bytes each. */
+    uint32_t mode_ea = out + 0x20;
+    for (const VideoMode& m : kModes) {
+        vm::ptr(mode_ea)[0] = m.resolution_id;
+        vm::ptr(mode_ea)[1] = 0;        /* scanMode: progressive */
+        vm::ptr(mode_ea)[2] = 0;        /* conversion: none */
+        vm::ptr(mode_ea)[3] = m.aspect;
+        vm::write16(mode_ea + 6, m.refresh_bits);
+        mode_ea += 8;
+    }
+
+    LOG_INFO("cellSysutil",
+             "cellVideoOutGetDeviceInfo -> %u modes, first %ux%u",
+             (unsigned)p[4], 1920u, 1080u);
+    ret(ctx, 0);
 }
+
+/* cellSysutilEnableBgmPlayback / Disable: the title tells the OS that
+ * background music is starting. Nothing here plays BGM, and refusing the call
+ * makes a title treat the feature as unavailable and take a slower path. There
+ * is no BGM to enable, so success is the truthful answer -- and unlike a
+ * fabricated CELL_OK for an object, there is no state the caller can later
+ * depend on being wrong. */
+HLE_FUNC(cellSysutil, cellSysutilEnableBgmPlayback) {
+    ret(ctx, 0);
+}
+
+HLE_FUNC(cellSysutil, cellSysutilDisableBgmPlayback) {
+    ret(ctx, 0);
+}
+
+}  // namespace hle

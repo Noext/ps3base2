@@ -136,6 +136,7 @@ Func lookup(uint32_t addr) {
     return nullptr;
 }
 
+
 enum : int32_t { kUnresolved = -3, kNone = -2, kHle = -1 };
 
 struct ImportSlot {
@@ -174,6 +175,8 @@ int32_t resolve(uint32_t index, ImportSlot& slot) {
 }
 
 }
+
+bool has_code_at(uint32_t addr) { return lookup(addr) != nullptr; }
 
 void call_indirect(Context& ctx, uint8_t* base, uint32_t addr) {
     Func fn = lookup(addr);
@@ -255,6 +258,23 @@ void call_import_inner(Context& ctx, uint8_t* base, uint32_t index, ImportSlot& 
 void syscall(Context& ctx, uint8_t* base) {
     uint32_t n = static_cast<uint32_t>(ctx.gpr[11]) & 1023;
     auto& slot = lv2::table()[n];
+    /* PS3BASE_SYSCALL_LOG=<n>: log the first n syscalls with their number,
+     * name and caller. A title that is looping on a timed wait shows the same
+     * handful of numbers forever; which handful is the diagnosis. */
+    {
+        static const long limit = std::getenv("PS3BASE_SYSCALL_LOG")
+                                      ? std::atol(std::getenv("PS3BASE_SYSCALL_LOG"))
+                                      : 0;
+        static long seen = 0;
+        if (limit && seen < limit) {
+            seen++;
+            const char* spec = lv2::spec_name(n);
+            LOG_INFO("sys", "%u %s lr=0x%08x r3=0x%llx r4=0x%llx", n,
+                     spec ? spec : "?", static_cast<uint32_t>(ctx.cia),
+                     static_cast<unsigned long long>(ctx.gpr[3]),
+                     static_cast<unsigned long long>(ctx.gpr[4]));
+        }
+    }
     if (slot.fn) {
         LOG_TRACE("lv2", "%s(0x%llx, 0x%llx, 0x%llx, 0x%llx)", slot.name, static_cast<unsigned long long>(ctx.gpr[3]), static_cast<unsigned long long>(ctx.gpr[4]),
                   static_cast<unsigned long long>(ctx.gpr[5]), static_cast<unsigned long long>(ctx.gpr[6]));
@@ -297,3 +317,9 @@ void syscall(Context& ctx, uint8_t* base) {
 }
 
 }
+
+namespace lv2 {
+/* The declaration lives in kernel.h under lv2; the implementation belongs with
+ * the dispatch table it asks about, under ppu. One forwarder keeps both true. */
+bool has_code_at(uint32_t addr) { return ppu::has_code_at(addr); }
+}  // namespace lv2

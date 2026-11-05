@@ -1,5 +1,7 @@
 #include "common.h"
 
+#include <cstring>
+
 namespace hle {
 
 namespace {
@@ -65,13 +67,45 @@ HLE_FUNC(sceNpTrophy, sceNpTrophyCreateHandle) {
     ret(ctx, 0);
 }
 HLE_FUNC(sceNpTrophy, sceNpTrophyRegisterContext) {
-    uint32_t cb = a32(ctx, 2), user = a32(ctx, 3);
+    /* The status callback is
+     *   s32 (u32 context, u32 status, s32 completed, s32 total, void* arg)
+     * -- argument 5 is the caller's own pointer, not a user id. The handler
+     * read a32(ctx, 3) as that pointer, which is the trophy handle, so the
+     * callback received a pointer into nothing and dereferenced it. Passing the
+     * real arg through is the whole fix. */
+    const uint32_t context = a32(ctx, 0);
+    const uint32_t cb = a32(ctx, 2);
+    const uint32_t arg = a32(ctx, 3);   /* the title's opaque pointer */
     if (cb) {
-        call_guest(ctx, cb, 1, 0, 0, user);
-        call_guest(ctx, cb, 1, 6, 0, user);
+        /* SCE_NP_TROPHY_STATUS_INSTALLED (0) then AVAILABLE (1); completed and
+         * total are zero because there is no trophy pack on this machine. */
+        call_guest(ctx, cb, context, 0, 0, 0, arg);
+        call_guest(ctx, cb, context, 1, 0, 0, arg);
     }
     ret(ctx, 0);
 }
+/* sceNpTrophyGetGameInfo( context, handle, SceNpTrophyGameDetails* details,
+ *                        SceNpTrophyGameData* data )
+ *
+ * Both structures are output-only. Leaving them unfilled was not a cosmetic
+ * gap: the caller wrote the returned counts into its own list and walked it,
+ * so a garbage count meant a walk off the end -- which is a vm::write32 fault
+ * at address 0x18, three functions away from here.
+ *
+ *   SceNpTrophyGameDetails: u32 numTrophies, numPlatinum, numGold, numSilver,
+ *                           numBronze; char title[128]; char description[1024];
+ *                           u8 reserved[4]           (1200 bytes)
+ *   SceNpTrophyGameData:    u32 unlocked*5          (20 bytes)
+ */
+HLE_FUNC(sceNpTrophy, sceNpTrophyGetGameInfo) {
+    const uint32_t details = a32(ctx, 2);
+    const uint32_t data = a32(ctx, 3);
+    if (details) std::memset(vm::ptr(details), 0, 1200);
+    if (data) std::memset(vm::ptr(data), 0, 20);
+    LOG_INFO("trophy", "GetGameInfo -> 0 trophies (no pack installed)");
+    ret(ctx, 0);
+}
+
 HLE_FUNC(sceNpTrophy, sceNpTrophyGetRequiredDiskSpace) {
     if (uint32_t p = a32(ctx, 2)) vm::write64(p, 0);
     ret(ctx, 0);

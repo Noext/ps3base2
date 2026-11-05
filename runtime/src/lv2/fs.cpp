@@ -171,12 +171,24 @@ LV2_SYSCALL(801, sys_fs_open) {
         if (!read_path(u32arg(ctx, 0), g) && g.find(k) != std::string::npos) crash::log_here(g.c_str());
     }
     std::string guest, host;
-    if (int64_t e = resolve(u32arg(ctx, 0), guest, host)) return e;
+    if (int64_t e = resolve(u32arg(ctx, 0), guest, host)) {
+        /* A path that does not resolve is the single most common reason a title
+         * finds none of its own files, and returning the error silently sends
+         * the hunt to the wrong subsystem. */
+        LOG_WARN("fs", "open: cannot resolve '%.*s' -> 0x%llx",
+                 static_cast<int>(strnlen(reinterpret_cast<const char*>(vm::ptr(u32arg(ctx, 0))), 512)),
+                 reinterpret_cast<const char*>(vm::ptr(u32arg(ctx, 0))),
+                 static_cast<unsigned long long>(e));
+        return e;
+    }
     int32_t flags = s32arg(ctx, 1);
     uint32_t out = u32arg(ctx, 2);
     bool ro = is_ro(guest);
     std::error_code ec;
-    if (fsys::is_directory(host, ec)) return CELL_EISDIR;
+    if (fsys::is_directory(host, ec)) {
+        LOG_WARN("fs", "open '%s' -> EISDIR (%s)", guest.c_str(), host.c_str());
+        return CELL_EISDIR;
+    }
     bool exists = fsys::exists(host, ec);
     int32_t acc = flags & O_ACCMODE;
     if (ro && (acc != 0 || (flags & (O_TRUNC | O_CREAT)))) {
@@ -186,7 +198,7 @@ LV2_SYSCALL(801, sys_fs_open) {
     }
     if (exists && (flags & O_CREAT) && (flags & O_EXCL)) return CELL_EEXIST;
     if (!exists && !(flags & O_CREAT)) {
-        LOG_DEBUG("fs", "open '%s' -> ENOENT", guest.c_str());
+        LOG_WARN("fs", "open '%s' -> ENOENT (host '%s')", guest.c_str(), host.c_str());
         return CELL_ENOENT;
     }
     const char* mode = "rb";
@@ -194,7 +206,11 @@ LV2_SYSCALL(801, sys_fs_open) {
     else if (!exists || (flags & O_TRUNC)) mode = acc == O_WRONLY ? "wb" : "w+b";
     else mode = "r+b";
     FILE* f = std::fopen(host.c_str(), mode);
-    if (!f) return exists ? CELL_EIO : CELL_ENOENT;
+    if (!f) {
+        LOG_WARN("fs", "open '%s' -> %s (host '%s', mode %s)", guest.c_str(),
+                 exists ? "EIO" : "ENOENT", host.c_str(), mode);
+        return exists ? CELL_EIO : CELL_ENOENT;
+    }
     auto fd = std::make_shared<Fd>();
     fd->f = f;
     fd->guest = guest;

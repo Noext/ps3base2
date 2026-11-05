@@ -28,6 +28,10 @@ inline void put_str(uint32_t addr, const std::string& s, size_t cap) {
     vm::ptr(addr)[n] = 0;
 }
 
-void call_guest(ppu::Context& ctx, uint32_t opd, uint64_t a0 = 0, uint64_t a1 = 0, uint64_t a2 = 0, uint64_t a3 = 0);
+/* A guest callback with up to five arguments. The fifth is real: a trophy
+ * status callback takes (context, status, completed, total, arg), and dropping
+ * the last one handed the title a pointer it had not supplied. */
+void call_guest(ppu::Context& ctx, uint32_t opd, uint64_t a0 = 0, uint64_t a1 = 0,
+                uint64_t a2 = 0, uint64_t a3 = 0, uint64_t a4 = 0);
 
 }

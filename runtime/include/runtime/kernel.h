@@ -44,6 +44,10 @@ struct SyscallReg {
     SyscallReg(uint32_t number, const char* name, SyscallFn fn);
 };
 
+/* Is there lifted code at this guest address? Used to tell an OPD from a bare
+ * code pointer: a title supplies both, in different places. */
+bool has_code_at(uint32_t addr);
+
 struct ThreadExit {
     uint64_t status;
 };

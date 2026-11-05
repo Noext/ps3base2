@@ -143,6 +143,13 @@ else()
     endif()
 endif()
 
+# The HLE image decoders call stb_image, whose implementation must exist
+# exactly once in the binary. The launcher already provides it when enabled; when
+# it is not, the runtime provides it itself.
+if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/stb/stb_image.h" AND NOT EXISTS "${CMAKE_SOURCE_DIR}/runtime/src/launcher/stb_image_impl.cpp")
+    list(APPEND GOWA_RUNTIME_SOURCES "${CMAKE_SOURCE_DIR}/runtime/src/launcher/stb_image_impl.cpp")
+endif()
+
 add_library(ps3base_runtime OBJECT ${GOWA_RUNTIME_SOURCES})
 file(GLOB GOWA_EDGE_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/runtime/src/spu/edge/*.cpp")
 file(GLOB GOWA_RENJOB_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/runtime/src/spu/renjob/*.cpp")
@@ -151,7 +158,11 @@ file(GLOB GOWA_CLOTH_SHADOWS_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/runt
 file(GLOB GOWA_MESHPREP_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/runtime/src/spu/meshprep/*.cpp")
 file(GLOB GOWA_PM_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/runtime/src/spu/pm/*.cpp" "${CMAKE_SOURCE_DIR}/runtime/src/spu/edgejob/*.cpp" "${CMAKE_SOURCE_DIR}/runtime/src/spu/meshhier/*.cpp" "${CMAKE_SOURCE_DIR}/runtime/src/spu/anim/*.cpp" "${CMAKE_SOURCE_DIR}/runtime/src/spu/tasks/*.cpp" "${CMAKE_SOURCE_DIR}/runtime/src/spu/mpjob/*.cpp")
 set_source_files_properties("${CMAKE_SOURCE_DIR}/runtime/src/spu/texcreator_native.cpp" ${GOWA_EDGE_SOURCES} ${GOWA_RENJOB_SOURCES} ${GOWA_SCREAM_SOURCES} ${GOWA_CLOTH_SHADOWS_SOURCES} ${GOWA_MESHPREP_SOURCES} PROPERTIES COMPILE_OPTIONS "${PS3BASE_CLANG}-frounding-math")
-target_include_directories(ps3base_runtime PRIVATE third_party/volk third_party/Vulkan-Headers/include third_party/glslang "${CMAKE_BINARY_DIR}/include")
+# third_party/stb is on the runtime's include path for the image decoders:
+# cellPngDec and cellJpgDec are real, and stb_image is what decodes the pixels.
+# runtime/src/lv2 is on the include path for the generated LV2 syscall table,
+# which is a checked-in artefact of tools/lv2/gen_syscall_table.py.
+target_include_directories(ps3base_runtime PRIVATE third_party/volk third_party/Vulkan-Headers/include third_party/glslang third_party/stb "${CMAKE_SOURCE_DIR}/runtime/src/lv2" "${CMAKE_BINARY_DIR}/include")
 target_compile_definitions(ps3base_runtime PRIVATE VK_NO_PROTOTYPES)
 target_link_libraries(ps3base_runtime PUBLIC ps3base_ppu_ops)
 target_compile_options(ps3base_runtime PRIVATE ${PS3BASE_ARCH_FLAGS} ${PS3BASE_EH})
