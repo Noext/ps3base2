@@ -58,3 +58,22 @@ SPU thread. Both now ask the profile.
 **What the flips are:** `draw 0.0%`, `clear 0.0%`, `methods 0.0% (2k/s)`.
 The game runs its loop and presents, but submits no geometry. That is the
 next question, and it is the RSX front end, not the profile seam.
+
+### 0.4 The GoWA profile still works -- GREEN
+
+**Criterion:** the title that owns the special layer still selects it, and an
+unknown name selects nothing.
+
+```
+$ ./profile_test
+profiles: 1
+find(gowa): yes
+find(nope): no
+first: 'gowa'
+```
+
+The check found a real defect: `namespace spu { void install_gowa_natives(); }`
+sat inside the anonymous namespace that wraps the profile class, so it declared
+a **different** `spu::` and the definition in `hle_builtin.cpp` was never
+reached. Every build would have linked a profile whose SPU natives silently did
+nothing. Declared at file scope, it resolves.

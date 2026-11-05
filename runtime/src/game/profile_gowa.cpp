@@ -14,6 +14,11 @@
 
 #include <cstdlib>
 
+/* Declared at file scope, NOT inside the anonymous namespace below: nested in
+ * an unnamed namespace it would declare a different spu:: and the definition
+ * in hle_builtin.cpp would never be reached. */
+namespace spu { void install_gowa_natives(); }
+
 namespace {
 
 class GowaProfile final : public game::Profile {
@@ -47,10 +52,6 @@ public:
      * this only turns them on for the title that owns them. */
     void install_spu_natives() const override;
 };
-
-/* Defined in runtime/src/spu/hle_builtin.cpp: registers this title's SPU job
- * natives. Only reachable when the profile is in force. */
-namespace spu { void install_gowa_natives(); }
 
 void GowaProfile::install_spu_natives() const { spu::install_gowa_natives(); }
 
