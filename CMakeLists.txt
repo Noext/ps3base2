@@ -216,6 +216,14 @@ target_link_libraries(ps3base PRIVATE ps3base_ppu ps3base_spu ps3base_ppu_ops ${
 target_include_directories(ps3base PRIVATE runtime/include)
 target_compile_options(ps3base PRIVATE ${PS3BASE_ARCH_FLAGS} ${PS3BASE_EH})
 
+# The LV2 table is generated from the specification and checked in, so the
+# build has no Python dependency. Regenerate with tools/lv2/gen_syscall_table.py.
+enable_testing()
+add_executable(lv2_enosys tests/lv2_enosys.cpp)
+target_include_directories(lv2_enosys PRIVATE runtime/include "${CMAKE_SOURCE_DIR}/runtime/src/lv2")
+target_compile_options(lv2_enosys PRIVATE ${PS3BASE_ARCH_FLAGS})
+add_test(NAME lv2_enosys COMMAND lv2_enosys)
+
 if(EXISTS "${CMAKE_SOURCE_DIR}/out/conformance/tests.cpp")
     add_executable(ppu_conformance tests/ppu_conformance/harness.cpp "${CMAKE_SOURCE_DIR}/out/conformance/tests.cpp")
     target_include_directories(ppu_conformance PRIVATE tests/ppu_conformance)

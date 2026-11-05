@@ -18,6 +18,8 @@
 #include <string>
 #include <vector>
 
+#include "syscall_table.h"
+
 namespace lv2 {
 
 namespace {
@@ -43,6 +45,16 @@ SyscallReg::SyscallReg(uint32_t number, const char* name, SyscallFn fn) {
 const char* syscall_name(uint32_t number) {
     const char* n = table()[number & 1023].name;
     return n ? n : "?";
+}
+
+const char* spec_name(uint32_t number) {
+    /* The generated table is the LV2 specification: it lists every number the
+     * console dispatches, with the name the specification gives it. An
+     * unimplemented number still has a name here, which is what makes the
+     * ENOSYS log actionable. */
+    for (unsigned i = 0; i < k_syscall_spec_count; i++)
+        if (k_syscall_spec[i].num == number) return k_syscall_spec[i].name;
+    return nullptr;
 }
 
 }
@@ -268,11 +280,20 @@ void syscall(Context& ctx, uint8_t* base) {
         if (cp0) critpath::syscall_done(n, cp0, static_cast<uint32_t>(ctx.lr), cp_arg, static_cast<uint32_t>(ctx.gpr[1]));
         return;
     }
+    /* A syscall nobody implemented returns ENOSYS, named, once. It does NOT
+     * return 0: CELL_OK from something that did not run tells the caller its
+     * state was created when it was not, and the failure then surfaces far
+     * from here -- a title that believes a mutex exists, a heap was mapped, a
+     * thread was started. The number and its specification name are both
+     * logged so the gap is actionable rather than mysterious. */
     if (!lv2::g_warned[n].exchange(1)) {
-        LOG_WARN("lv2", "unimplemented syscall %u at 0x%08x r3=0x%llx r4=0x%llx r5=0x%llx", n, ctx.cia,
-                 static_cast<unsigned long long>(ctx.gpr[3]), static_cast<unsigned long long>(ctx.gpr[4]), static_cast<unsigned long long>(ctx.gpr[5]));
+        const char* spec_name = lv2::spec_name(n);
+        LOG_WARN("lv2", "ENOSYS: syscall %u (%s) not implemented, lr=0x%08x r3=0x%llx",
+                 n, spec_name ? spec_name : "not in the LV2 table",
+                 static_cast<uint32_t>(ctx.cia),
+                 static_cast<unsigned long long>(ctx.gpr[3]));
     }
-    ctx.gpr[3] = 0;
+    ctx.gpr[3] = static_cast<uint64_t>(static_cast<int64_t>(static_cast<int32_t>(0x8001003Fu)));
 }
 
 }

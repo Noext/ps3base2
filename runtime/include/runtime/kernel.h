@@ -54,6 +54,10 @@ struct ProcessExit {
 
 const char* syscall_name(uint32_t number);
 
+/* What the LV2 specification calls this number, whether or not it is
+ * implemented. Null when the number is not in the table at all. */
+const char* spec_name(uint32_t number);
+
 }
 
 #define LV2_SYSCALL(num, name) \

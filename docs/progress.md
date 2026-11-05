@@ -77,3 +77,36 @@ sat inside the anonymous namespace that wraps the profile class, so it declared
 a **different** `spu::` and the definition in `hle_builtin.cpp` was never
 reached. Every build would have linked a profile whose SPU natives silently did
 nothing. Declared at file scope, it resolves.
+
+## Phase 1 -- what the old tree kept
+
+### 1.1 The LV2 table, with ENOSYS -- GREEN
+
+**Criterion:** every number the specification dispatches is accounted for, and
+an unimplemented one refuses rather than succeeding.
+
+```
+$ ./lv2_enosys
+lv2: 451 listed, 180 implemented (39.9%), 3 checks
+
+$ python3 tools/lv2/gen_syscall_table.py
+gen_syscall_table: 451 syscalls listed, 180 implemented (39.9%)
+  process        5/17    29.4%
+  ppu_thread    18/32    56.2%
+  event_queue   10/10   100.0%
+  filesystem     1/9     11.1%
+  modules        0/43     0.0%
+```
+
+**The dispatch was returning a fabricated success.** In `ppu_runtime.cpp` an
+unimplemented syscall logged a warning and then set `r3 = 0` -- `CELL_OK` from
+something that did not run. Every caller believed its object had been created.
+It now returns `0x8001003F` with the specification name of the number in the
+log, which is what makes the gap actionable.
+
+**Coverage is measured, not claimed.** The generator reads the LV2
+specification for the numbers and names, then scans this tree's own
+`LV2_SYSCALL(n, ...)` registrations to decide what is implemented. The first
+run reported 0/451 because it was looking for a definition named after the
+syscall and for `.c` files; this tree registers by number and its sources are
+`.cpp`. Both fixed, and the numbers above are the real state.
