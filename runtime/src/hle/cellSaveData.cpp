@@ -316,4 +316,21 @@ HLE_FUNC(cellSysutil, cellSaveDataAutoLoad2) { ret(ctx, auto_op(ctx, false)); }
 
 HLE_FUNC(cellSysutil, cellSaveDataAutoSave2) { ret(ctx, auto_op(ctx, true)); }
 
+/* cellSaveDataUserAutoLoad has the same shape as AutoLoad2 but keys the file by
+ * user id. Without it the title's save check falls through to the unresolved
+ * handler, reports failure, and shows a modal error -- which is what stopped the
+ * run before the world could load. The user is folded into the directory name so
+ * each account keeps its own slot. */
+HLE_FUNC(cellSysutil, cellSaveDataUserAutoLoad) {
+    const uint32_t user = a32(ctx, 0);
+    std::string name = gstr(a32(ctx, 1), 64);
+    if (!name.empty()) name = "u" + std::to_string(user) + "_" + name;
+    const std::string dir = save_root() + "/" + name;
+    Op op{ctx, name, dir, a32(ctx, 3), a32(ctx, 4), a32(ctx, 5), a32(ctx, 7), false};
+    if (name.empty() || !op.set_buf || !op.func_stat || !op.func_file) return ret(ctx, static_cast<int32_t>(ERR_PARAM));
+    const int32_t r = run_op(op);
+    LOG_INFO("savedata", "UserAutoLoad user %u '%s' -> %d", user, name.c_str(), r);
+    ret(ctx, r);
+}
+
 }

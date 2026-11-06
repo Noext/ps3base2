@@ -294,6 +294,7 @@ int main(int argc, char** argv) {
         std::thread([limit] {
             host::set_thread_name("hitch watchdog");
             uint64_t last = lv2::rsx_flip_count();
+            int snap_sec = 0;
             auto since = std::chrono::steady_clock::now();
             bool dumped = false;
             for (;;) {
@@ -329,6 +330,20 @@ int main(int argc, char** argv) {
     for (int tick = 0;; tick++) {
         if (census > 0 && tick % census == 0) thread_census(census);
         hooks::tick_patches();
+        {
+            /* Snapshot the listed guest ranges at 2, 5 and 10 s, so the same
+             * buffer can be compared across time. Identical striped content at
+             * every point rules out a race. */
+            static const auto t0 = std::chrono::steady_clock::now();
+            static int done = 0;
+            const int sec = int(std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+            for (int mark : {2, 10, 17, 19, 21}) {
+                if (sec >= mark && !(done & (1 << mark))) {
+                    done |= 1 << mark;
+                    vm::tex_snapshot_tick(mark);
+                }
+            }
+        }
         spu::lowfps_tick(lv2::rsx_flip_count());
         if (!peeks.empty()) {
             std::string line;

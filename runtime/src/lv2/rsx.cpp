@@ -34,6 +34,8 @@ std::string sample_stack(void* native, int depth);
 void profile_thread(void* native, const char* name);
 }
 
+namespace rdcapture { void maybe_capture(uint64_t flips); }
+
 namespace lv2 {
 
 namespace {
@@ -118,6 +120,7 @@ void flip_done(uint32_t buffer) {
     vm::write32(h + 0x10, buffer);
     std::memset(vm::ptr(g_rsx.reports + 0x10), 0, 16);
     g_rsx.flips++;
+    rdcapture::maybe_capture(g_rsx.flips);
     if (critpath::g_on) critpath::flip(g_rsx.flips);
     if (trace::on(trace::RSX)) trace::emit(trace::T_FLIP, buffer, g_rsx.flips);
     static auto last = std::chrono::steady_clock::now();
@@ -537,10 +540,36 @@ void fifo_thread() {
             static const bool draw_log = std::getenv("PS3BASE_DRAW_LOG") != nullptr;
             if (draw_log && method <= 0x1808 && 0x1808 < end) {
                 auto reg = [&](uint32_t r) { return regs[r >> 2]; };
-                LOG_INFO("draw", "prim 0x%x idx 0x%x/%u vtx 0x%x target 0x%x %ux%u tex %s off 0x%x",
+                /* A unit is enabled by bit 31 of its CONTROL0, as RPCS3 reads
+                 * it (RSXTexture.cpp: fragment_texture::enabled). 0x1D00 is not
+                 * the enable register; using it reported every draw as
+                 * untextured, which was an error in this instrument. */
+                auto unit_enabled = [&](uint32_t u) { return (reg(0x1A0C + u * 0x20) >> 31) & 1u; };
+                uint32_t te = 0;
+                for (uint32_t u = 0; u < 4; u++) if (unit_enabled(u)) te |= 1u << u;
+                LOG_INFO("draw", "prim 0x%x idx 0x%x/%u vtx 0x%x target 0x%x %ux%u tex %s",
                          reg(0x1808), reg(0x1674), reg(0x1678) & 0xFFFF, reg(0x1680),
-                         reg(0x0200), reg(0x0208), reg(0x020C),
-                         reg(0x1D00) ? "on" : "off", reg(0x1A00));
+                         reg(0x0200), reg(0x0208), reg(0x020C), te ? "on" : "off");
+                /* Which texture is actually bound, per unit. The text runs use a
+                 * specific atlas; if the bound address or format is not that
+                 * atlas, the striping comes from a wrong binding, not from the
+                 * decode. */
+                if (te) {
+                    for (uint32_t u = 0; u < 4; u++) {
+                        if (!((te >> u) & 1u)) continue;
+                        const uint32_t b = 0x1A00 + u * 0x20;
+                        const uint32_t off = reg(b) & 0x7FFFFFFF;
+                        const uint32_t fmt = reg(b + 4);
+                        const uint32_t rect = reg(b + 0x18);
+                        const uint32_t c1 = reg(b + 0x10);
+                        LOG_INFO("drawtex",
+                                 "unit %u off 0x%x fmt 0x%02x %ux%u mips %u minfilt 0x%x mag 0x%x",
+                                 u, off, (fmt >> 8) & 0xFF,
+                                 rect >> 16, rect & 0xFFFF,
+                                 ((c1 >> 16) & 0xF) + 1,
+                                 (c1 >> 4) & 0x3, c1 & 0x3);
+                    }
+                }
             }
         }
         int kind = (method <= 0x1808 && 0x1808 < end) ? 0 : (method <= 0xE924 && 0xE920 < end) ? 1 : (method <= 0x1D94 && 0x1D94 < end) ? 2
@@ -572,6 +601,8 @@ void vblank_thread() {
 }
 
 uint32_t rsx_address(uint32_t offset, uint32_t loc) { return get_address(offset, loc); }
+
+uint32_t rsx_io_to_ea(uint32_t io) { return io_to_ea(io); }
 
 uint64_t rsx_flip_count() { return std::atomic_ref<uint64_t>(g_rsx.flips).load(std::memory_order_relaxed); }
 

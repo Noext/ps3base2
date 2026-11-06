@@ -108,6 +108,9 @@ void process_hit(const PendingHit& h) {
     Trap& t = g_traps[h.trap];
     uint32_t value = vm::read32(t.len <= 4 ? t.addr : (h.fault & ~3u));
     if (t.has_val && vm::read32(t.addr) != t.val) return;
+    /* GOWA_TRAP_NONZERO: only report writes whose value is non-zero, so a
+     * zero-filling writer cannot mask the one that carries the data. */
+    if (const char* nz = std::getenv("GOWA_TRAP_NONZERO"); nz && *nz != '0' && h.write && value == 0) return;
     std::lock_guard lk(g_trap_lock);
     t.hits++;
     uint32_t stack_id = 0;
@@ -165,8 +168,11 @@ void fault_handler(int sig, siginfo_t* si, void* ctx) {
     bool is_write = (uc->uc_mcontext.gregs[REG_ERR] & 2) != 0;
     if (guest) {
         uint32_t g = static_cast<uint32_t>(fault - vm::g_base);
-        if (is_write && vm::watch_fault(g, g_watch_count == 0)) return;
+        /* Traps first. watch_fault would otherwise repair the page and clear its
+         * watched bit, so a trap on the same page fired exactly once and the
+         * writer of interest never appeared in the log. */
         if (g_watch_count && trap_fault(g, is_write, uc)) return;
+        if (is_write && vm::watch_fault(g, g_watch_count == 0)) return;
     }
     static std::atomic<bool> once{false};
     if (once.exchange(true)) return chain(sig, si, ctx);

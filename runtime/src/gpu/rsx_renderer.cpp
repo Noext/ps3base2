@@ -49,6 +49,7 @@
 
 namespace lv2 {
 uint32_t rsx_address(uint32_t offset, uint32_t loc);
+uint32_t rsx_io_to_ea(uint32_t io);
 }
 
 namespace gpu::rsx {
@@ -151,6 +152,21 @@ enum : uint32_t {
 constexpr uint32_t CELL_GCM_LOCATION_LOCAL = 0xFEED0000;
 constexpr uint32_t RESTART = 0xFFFFFFFFu;
 
+/* The glyph atlas the text draws bind. */
+constexpr uint32_t kAtlasLo = 0x3d3f200;
+constexpr uint32_t kAtlasHi = 0x3d7f200;
+
+inline bool overlaps_atlas(uint32_t off, uint64_t size)
+{
+    return uint64_t(off) + size > kAtlasLo && off < kAtlasHi;
+}
+
+inline bool atlas_trace()
+{
+    static const bool on = std::getenv("PS3BASE_ATLAS_TRACE") != nullptr;
+    return on;
+}
+
 struct Surface {
     uint32_t offset = 0;
     uint32_t width = 0;
@@ -196,6 +212,10 @@ struct Texture {
     uint32_t churn = 0;
     uint64_t nowatch_until = 0;
     VkImageLayout img_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    /* Views keyed by component mapping. The remap lives in CONTROL1 of the draw
+     * that binds the texture, not in the texture itself, so a single view made at
+     * upload time applies whichever remap happened to be in force then. */
+    std::map<uint64_t, VkImageView> remap_views;
     std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> pool_key;
 };
 
@@ -305,6 +325,7 @@ bool g_vp_constants_dirty = true;
 RingAlloc g_vp_constants_alloc;
 uint64_t g_vp_constants_serial = ~0ull;
 float g_imm[16][4];
+bool g_imm_set[16];
 std::atomic<uint32_t> g_vp_failures{0};
 std::atomic<uint32_t> g_fp_failures{0};
 uint64_t g_clears = 0;
@@ -367,6 +388,7 @@ bool g_skip_init = [] {
 }();
 uint32_t g_trace_draws = 0;
 void schedule_dumps();
+void schedule_image_snapshot(VkImage image, uint32_t w, uint32_t h, const std::string& name, VkFormat format = VK_FORMAT_R8G8B8A8_UNORM);
 uint32_t g_experiment = std::getenv("GOWA_GPU_EXPERIMENT") ? std::atoi(std::getenv("GOWA_GPU_EXPERIMENT")) : 0;
 
 uint32_t g_prim = 0;
@@ -840,6 +862,10 @@ FpEntry* fragment_program(uint32_t ea) {
         std::vector<uint32_t> code(words);
         for (uint32_t i = 0; i < words; i++) code[i] = read(i);
         remember(&e);
+        /* The async path needs the hash too: without it the decompiler cannot
+         * tell which shader it is compiling, and a hash-gated override (or a
+         * dump keyed on the hash) silently does nothing on this path. */
+        key.hash = h;
         g_compile_pool.submit([&e, code = std::move(code), key] {
             FpWordReader r = [&code](uint32_t i) { return i < code.size() ? code[i] : 0u; };
             FragmentProgramInfo fp = decompile_fragment_program(r, key);
@@ -854,6 +880,7 @@ FpEntry* fragment_program(uint32_t ea) {
     FragmentProgramInfo fp;
     {
         SyncTimer st;
+        key.hash = h;
         fp = decompile_fragment_program(read, key);
     }
     e.literal_slots = fp.literal_slots;
@@ -861,6 +888,11 @@ FpEntry* fragment_program(uint32_t ea) {
     e.textures = fp.texture_mask;
     e.dims = key.texture_dims;
     if (std::getenv("GOWA_SHADER_DUMP")) dump_failure("fp", h, fp.glsl, "");
+    /* PS3BASE_FP_DUMP=<hex>: always write the GLSL of this fragment program, so a
+     * shader already in the cache still lands on disk. */
+    if (const char* want = std::getenv("PS3BASE_FP_DUMP")) {
+        if (std::strtoull(want, nullptr, 16) == h) dump_failure("fpwanted", h, fp.glsl, "");
+    }
     if (fp.valid) {
         compile_entry(e, ShaderStage::Fragment, fp.glsl, finish_fp);
     } else {
@@ -1060,6 +1092,10 @@ Surface* surface(uint32_t offset, VkFormat format, uint32_t w, uint32_t h, bool 
         g_retired_surfaces.emplace_back(frame_serial(), std::move(it->second));
         g_surfaces.erase(it);
         g_surfaces_version++;
+    }
+    if (atlas_trace() && overlaps_atlas(offset, uint64_t(w) * h * 4)) {
+        LOG_INFO("atlas", "render target LOCAL off 0x%x %ux%u fmt %d pitch %u depth %d main %d COVERS ATLAS",
+                 offset, w, h, int(format), pitch, depth ? 1 : 0, main ? 1 : 0);
     }
     g_surfaces[key] = std::move(s);
     g_surfaces_version++;
@@ -1576,7 +1612,17 @@ Texture* memory_texture(const TextureRegs& t, uint32_t ea) {
     tex->last_used = serial;
     if (tex->checked == serial) return tex;
     tex->checked = serial;
-    if (!readable(ea, tex->layout.source_size)) return nullptr;
+    if (!readable(ea, tex->layout.source_size)) {
+        /* An unmapped texture address means the bind silently produced nothing
+         * and whatever was bound before stays in the sampler. Name it. */
+        static std::atomic<uint32_t> miss{0};
+        if (miss.fetch_add(1) < 200) {
+            LOG_WARN("texbind", "unreadable tex ea 0x%08x off 0x%x fmt 0x%02x %ux%u size 0x%x",
+                     ea, tex->layout.base, (t.format >> 8) & 0xFF, tex->layout.width,
+                     tex->layout.height, tex->layout.source_size);
+        }
+        return nullptr;
+    }
     if (tex->watched) {
         if (tex->img_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL && vm::range_epoch(ea, tex->layout.source_size) == tex->epoch) {
             tex->churn = 0;
@@ -1588,21 +1634,64 @@ Texture* memory_texture(const TextureRegs& t, uint32_t ea) {
     bool watch_ok = false;
     uint64_t epoch = vm::watch_enabled() && serial >= tex->nowatch_until ? vm::watch_range(ea, tex->layout.source_size, watch_ok) : 0;
     tex->watched = false;
+    {
+        /* Location is bits 0..1 of the format register: 1 = local, 2 = main for
+         * the PS3's encoding. Log it with the EA actually used and the other
+         * candidate, for the text textures. */
+        static std::atomic<uint32_t> seen{0};
+        const uint32_t code = (t.format >> 8) & 0xFF;
+        if ((code == 0x81 || code == 0xA5) && seen.fetch_add(1) < 40) {
+            /* Reported explicitly: the RAW low two bits, the DECODED location
+             * ((raw & 3) - 1, as RPCS3 RSXTexture.cpp:31 does it), and the value
+             * this file's own `loc` variable holds. CELL_GCM_LOCATION_LOCAL is 0,
+             * MAIN is 1, so raw 1 -> local and raw 2 -> main. */
+            const uint32_t raw = t.format & 3;
+            const int decoded = int(raw) - 1;
+            const uint32_t loc_var = (t.format & 3) - 1;
+            LOG_INFO("texloc",
+                     "off 0x%x fmt 0x%08x raw %u decoded %d (0=local,1=main) our_loc %u "
+                     "-> ea 0xc0000000+off=0x%08x(ea_used 0x%08x) io_to_ea=0x%08x",
+                     t.offset, t.format, raw, decoded, loc_var,
+                     0xC0000000u + t.offset, ea, lv2::rsx_io_to_ea(t.offset));
+        }
+    }
     const uint8_t* src = vm::ptr(ea);
     uint64_t ht = ticks();
     uint64_t h = fast_hash(src, tex->layout.source_size);
     g_stats.hash_ticks += ticks() - ht;
     g_stats.hash_bytes += tex->layout.source_size;
     g_stats.hash_count++;
-    if (h == tex->hash && tex->img_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+    /* Diagnostic: force a re-upload of the listed offsets every frame. If the
+     * picture becomes correct with this on and wrong with it off, the bug is the
+     * invalidation, not the decode or the upload. */
+    static const std::string force_list = [] {
+        const char* e = std::getenv("PS3BASE_TEX_REUPLOAD");
+        return std::string(e ? e : "");
+    }();
+    static const bool force_all = std::getenv("PS3BASE_TEX_REUPLOAD_ALL") != nullptr;
+    bool force_upload = false;
+    if (force_all) {
+        force_upload = true;
+    } else if (!force_list.empty()) {
+        char key[24];
+        std::snprintf(key, sizeof key, "%x", ea);
+        force_upload = ("," + force_list + ",").find("," + std::string(key) + ",") != std::string::npos;
+    }
+    if (!force_upload && h == tex->hash && tex->img_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
         tex->epoch = epoch;
         tex->watched = watch_ok;
         return tex;
     }
     RingAlloc staging;
     if (!ring_alloc(tex->layout.decoded_size, 16, staging)) return nullptr;
-    if (texture_pool().threads() && tex->layout.decoded_size >= 65536 && !g_trace) {
+    const bool async_decode = texture_pool().threads() && tex->layout.decoded_size >= 65536 && !g_trace;
+    if (async_decode) {
         texture_pool().submit([src, t, layout = tex->layout, dst = staging.ptr] { decode_texture(src, t, layout, dst); });
+        /* The copy into the VkImage is recorded immediately below, on the FIFO
+         * thread. Without waiting for the decode job, it uploads whatever was in
+         * the ring buffer: the raw swizzled bytes, or stale data. That is exactly
+         * the pattern seen on screen -- swizzle displayed linearly. */
+        texture_pool().sync();
     } else {
         decode_texture(src, t, tex->layout, staging.ptr);
     }
@@ -1941,6 +2030,23 @@ Binding bind_texture(uint32_t unit, uint32_t dim, const std::vector<Surface*>& c
     g_bind_kind = "dummy";
     Binding b = bind_texture_impl(unit, dim, colors, depth);
     if (!b.sampler) b.sampler = sampler(texture_regs(unit), 1, false);
+    {
+        static const char* kinds[] = {"dummy", "memory", "depth redirect", "feedback copy", "surface region", "depth surface", "color surface"};
+        uint32_t k = 0;
+        for (uint32_t i = 0; i < 7; i++) if (std::strcmp(g_bind_kind, kinds[i]) == 0) k = i;
+        {
+            static std::atomic<uint64_t> counts[7];
+            static std::atomic<uint32_t> tick{0};
+            counts[k].fetch_add(1, std::memory_order_relaxed);
+            if (tick.fetch_add(1) % 20000 == 0) {
+                LOG_INFO("bindkind", "dummy %llu memory %llu depthredir %llu feedback %llu region %llu depth %llu color %llu",
+                         (unsigned long long)counts[0].load(), (unsigned long long)counts[1].load(),
+                         (unsigned long long)counts[2].load(), (unsigned long long)counts[3].load(),
+                         (unsigned long long)counts[4].load(), (unsigned long long)counts[5].load(),
+                         (unsigned long long)counts[6].load());
+            }
+        }
+    }
     if (trace::on(trace::TEX)) {
         TextureRegs t = texture_regs(unit);
         static const char* kinds[] = {"dummy", "memory", "depth redirect", "feedback copy", "surface region", "depth surface", "color surface"};
@@ -1971,7 +2077,13 @@ Binding bind_texture_impl(uint32_t unit, uint32_t dim, const std::vector<Surface
         Surface* larger = nullptr;
         Surface* redirect = nullptr;
         for (Surface* s : surfaces_at(t.offset)) {
-            if (s->offset != t.offset || s->main != (loc == 1) || s->width < w || s->height < h) continue;
+            /* Location is (format & 3) - 1 (RPCS3 RSXTexture.cpp): 0 = local,
+             * 1 = main. A local surface has main == false, so the old test
+             * "s->main != (loc == 1)" required main to be TRUE for a LOCAL
+             * texture and could never match one. That is why a texture whose
+             * data is produced by rendering into a local surface was read from
+             * guest memory instead -- which holds nothing, and sampled as noise. */
+            if (s->offset != t.offset || s->width < w || s->height < h) continue;
             if (s->depth() == depth_fmt) {
                 if (s->width == w && s->height == h) exact = s;
                 else if (!larger) larger = s;
@@ -1992,6 +2104,14 @@ Binding bind_texture_impl(uint32_t unit, uint32_t dim, const std::vector<Surface
                 m = texture_mapping(0x85, t.control1);
             }
             g_bind_kind = src == redirect ? "depth redirect" : target ? "feedback copy" : "surface region";
+            {
+                static std::atomic<uint32_t> seen{0};
+                if (seen.fetch_add(1) < 300) {
+                    LOG_INFO("bind", "off 0x%x fmt 0x%02x %ux%u -> %s (src %ux%u fmt %d)",
+                             t.offset, (t.format >> 8) & 0xFF, t.rect >> 16, t.rect & 0xFFFF,
+                             g_bind_kind, src->width, src->height, int(src->format));
+                }
+            }
             bool depth_copy = src != redirect && src->depth();
             if (depth_copy) m = VkComponentMapping{};
             b.view = temp_view(tmp, m, !depth_copy && src != redirect && texture_srgb(t));
@@ -2030,10 +2150,84 @@ Binding bind_texture_impl(uint32_t unit, uint32_t dim, const std::vector<Surface
     if (!tex) return b;
     VkImageViewType want = dim == 0 ? VK_IMAGE_VIEW_TYPE_1D : dim == 2 ? VK_IMAGE_VIEW_TYPE_CUBE : dim == 3 ? VK_IMAGE_VIEW_TYPE_3D : VK_IMAGE_VIEW_TYPE_2D;
     if (tex->layout.view_type != want) return b;
-    b.view = tex->view;
+    /* The component remap is part of the draw state. Take the base mapping from
+     * the format decode, apply this draw's CONTROL1, and reuse a cached view for
+     * that exact mapping. */
+    const VkComponentMapping want_map = texture_mapping(((t.format >> 8) & 0xFF) & ~0x60u, t.control1);
+    {
+        static std::atomic<uint32_t> vn{0};
+        if (std::getenv("PS3BASE_TEXDBG") && vn.fetch_add(1) < 30) {
+            LOG_INFO("vmap", "off 0x%x fmt 0x%02x c1 0x%08x -> r=%d g=%d b=%d a=%d (tex->layout.format %d)",
+                     t.offset, (t.format >> 8) & 0xFF, t.control1,
+                     int(want_map.r), int(want_map.g), int(want_map.b), int(want_map.a),
+                     int(tex->layout.format));
+        }
+    }
+    uint64_t mk = fnv(&want_map, sizeof want_map);
+    auto vit = tex->remap_views.find(mk);
+    if (vit != tex->remap_views.end()) {
+        b.view = vit->second;
+    } else {
+        b.view = make_view(tex->image, tex->layout.format, tex->layout.view_type,
+                           VK_IMAGE_ASPECT_COLOR_BIT, want_map, tex->layout.levels, tex->layout.layers);
+        tex->remap_views[mk] = b.view;
+    }
     g_bind_kind = "memory";
     b.sampler = sampler(t, tex->layout.levels, false);
+    {
+        static const bool snap = std::getenv("PS3BASE_TEXIMG") != nullptr;
+        static std::atomic<uint32_t> sn{0};
+        const uint32_t code = (t.format >> 8) & 0xFF;
+        /* Only the mono-channel glyph atlas: 0x81 is what the text draws bind. */
+        if (snap && code == 0x81 && sn.fetch_add(1) < 2) {
+            char nm[128];
+            std::snprintf(nm, sizeof nm, "teximg_f%02x_%ux%u_%llx_off%x.ppm",
+                          code, tex->layout.width, tex->layout.height,
+                          (unsigned long long)tex->image, t.offset);
+            LOG_INFO("teximg", "snapshot %s vkImage %llx format %d levels %u off 0x%x",
+                     nm, (unsigned long long)tex->image, int(tex->layout.format),
+                     tex->layout.levels, t.offset);
+            VkImageMemoryBarrier tb{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+            tb.oldLayout = tex->img_layout;
+            tb.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            tb.srcQueueFamilyIndex = tb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            tb.image = tex->image;
+            tb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, tex->layout.levels, 0, tex->layout.layers};
+            tb.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            tb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            vkCmdPipelineBarrier(frame_cmd(), VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &tb);
+            schedule_image_snapshot(tex->image, tex->layout.width, tex->layout.height, nm, tex->layout.format);
+            tb.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            tb.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            tb.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            tb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            vkCmdPipelineBarrier(frame_cmd(), VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT, 0, 0, nullptr, 0, nullptr, 1, &tb);
+            tex->img_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        }
+    }
     return b;
+}
+
+/* PS3BASE_VTX_LOG=1: one line per draw describing its attributes, plus the first
+ * four decoded vertices. */
+static void log_attributes(const char* tag, const uint32_t* regs)
+{
+    static const bool on = std::getenv("PS3BASE_VTX_LOG") != nullptr;
+    if (!on) return;
+    auto R = [&](uint32_t r) { return regs[r >> 2]; };
+    LOG_INFO("vtx", "%s begin 0x%x vtxfmt 0x%x", tag, R(0x1808), R(0x1740));
+    for (uint32_t i = 0; i < 16; i++) {
+        const uint32_t a = 0x1740 + i * 4;
+        const uint32_t fmt = R(a);
+        /* The enable is the size field being non-zero: size 0 means the
+         * attribute is constant, not that it is disabled. */
+        const uint32_t type = fmt & 7, size = (fmt >> 4) & 0xF, stride = (fmt >> 8) & 0xFF;
+        if (!size) continue;
+        LOG_INFO("vtx", "%s attr %u fmt 0x%08x type %u size %u stride %u off 0x%x",
+                 tag, i, fmt, type, size, stride, R(0x1680 + i * 4) & 0x7FFFFFFF);
+    }
 }
 
 void decode_attribute(uint32_t type, uint32_t size, const uint8_t* p, float* out) {
@@ -2655,6 +2849,16 @@ std::string g_mv_hudless;
 void mv_draw(const std::vector<Surface*>& colors, uint32_t w, uint32_t h, uint64_t fp_hash, uint64_t vp_hash, uint32_t verts);
 
 bool draw() {
+    {
+        static std::atomic<uint32_t> dn{0};
+        static const bool on = std::getenv("PS3BASE_VTX_LOG") != nullptr;
+        if (on) {
+            const uint32_t n2 = dn.fetch_add(1);
+            /* Log late draws only: the text appears after ~8 s and the early
+             * ones have no attributes enabled yet. */
+            if ((n2 % 400) == 0) log_attributes("draw", g_regs);
+        }
+    }
     VkCommandBuffer cmd = frame_cmd();
     if (!init_objects()) return skip(__LINE__);
     uint64_t ph = ticks();
@@ -2730,6 +2934,55 @@ bool draw() {
         writes[nw] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 16 + t, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &images[ni], nullptr, nullptr};
         nw++;
         ni++;
+    }
+
+    {
+        static const bool dbg = std::getenv("PS3BASE_TEXDBG") != nullptr;
+        static std::atomic<uint32_t> shown{0};
+        /* Only count draws that actually bind the atlas: the early ones trip the
+         * budget and the text draws happen much later. */
+        if (dbg) {
+            /* Identify the text draw by the atlas offset in any bound unit. */
+            bool is_text = false;
+            for (uint32_t u = 0; u < 16; u++) {
+                if (!(fp->textures & (1u << u))) continue;
+                const uint32_t off = R(0x1A00 + u * 0x20) & 0x7FFFFFFF;
+                if (off == 0x3d3f200 || off == 0x3dbfc00) is_text = true;
+            }
+            if (is_text && shown.fetch_add(1) < 4) {
+                LOG_INFO("texdbg", "===== TEXT DRAW fp %016llx textures_mask 0x%x",
+                         (unsigned long long)fp->hash, fp->textures);
+                for (uint32_t u = 0; u < 16; u++) {
+                    if (!(fp->textures & (1u << u))) continue;
+                    const uint32_t b = 0x1A00 + u * 0x20;
+                    const uint32_t off = R(b) & 0x7FFFFFFF;
+                    const uint32_t fmt = R(b + 4);
+                    const uint32_t c0 = R(b + 0xC);
+                    const uint32_t c1 = R(b + 0x10);
+                    const uint32_t addr = R(b + 0x8);
+                    const uint32_t filt = R(b + 0x14);
+                    const uint32_t rect = R(b + 0x18);
+                    const uint32_t code = (fmt >> 8) & 0xFF;
+                    VkComponentMapping m = texture_mapping(code & ~0x60u, c1);
+                    LOG_INFO("texdbg",
+                             "unit %u off 0x%x fmt 0x%02x rect %ux%u c0 0x%08x c1 0x%08x "
+                             "addr 0x%08x filt 0x%08x dim %u",
+                             u, off, code, rect >> 16, rect & 0xFFFF, c0, c1, addr, filt,
+                             (fp->dims >> (u * 2)) & 3);
+                    LOG_INFO("texdbg",
+                             "  vk mapping r=%d g=%d b=%d a=%d  (CONTROL1 sel/ctl: "
+                             "r %u/%u g %u/%u b %u/%u a %u/%u)",
+                             int(m.r), int(m.g), int(m.b), int(m.a),
+                             (c1 >> 0) & 3, (c1 >> 8) & 3, (c1 >> 2) & 3, (c1 >> 10) & 3,
+                             (c1 >> 4) & 3, (c1 >> 12) & 3, (c1 >> 6) & 3, (c1 >> 14) & 3);
+                    LOG_INFO("texdbg",
+                             "  wrap U 0x%x V 0x%x W 0x%x  minf %u magf %u  lod min %u max %u",
+                             addr & 0xF, (addr >> 8) & 0xF, (addr >> 16) & 0xF,
+                             (filt >> 16) & 7, (filt >> 24) & 7,
+                             (c0 >> 19) & 0xFFF, (c0 >> 7) & 0xFFF);
+                }
+            }
+        }
     }
 
     uint64_t serial = frame_serial();
@@ -2847,8 +3100,15 @@ bool draw() {
         }
         if (constant) {
             if (!ring_alloc(16, 16, a)) return skip(__LINE__);
-            static const float fallback[4] = {0, 0, 0, 1};
-            std::memcpy(a.ptr, size ? fallback : g_imm[i], 16);
+            /* An attribute with no array (or an unresolvable base) takes its value
+             * from the immediate registers NV4097_SET_VERTEX_DATA4F_M, which the
+             * title sets. Falling back to a literal (0,0,0,1) instead discards
+             * them: the shader then reads a constant where the game supplied
+             * per-draw data, and anything derived from it is wrong. The literal is
+             * only the last resort, when the immediate was never set either. */
+            static const float implicit_default[4] = {0, 0, 0, 1};
+            const bool imm_set = g_imm_set[i];
+            std::memcpy(a.ptr, imm_set ? g_imm[i] : implicit_default, 16);
             vbufs[i] = a.buffer;
             voffs[i] = a.offset;
             vstrides[i] = 0;
@@ -2906,6 +3166,62 @@ bool draw() {
         for (uint32_t k = 0; k < npending; k++) {
             const PendingDecode& d = pending[k];
             decode_vertices(d.type, d.size, d.src + size_t(v0) * d.stride, d.stride, nv, d.out + size_t(v0) * 4);
+        }
+    }
+    {
+        static const bool fill = std::getenv("PS3BASE_VTXFILL") != nullptr;
+        static std::atomic<uint32_t> fn{0};
+        if (fill) {
+            uint32_t tex_off = 0;
+            for (uint32_t u = 0; u < 4; u++) {
+                if ((R(0x1A0C + u * 0x20) >> 31) & 1u) { tex_off = R(0x1A00 + u * 0x20) & 0x7FFFFFFF; break; }
+            }
+            if (tex_off == 0x3d3f200 && fn.fetch_add(1) < 3) {
+                LOG_INFO("vtxfill", "===== TEXT DRAW vp_inputs 0x%04x", vp->inputs);
+                for (uint32_t i = 0; i < 16; i++) {
+                    const uint32_t f = R(VERTEX_ARRAY_FORMAT + i * 4);
+                    const uint32_t sz = (f >> 4) & 0xF;
+                    const bool vp_reads = (vp->inputs >> i) & 1u;
+                    if (!vp_reads && !sz) continue;
+                    LOG_INFO("vtxfill", "  attr %u vp_reads %d draw_size %u stride %u imm_set %d imm %.4f %.4f %.4f %.4f",
+                             i, vp_reads ? 1 : 0, sz, (f >> 8) & 0xFF, g_imm_set[i] ? 1 : 0,
+                             g_imm[i][0], g_imm[i][1], g_imm[i][2], g_imm[i][3]);
+                }
+            }
+        }
+    }
+    /* PS3BASE_VTX_LOG=1: dump the first four decoded vertices for the draw whose
+     * texture is the glyph atlas, and for the logo draw. Each attribute is
+     * printed through its declared format, so a wrong decode is visible. */
+    {
+        static const bool on = std::getenv("PS3BASE_VTX_LOG") != nullptr;
+        static std::atomic<uint32_t> text_seen{0}, logo_seen{0};
+        if (on && vdata[0] && vcount) {
+            /* Identify the draw by the bound texture offset. */
+            uint32_t tex_off = 0;
+            for (uint32_t u = 0; u < 4; u++) {
+                if ((R(0x1A0C + u * 0x20) >> 31) & 1u) { tex_off = R(0x1A00 + u * 0x20) & 0x7FFFFFFF; break; }
+            }
+            const bool is_text = tex_off == 0x3d3f200 || tex_off == 0x3dbfc00;
+            const bool is_logo = tex_off >= 0x1e50000 && tex_off <= 0x2300000;
+            const bool take_text = is_text && text_seen.fetch_add(1) < 2;
+            const bool take_logo = is_logo && logo_seen.fetch_add(1) < 2;
+            if (take_text || take_logo) {
+                LOG_INFO("vdec", "===== %s tex 0x%x vcount %u prim 0x%x",
+                         take_text ? "TEXT" : "LOGO", tex_off, vcount, R(0x1808));
+                for (uint32_t i = 0; i < 16; i++) {
+                    if (!vdata[i]) continue;
+                    const uint32_t f = R(VERTEX_ARRAY_FORMAT + i * 4);
+                    const uint32_t ty = f & 7, sz = (f >> 4) & 0xF, st = (f >> 8) & 0xFF;
+                    if (!sz) continue;
+                    for (uint32_t v = 0; v < 4 && v < vcount; v++) {
+                        const float* p = vdata[i] + v * 4;
+                        LOG_INFO("vdec", "  %s attr %u type %u size %u stride %u v%u = %.4f %.4f %.4f %.4f",
+                                 take_text ? "TEXT" : "LOGO", i, ty, sz, st, v,
+                                 p[0], p[1], p[2], p[3]);
+                    }
+                }
+            }
         }
     }
     for (uint32_t i = 0; i < 16; i++)
@@ -3212,13 +3528,26 @@ void nv308a_color(uint32_t index, uint32_t arg) {
     uint32_t pitch = R(0x6304) >> 16;
     uint32_t bpp = fmt == 4 ? 2 : 4;
     uint32_t ea = lv2::rsx_address(R(0x630C) + x * bpp + y * pitch, R(0x6188));
-    if (!ea || !readable(ea, bpp)) return;
+    static std::atomic<uint32_t> n308a{0}, n308a_drop{0};
+    const uint32_t total = n308a.fetch_add(1);
+    if (total < 6) {
+        LOG_INFO("nv308a", "idx %u arg 0x%08x fmt 0x%x pitch %u dstreg 0x%x loc 0x%x point 0x%x -> ea 0x%08x readable %d",
+                 index, arg, fmt, pitch, R(0x630C), R(0x6188), point, ea, readable(ea, bpp) ? 1 : 0);
+    }
+    if (!ea || !readable(ea, bpp)) {
+        if (n308a_drop.fetch_add(1) < 6) LOG_WARN("nv308a", "DROPPED ea 0x%08x mapped %d", ea, vm::is_mapped(ea) ? 1 : 0);
+        return;
+    }
     if (trace::on(trace::RSX)) trace::emit(trace::T_COPY, trace::COPY_NV308A, ea, ea, bpp, 0, arg);
     if (bpp == 4) vm::write32(ea, arg);
     else vm::write16(ea, argb_to_565(arg));
 }
 
 void nv0039_transfer() {
+    if (atlas_trace()) {
+        const uint32_t d = R(0x2310);
+        if (overlaps_atlas(d, 0x40000)) LOG_INFO("atlas", "nv0039 dst reg 0x%x in ATLAS range", d);
+    }
     g_texture_pool.sync();
     if (std::getenv("GOWA_COPY_LOG")) LOG_INFO("rsxcopy", "nv0039 in 0x%x dma 0x%x out 0x%x dma 0x%x pitch %d/%d len %u lines %u fmt 0x%x", R(0x230C), R(0x2184), R(0x2310), R(0x2188), int32_t(R(0x2314)),
                                                  int32_t(R(0x2318)), R(0x231C), R(0x2320), R(0x2324));
@@ -3247,6 +3576,10 @@ void nv0039_transfer() {
 }
 
 void nv3089_transfer(uint32_t arg) {
+    if (atlas_trace()) {
+        const uint32_t d = R(0x630C);
+        if (overlaps_atlas(d, 0x40000)) LOG_INFO("atlas", "nv3089 dst reg 0x%x in ATLAS range", d);
+    }
     g_texture_pool.sync();
     if (std::getenv("GOWA_COPY_LOG")) LOG_INFO("rsxcopy", "nv3089 src 0x%x dma 0x%x in 0x%x fmt 0x%x out 0x%x/0x%x clip 0x%x/0x%x dst 0x%x dma 0x%x pitch 0x%x surf 0x%x cfmt 0x%x/0x%x dsdx 0x%x/0x%x arg 0x%x", R(0xC408), R(0xC184),
                                                  R(0xC400), R(0xC404), R(0xC310), R(0xC314), R(0xC308), R(0xC30C), R(0x630C), R(0x6188), R(0x6304), R(0xC198), R(0xC300), R(0x6300), R(0xC318), R(0xC31C), arg);
@@ -3453,15 +3786,20 @@ void schedule_snapshot(Surface* s, uint32_t w, uint32_t h, const std::string& na
     g_dumps.push_back({a.ptr, s->offset, w, h, s->format, s->main, name});
 }
 
-void schedule_image_snapshot(VkImage image, uint32_t w, uint32_t h, const std::string& name) {
+void schedule_image_snapshot(VkImage image, uint32_t w, uint32_t h, const std::string& name,
+                             VkFormat format) {
+    /* The readback size follows the image's real format. Assuming four bytes per
+     * pixel made an R8 glyph atlas look like noise in the dump while the code was
+     * correct -- a measurement bug, not a rendering one. */
+    const uint32_t bpp = format == VK_FORMAT_R8_UNORM ? 1u : 4u;
     RingAlloc a;
-    if (!ring_alloc(uint64_t(w) * h * 4, 16, a)) return;
+    if (!ring_alloc(uint64_t(w) * h * bpp, 16, a)) return;
     VkBufferImageCopy c{};
     c.bufferOffset = a.offset;
     c.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     c.imageExtent = {w, h, 1};
     vkCmdCopyImageToBuffer(frame_cmd(), image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, a.buffer, 1, &c);
-    g_dumps.push_back({a.ptr, 0, w, h, VK_FORMAT_R8G8B8A8_UNORM, false, name});
+    g_dumps.push_back({a.ptr, 0, w, h, format, false, name});
 }
 
 void write_dump(const Dump& d) {
@@ -3474,8 +3812,22 @@ void write_dump(const Dump& d) {
         std::fprintf(f, "P6\n%u %u\n255\n", d.width, d.height);
         std::vector<uint8_t> row(d.width * 3);
         float zmin = 1e30f, zmax = -1e30f;
+        /* R8_UNORM is one byte per pixel: read it as luminance. */
+        const bool r8 = d.format == VK_FORMAT_R8_UNORM;
+        const uint32_t stride = r8 ? 1u : 4u;
+        if (r8) {
+            for (uint32_t y = 0; y < d.height; y++) {
+                const uint8_t* p = d.data + uint64_t(y) * d.width;
+                for (uint32_t x = 0; x < d.width; x++) {
+                    row[x * 3] = row[x * 3 + 1] = row[x * 3 + 2] = p[x];
+                }
+                std::fwrite(row.data(), 1, row.size(), f);
+            }
+            std::fclose(f);
+            return;
+        }
         for (uint32_t y = 0; y < d.height; y++) {
-            const uint8_t* p = d.data + uint64_t(y) * d.width * 4;
+            const uint8_t* p = d.data + uint64_t(y) * d.width * stride;
             for (uint32_t x = 0; x < d.width; x++) {
                 if (d.format == VK_FORMAT_D24_UNORM_S8_UINT) {
                     uint32_t v;
@@ -3541,11 +3893,20 @@ uint32_t format_bytes(VkFormat f) {
     }
 }
 
+/* Every dirty colour surface the guest owns must be written back, not only the
+ * main one. A title may render a texture with the GPU and then sample it by its
+ * guest address -- the glyph atlas is exactly that. Skipping non-main surfaces
+ * left that memory holding whatever was there before, and the sampled result was
+ * static: the striping across all text. */
 void schedule_writebacks() {
     for (auto& [k, s] : g_surfaces) {
-        if (!s->main || !s->dirty || s->depth()) continue;
+        if (!s->dirty || s->depth()) continue;
         s->dirty = false;
         uint32_t ea = lv2::rsx_address(s->offset, 1);
+        if (atlas_trace() && overlaps_atlas(s->offset, uint64_t(s->width) * s->height * 4)) {
+            LOG_INFO("atlas", "writeback off 0x%x -> ea 0x%08x %ux%u pitch %u",
+                     s->offset, ea, s->width, s->height, s->pitch);
+        }
         uint32_t bpp = format_bytes(s->format);
         uint32_t pitch = s->pitch ? s->pitch : s->width * bpp;
         if (!ea || !readable(ea, uint64_t(pitch) * (s->height - 1) + uint64_t(s->width) * bpp)) continue;
@@ -3601,6 +3962,7 @@ void complete_writebacks(std::vector<Writeback>& list) {
 void set_immediate(uint32_t attr, const float* v, uint32_t n) {
     if (attr >= 16) return;
     for (uint32_t i = 0; i < 4; i++) g_imm[attr][i] = i < n ? v[i] : (i == 3 ? 1.0f : 0.0f);
+    g_imm_set[attr] = true;
 }
 
 bool immediate_method(uint32_t reg, uint32_t arg) {
@@ -3610,6 +3972,7 @@ bool immediate_method(uint32_t reg, uint32_t arg) {
         uint32_t a = (reg - 0x1C00) / 16, c = ((reg - 0x1C00) / 4) & 3;
         if (c == 0) set_immediate(a, g_imm[a], 4);
         g_imm[a][c] = f;
+        g_imm_set[a] = true;
         return true;
     }
     if (reg >= 0x1500 && reg < 0x1600) {
@@ -3617,6 +3980,7 @@ bool immediate_method(uint32_t reg, uint32_t arg) {
         if (c < 3) {
             if (c == 0) g_imm[a][3] = 1.0f;
             g_imm[a][c] = f;
+            g_imm_set[a] = true;
         }
         return true;
     }
@@ -4043,7 +4407,32 @@ bool present(uint32_t buffer_id) {
         /* The picture lives in the GPU surface, not in the guest display
          * buffer, which stays black because nothing writes it back. Dump the
          * main surface: it is what the swapchain receives. */
-        if (every > 0 && (k % static_cast<uint64_t>(every)) == 0) schedule_dumps();
+        if (every > 0 && (k % static_cast<uint64_t>(every)) == 0) {
+            schedule_dumps();
+            /* Also dump the buffer being presented: the surface series can be
+             * empty at the sampled frame while the presented image is not. */
+            uint32_t off = 0, pit = 0, w = 0, h = 0;
+            if (display_buffer(buffer_id, off, pit, w, h) && w && h) {
+                char nm[128];
+                std::snprintf(nm, sizeof nm, "%s/presented_%06llu.ppm", 
+                              std::getenv("PS3BASE_FRAME_DIR") ? std::getenv("PS3BASE_FRAME_DIR") : "frames",
+                              (unsigned long long)k);
+                RingAlloc a;
+                if (ring_alloc(uint64_t(w) * h * 4, 16, a)) {
+                    const uint32_t base = 0xC0000000u + off;
+                    if (vm::range_mapped(base, uint64_t(pit) * h)) {
+                        for (uint32_t y = 0; y < h; y++) {
+                            for (uint32_t x = 0; x < w; x++) {
+                                uint32_t v; std::memcpy(&v, vm::ptr(base + y * pit + x * 4), 4);
+                                v = __builtin_bswap32(v);
+                                std::memcpy(a.ptr + (uint64_t(y) * w + x) * 4, &v, 4);
+                            }
+                        }
+                        g_dumps.push_back({a.ptr, 0, w, h, VK_FORMAT_R8G8B8A8_UNORM, false, nm});
+                    }
+                }
+            }
+        }
     }
     schedule_writebacks();
     static uint64_t presents = 0;
@@ -4161,7 +4550,8 @@ bool present(uint32_t buffer_id) {
         std::string sk;
         for (auto [l, c] : g_skip_lines) sk += " " + std::to_string(l) + ":" + std::to_string(c);
         if (!sk.empty()) LOG_INFO("rsx", "skip reasons:%s", sk.c_str());
-        LOG_INFO("rsx", "renderer: %llu draws, %llu skipped, %llu vertices, %llu pipelines, %llu uploads, %zu textures, %zu surfaces", (unsigned long long)g_stats.draws,
+        if (std::getenv("PS3BASE_TEX_LOG")) tex_stats_dump();
+    LOG_INFO("rsx", "renderer: %llu draws, %llu skipped, %llu vertices, %llu pipelines, %llu uploads, %zu textures, %zu surfaces", (unsigned long long)g_stats.draws,
                  (unsigned long long)g_stats.skipped, (unsigned long long)g_stats.vertices, (unsigned long long)g_stats.pipelines, (unsigned long long)g_stats.uploads, g_textures.size(),
                  g_surfaces.size());
     }

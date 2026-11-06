@@ -1,8 +1,14 @@
 #include "texture_decode.h"
 
+#include "runtime/log.h"
+
 #include <algorithm>
+#include <atomic>
+#include <cstdio>
 #include <cmath>
 #include <cstring>
+#include <map>
+#include <mutex>
 
 namespace gpu {
 
@@ -59,6 +65,14 @@ const FormatInfo FORMATS[] = {
 };
 
 const FormatInfo* find_format(uint32_t code) {
+    /* PS3BASE_TEX_EXPAND=1: B8 is one channel and some samplers expect four.
+     * Expanding it to RGBA8 puts the intensity in RGB and 1 in alpha, which is
+     * what an intensity texture means. Diagnostic only. */
+    static const bool expand = std::getenv("PS3BASE_TEX_EXPAND") != nullptr;
+    if (expand && code == 0x81) {
+        static const FormatInfo rgba{0x81, 1, 1, VK_FORMAT_R8G8B8A8_UNORM, COPY, {I, R, R, R}, true, 4};
+        return &rgba;
+    }
     for (const FormatInfo& f : FORMATS) {
         if (f.code == code) return &f;
     }
@@ -222,6 +236,17 @@ VkComponentMapping texture_mapping(uint32_t base_format, uint32_t control1) {
     return remap_mapping(f->base, f->remap, control1);
 }
 
+/* PS3BASE_TEX_EXPAND=1: report single-channel B8 as RGBA8 and expand it while
+ * decoding. Diagnostic for a sampler that receives one channel where the title
+ * expects four. */
+static bool expand_single()
+{
+    static const bool on = std::getenv("PS3BASE_TEX_EXPAND") != nullptr;
+    return on;
+}
+
+
+
 bool describe_texture(const TextureRegs& regs, TextureLayout& out) {
     uint32_t fmt = (regs.format >> 8) & 0xFF;
     uint32_t code = fmt & ~0x60u;
@@ -276,10 +301,80 @@ bool describe_texture(const TextureRegs& regs, TextureLayout& out) {
     return true;
 }
 
-void decode_texture(const uint8_t* src, const TextureRegs& regs, const TextureLayout& layout, uint8_t* dst) {
-    uint32_t fmt = (regs.format >> 8) & 0xFF;
+namespace {
+
+struct TexStat { uint64_t n = 0; uint32_t pitch = 0, w = 0, h = 0, levels = 0; };
+std::mutex g_tex_m;
+std::map<uint32_t, TexStat> g_tex_stats;
+
+}  // namespace
+
+void tex_stats_dump()
+{
+    std::lock_guard lk(g_tex_m);
+    for (auto& [fmt, st] : g_tex_stats) {
+        LOG_INFO("texstat", "fmt 0x%02x %s %ux%u mips %u pitch %u: %llu decodes",
+                 fmt, (fmt & 0x20) ? "linear" : "swizzled", st.w, st.h, st.levels,
+                 st.pitch, static_cast<unsigned long long>(st.n));
+    }
+}
+
+static void dump_decoded(uint32_t fmt, const TextureLayout& layout, const uint8_t* dst)
+{
+    static std::atomic<uint32_t> n{0};
+    static const long limit = std::getenv("PS3BASE_TEX_DUMP")
+                                  ? std::atol(std::getenv("PS3BASE_TEX_DUMP"))
+                                  : 0;
+    if (!limit) return;
+    const uint32_t k = n.fetch_add(1);
+    if (k >= uint32_t(limit)) return;
     const FormatInfo* f = find_format(fmt & ~0x60u);
     if (!f) return;
+    char name[256];
+    std::snprintf(name, sizeof name, "tex_%03u_f%02x_%ux%u.pgm", k, fmt, layout.width, layout.height);
+    FILE* fp = std::fopen(name, "wb");
+    if (!fp) return;
+    std::fprintf(fp, "P5\n%u %u\n255\n", layout.width, layout.height);
+    for (uint32_t y = 0; y < layout.height; y++) {
+        for (uint32_t x = 0; x < layout.width; x++) {
+            const uint8_t* p = dst + (size_t(y) * layout.width + x) * f->out_bytes;
+            std::fputc(p[0], fp);
+        }
+    }
+    std::fclose(fp);
+    LOG_INFO("texdump", "%s fmt 0x%02x out_bytes %u", name, fmt, f->out_bytes);
+}
+
+void decode_texture(const uint8_t* src, const TextureRegs& regs, const TextureLayout& layout, uint8_t* dst) {
+    if (std::getenv("PS3BASE_TEX_LOG")) {
+        const uint32_t f = (regs.format >> 8) & 0xFF;
+        std::lock_guard lk(g_tex_m);
+        TexStat& st = g_tex_stats[f];
+        st.n++;
+        st.pitch = regs.control3 & 0xFFFFF;
+        st.w = layout.width;
+        st.h = layout.height;
+        st.levels = layout.levels;
+    }
+    uint32_t fmt = (regs.format >> 8) & 0xFF;
+    const FormatInfo* f = find_format(fmt & ~0x60u);
+    if (!f) {
+        /* A format this table does not know leaves the staging buffer
+         * untouched, and uninitialised ring memory is exactly the static that
+         * the text shows. Name it instead of failing silently. */
+        static std::mutex m;
+        static std::map<uint32_t, uint64_t> unknown;
+        {
+            std::lock_guard lk(m);
+            uint64_t& n = unknown[fmt];
+            if (n++ < 3) {
+                LOG_WARN("tex", "UNSUPPORTED format 0x%02x (%s) %ux%u pitch %u off 0x%x",
+                         fmt, (fmt & 0x20) ? "linear" : "swizzled", layout.width,
+                         layout.height, regs.control3 & 0xFFFFF, regs.offset);
+            }
+        }
+        return;
+    }
     bool linear = fmt & 0x20;
     uint32_t pitch = regs.control3 & 0xFFFFF;
     uint64_t so = 0;
@@ -337,6 +432,42 @@ void decode_texture(const uint8_t* src, const TextureRegs& regs, const TextureLa
             so += uint64_t(g.src_size) * slices;
         }
         if (!linear) so = (so + 127) & ~127ull;
+    }
+    if (std::getenv("PS3BASE_TEX_DUMP")) dump_decoded(fmt, layout, dst);
+    if (std::getenv("PS3BASE_TEX_PAIR")) {
+        /* For each text texture, write the raw source and the decoded result
+         * under the same serial, so the two can be hashed and compared. */
+        static std::atomic<uint32_t> sn{0};
+        const uint32_t k = sn.fetch_add(1) % 400;
+        const uint32_t code2 = fmt & ~0x60u;
+        if (code2 == 0x81 || code2 == 0x85) {
+            const double up = logging::uptime();
+            char a[128], b2[128];
+            std::snprintf(a, sizeof a, "pair_%05u_%06.1fs_%08x_SRC.raw", k, up, layout.base);
+            std::snprintf(b2, sizeof b2, "pair_%05u_%06.1fs_%08x_DST.raw", k, up, layout.base);
+            if (FILE* f = std::fopen(a, "wb")) { std::fwrite(src, 1, layout.source_size, f); std::fclose(f); }
+            if (FILE* f = std::fopen(b2, "wb")) { std::fwrite(dst, 1, layout.decoded_size, f); std::fclose(f); }
+            uint64_t h1 = 1469598103934665603ull, h2 = 1469598103934665603ull;
+            for (uint32_t i = 0; i < layout.source_size; i++) { h1 ^= src[i]; h1 *= 1099511628211ull; }
+            for (uint64_t i = 0; i < layout.decoded_size; i++) { h2 ^= dst[i]; h2 *= 1099511628211ull; }
+            LOG_INFO("pair", "t %.1f off 0x%x fmt 0x%02x %ux%u src_hash %016llx dst_hash %016llx",
+                     up, layout.base, fmt, layout.width, layout.height,
+                     (unsigned long long)h1, (unsigned long long)h2);
+        }
+    }
+    if (std::getenv("PS3BASE_TEX_RAWSRC") && (fmt & 0xFF) == 0x81) {
+        static std::atomic<uint32_t> rn{0};
+        const uint32_t k = rn.fetch_add(1);
+        if (k < 4) {
+            char name[128];
+            std::snprintf(name, sizeof name, "raw81_%u_%ux%u.pgm", k, layout.width, layout.height);
+            if (FILE* fp = std::fopen(name, "wb")) {
+                std::fprintf(fp, "P5\n%u %u\n255\n", layout.width, layout.height);
+                std::fwrite(src, 1, size_t(layout.width) * layout.height, fp);
+                std::fclose(fp);
+                LOG_INFO("texraw", "%s src_size %u", name, layout.source_size);
+            }
+        }
     }
 }
 

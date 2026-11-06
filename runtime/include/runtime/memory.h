@@ -41,6 +41,9 @@ uint64_t watch_stale_repairs();
 void host_write(uint32_t addr, uint64_t size);
 void watch_reset(uint32_t addr, uint64_t size);
 
+/* Dump snapshot ranges at the given second (PS3BASE_TEX_SNAPSHOT). */
+void tex_snapshot_tick(int seconds);
+
 inline uint8_t* ptr(uint32_t addr) { return g_base + addr; }
 
 inline uint32_t read32(uint32_t addr) { uint32_t v; std::memcpy(&v, g_base + addr, 4); return __builtin_bswap32(v); }

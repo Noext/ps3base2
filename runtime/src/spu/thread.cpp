@@ -873,8 +873,32 @@ bool SpuThread::dma_direct(uint32_t cmd, uint32_t lsa, uint32_t ea, uint32_t siz
     return true;
 }
 
+/* PS3BASE_DMA_RANGE=lo-hi (hex): log SPU DMAs whose effective address falls in
+ * the range. A title that rasterises on the SPU writes textures this way, and
+ * the CPU write-watch never sees it. */
+static bool dma_in_range(uint32_t ea, uint32_t size)
+{
+    static const bool on = std::getenv("PS3BASE_DMA_RANGE") != nullptr;
+    if (!on || !size) return false;
+    static const auto range = [] {
+        uint32_t lo = 0, hi = 0xFFFFFFFFu;
+        if (const char* e = std::getenv("PS3BASE_DMA_RANGE")) {
+            std::sscanf(e, "%x-%x", &lo, &hi);
+        }
+        return std::pair<uint32_t, uint32_t>{lo, hi};
+    }();
+    return ea + size > range.first && ea < range.second;
+}
+
 void SpuThread::dma(uint32_t cmd, uint32_t lsa, uint32_t ea, uint32_t size) {
     if (!size) return;
+    if (dma_in_range(ea, size)) {
+        static std::atomic<uint32_t> seen{0};
+        if (seen.fetch_add(1) < 4000) {
+            LOG_INFO("dmaw", "thread 0x%x '%s' cmd 0x%02x ea 0x%08x lsa 0x%05x size 0x%x pc 0x%05x",
+                     id, name.c_str(), cmd, ea, lsa, size, ctx.pc);
+        }
+    }
     if (g_edge_direct && dma_direct(cmd, lsa, ea, size)) return;
     if (size > 0x4000) {
         LOG_ERROR("spu", "thread 0x%x DMA size 0x%x too large", id, size);

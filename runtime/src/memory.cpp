@@ -340,6 +340,43 @@ uint32_t region_free(Region region) {
 
 uint32_t region_size(Region region) { return kRegions[static_cast<size_t>(region)].size; }
 
+
+void snapshot_range(uint32_t addr, uint32_t size, const char* tag)
+{
+    char name[128];
+    std::snprintf(name, sizeof name, "snap_%s_%08x.bin", tag, addr);
+    if (FILE* f = std::fopen(name, "wb")) {
+        const size_t n = std::fwrite(g_base + addr, 1, size, f);
+        std::fclose(f);
+        LOG_INFO("snap", "%s addr 0x%x size 0x%x wrote %zu mapped %d",
+                 name, addr, size, n, is_mapped(addr) ? 1 : 0);
+    } else {
+        LOG_WARN("snap", "%s: cannot open", name);
+    }
+}
+
+void tex_snapshot_tick(int seconds)
+{
+    static const std::string list = [] {
+        const char* e = std::getenv("PS3BASE_TEX_SNAPSHOT");
+        return std::string(e ? e : "");
+    }();
+    if (list.empty()) return;
+    char tag[16];
+    std::snprintf(tag, sizeof tag, "%03d", seconds);
+    size_t pos = 0;
+    while (pos < list.size()) {
+        size_t end = list.find(',', pos);
+        if (end == std::string::npos) end = list.size();
+        const std::string item = list.substr(pos, end - pos);
+        pos = end + 1;
+        if (item.empty()) continue;
+        uint32_t a = 0, n = 0x100000;
+        if (std::sscanf(item.c_str(), "%x:%x", &a, &n) == 1) n = 0x100000;
+        if (a && g_base) snapshot_range(a, n, tag);
+    }
+}
+
 bool is_mapped(uint32_t addr) {
     return std::atomic_ref<uint8_t>(g_pagemap[addr >> 12]).load(std::memory_order_acquire) != 0;
 }

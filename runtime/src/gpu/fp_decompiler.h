@@ -13,6 +13,7 @@ struct FragmentProgramKey {
     uint32_t unnormalized = 0;
     uint32_t shadow = 0;
     uint32_t mrt_count = 1;
+    uint64_t hash = 0;   /* shader hash, so a debug override can be gated */
 };
 
 struct FragmentProgramInfo {

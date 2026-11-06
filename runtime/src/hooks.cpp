@@ -634,6 +634,23 @@ void start_hogs(const char* spec) {
     }
 }
 
+/* PS3BASE_MORTON_TRACE=1: when the Morton copy for the glyph atlas runs, log the
+ * object and the source pointer it reads. The writer of that buffer is the
+ * rasteriser, and this finds it without guessing. */
+static void morton_trace(ppu::Context& ctx)
+{
+    static const bool on = std::getenv("PS3BASE_MORTON_TRACE") != nullptr;
+    if (!on) return;
+    static std::atomic<uint32_t> n{0};
+    if (n.fetch_add(1) > 60) return;
+    const uint32_t obj = static_cast<uint32_t>(ctx.gpr[3]);
+    LOG_INFO("morton", "obj 0x%08x  [obj+24]=0x%08x [obj+28]=0x%08x  [obj+0]=0x%08x",
+             obj,
+             obj ? vm::read32(obj + 24) : 0,
+             obj ? vm::read32(obj + 28) : 0,
+             obj ? vm::read32(obj + 0) : 0);
+}
+
 void init() {
     /* Everything below is title-specific: patches by guest address, job
      * intercepts, the jobsys edge, the critical-path hooks. A profile with

@@ -35,3 +35,26 @@ image, no lifted source.
 ## Build resources
 
 Cap parallel builds at `-j 8`. This machine is shared.
+
+## Never transcribe a structure, enum or table from memory
+
+When a header, a reference implementation or a vendor source is available, include
+or read it. Do not retype field order, offsets, enum values or function
+signatures from memory, and do not compute a vtable slot instead of naming the
+member.
+
+This is written down because it has cost this project three separate debugging
+sessions, each presenting as a silent wrong result rather than an error:
+
+- `CellVideoOutDeviceInfo` was reproduced as 0x3A0 bytes when the real structure
+  is 0x1C8; the handler wrote 472 bytes past the caller's structure and the
+  resulting crash appeared at a guest address several functions away.
+- The RenderDoc API vtable was declared by hand with the wrong field count, so
+  `TriggerCapture` resolved to a neighbouring slot and the call did nothing while
+  the log reported a successful trigger.
+- `CellUserInfoUserStat`, `CellPngDecThreadInParam` and the `l10n` functions all
+  had their argument shapes guessed first and corrected only after a fault.
+
+If a header is not installed, fetch or vendor it — that is what
+`third_party/renderdoc/renderdoc_app.h` is for. A hand-written layout is a guess
+that fails quietly.

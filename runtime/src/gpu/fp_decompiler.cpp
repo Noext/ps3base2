@@ -1,5 +1,7 @@
 #include "fp_decompiler.h"
 
+#include <cstdlib>
+#include <cstring>
 #include <map>
 #include <set>
 #include <sstream>
@@ -7,6 +9,14 @@
 namespace gpu {
 
 namespace {
+
+/* PS3BASE_FS_DEBUG, read once. Forces the final colour of the debug shader to a
+ * single input, so a wrong input is visible on screen rather than inferred. */
+inline const char* fs_debug_mode()
+{
+    static const char* mode = std::getenv("PS3BASE_FS_DEBUG");
+    return mode && *mode ? mode : nullptr;
+}
 
 constexpr uint32_t MAX_SLOTS = 4096;
 
@@ -476,6 +486,26 @@ private:
         }
         s << "    if ((fflags.w & 1u) != 0u) out_color0 = vec4(1.0, 0.0, 1.0, 1.0);\n";
         s << "    if ((fflags.w & 2u) != 0u) out_color0 = vec4(c0.rgb, 1.0);\n";
+        /* PS3BASE_FS_DEBUG: replace the final colour with one chosen input, to
+         * tell a correct input apart from a wrong one by looking at the screen.
+         * Read once; the caller filters by shader hash. */
+        /* Gate on the shader the instruction names, so the override applies to
+         * the text shader only and not to every draw on screen. */
+        /* The atlas draw uses 83d8ff875648d1d2 (the shader that samples tex0 as a
+         * 2D glyph atlas and tex7 for colour); 904c0d9a4e75ad9c is a different
+         * draw, confirmed by the fact that overriding it changed nothing. */
+        if (const char* dbg = fs_debug_mode(); dbg && key_.hash == 0x83d8ff875648d1d2ull) {
+            if (std::strcmp(dbg, "uv") == 0)
+                s << "    out_color0 = vec4(in_tex0.xy * 32.0, 0.0, 1.0);\n";
+            else if (std::strcmp(dbg, "zw") == 0)
+                s << "    out_color0 = vec4(in_tex0.zw, 0.0, 1.0);\n";
+            else if (std::strcmp(dbg, "tex1") == 0)
+                s << "    out_color0 = vec4(in_tex1.xyz, 1.0);\n";
+            else if (std::strcmp(dbg, "alpha") == 0)
+                s << "    out_color0 = vec4(vec3(texture(tex0, in_tex0.xy).w), 1.0);\n";
+            else if (std::strcmp(dbg, "color") == 0)
+                s << "    out_color0 = texture(tex7, in_tex0.zwzz.x);\n";
+        }
         if (key_.control & 0xE) s << "    gl_FragDepth = r1.z;\n";
         s << "}\n";
         return s.str();
