@@ -27,3 +27,15 @@ frames.bin
 *.ppm
 /refs
 /surface_*.ppm
+
+# Debug artefacts written by the runtime's diagnostic env vars. They are
+# regeneration products, not sources.
+*.glsl
+*.pgm
+*.ppm
+surface_*.ppm
+teximg_*.ppm
+glyphsrc_*.raw
+snap_*.bin
+pair_*.raw
+framelog*
