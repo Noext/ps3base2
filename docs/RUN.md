@@ -84,6 +84,50 @@ dead run are the exit code and a flip count that stops rising.
 Deleting the shader cache is safe. Deleting `out/`, `fw/` or `bin/` requires
 re-running `tools/setup.py`.
 
+## Building: never trust an incremental tree
+
+```
+cd /root/Dev/ps3base2
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+      -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+cmake --build build -j 8 --target ps3base
+```
+
+`-j 8` is a hard cap: this machine is shared and higher values make it
+unusable for anything else.
+
+**If the binary crashes and a fresh tree does not, the tree was stale.** This is
+not hypothetical: a `build/` tree carried through dozens of edits, reverts and
+re-applies produced a binary that segfaulted 5 times out of 5 in
+`std::ostream::sentry`, while the same commit built into a clean tree ran to
+the timeout 5 times out of 5 with 661-841 flips each. Nothing in the source
+differed. The stale tree had a binary roughly a third of the correct size, which
+is the tell:
+
+```
+90862096  build/ps3base      # stale: mixed objects and headers
+263547760 build/ps3base      # clean
+```
+
+Before investigating a crash, do `rm -rf build` and rebuild. The sanitizer
+builds (`build-asan`, `build-ubsan`, `build-tsan`) are configured separately
+and are only for locating a fault, never for judging a run.
+
+## Verified alive
+
+The five-run check that a change has not broken anything:
+
+```
+for i in 1 2 3 4 5; do
+  DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/$UID \
+  PS3BASE_DISC_DIR=/root/Dev/mc-port/disc PS3BASE_LOG=info \
+  timeout 50 ./build/ps3base --no-launcher > /tmp/r$i.log 2>&1
+  echo "run $i exit=$? $(grep -a 'rsx: flip' /tmp/r$i.log | tail -1 | grep -oE 'flip [0-9]+')"
+done
+```
+
+Five `exit=124` with a rising flip count is a pass.
+
 ## Known state at this commit
 
 The title screen and menu render and are navigable. All text — buttons, prompt,
