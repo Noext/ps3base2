@@ -1,0 +1,63 @@
+# References
+
+Where a fact comes from, so it does not have to be rediscovered. Read the
+matching entry before grepping; each one names the file that answers the
+question.
+
+## NID derivation
+
+A PS3 library NID for an exported function is the first four bytes, big-endian,
+of `SHA-1(name + 16-byte suffix)`. The suffix is the library's own tag, which
+is why the same function name yields different NIDs in different libraries.
+
+**Our NID table is correct.** `out/ppu/table.cpp` is generated from the
+import table inside the title's own ELF, so every `{library, nid, name}` row is
+the NID that this title actually imports — it is the source of truth, not a
+value computed from the name. Verified behaviourally: every `cellPngDec*`
+handler is reached with the arguments the title means to pass, which cannot
+happen if a NID were bound to the wrong function.
+
+Two consequences worth remembering:
+
+- A NID cannot be derived from a function name alone. Recomputing
+  `SHA-1("cellPngDecSetParameter")` gives `0x6217FBA7`, not the
+  `0xE97C9BD4` the title imports, because the suffix differs. Do not "fix" a
+  table row by recomputing it.
+- The name column is a guess from RPCS3's `REG_FUNC` list. If a handler
+  receives arguments that make no sense for its supposed signature, suspect the
+  **name**, not the NID: the binding is exact and the label may be wrong.
+
+## RSX
+
+- Texture unit enable is bit 31 of `NV4097_SET_TEXTURE_CONTROL0`
+  (`0x1A0C + unit*0x20`), not register `0x1D00`.
+- `CELL_GCM_TEXTURE_B8` = `0x81`, `A8R8G8B8` = `0x85`, `LN` = `0x20`
+  (linear). See `refs/rpcs3/rpcs3/Emu/RSX/gcm_enums.h`.
+- Texture location: `(format & 3) - 1`; raw 1 is local, raw 2 is main.
+  `refs/rpcs3/rpcs3/Emu/RSX/RSXTexture.cpp`, `fragment_texture::location()`.
+- Swizzle (Morton order) for 2D surfaces:
+  `refs/rpcs3/rpcs3/Emu/RSX/Utils/image_utils.hpp`,
+  `convert_linear_swizzle`. x occupies the even bit positions, y the odd ones.
+- Component remap from `TEXTURE_CONTROL1`:
+  `refs/rpcs3/rpcs3/Emu/RSX/Utils/color_utils.hpp`,
+  `decode_remap_encoding`. Low byte selects the source channel per output
+  (A, R, G, B); high byte is the mode (0 zero, 1 one, 2 texture).
+
+## cellPngDec / cellJpgDec
+
+- `refs/rpcs3/rpcs3/Emu/Cell/Modules/cellPngDec.h` for the structure layouts.
+- The title asks for **ARGB** (`outputColorSpace` 20) at 4 bytes per pixel for
+  its UI atlases. Reading the wrong field offset made the space indeterminate
+  and the glyph atlas reached the GPU as noise — the whole "text is unreadable"
+  defect.
+- `cellPngDecOpen` writes a per-image **sub-handle** into `*stream`, and that
+  sub-handle is passed **by value** to ReadHeader/SetParameter/DecodeData/Close.
+  Dereferencing it faults at a guest address near zero.
+
+## PPU
+
+- `refs/rpcs3/rpcs3/Emu/Cell/PPUInterpreter.cpp` is the reference for
+  instruction semantics. Notably `divw` stores a zero-extended 32-bit result
+  and `sraw`/`srad` shift arithmetically.
+- `tests/ppu_op_fuzz` compares every helper in `ppu/ops.h` against an
+  independent reference: 200 million checks, no divergence.
