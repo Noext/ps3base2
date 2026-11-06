@@ -6,6 +6,9 @@
 #include <bit>
 #include <cmath>
 #include <cfenv>
+#include <climits>
+#include <cstdio>
+#include <cstdlib>
 #include <limits>
 
 namespace ppu {
@@ -40,7 +43,15 @@ inline uint32_t ld32(uint8_t* b, uint32_t ea) { uint32_t v; std::memcpy(&v, b + 
 inline uint64_t ld64(uint8_t* b, uint32_t ea) { uint64_t v; std::memcpy(&v, b + ea, 8); return __builtin_bswap64(v); }
 inline void st8(uint8_t* b, uint32_t ea, uint8_t v) { b[ea] = v; }
 inline void st16(uint8_t* b, uint32_t ea, uint16_t v) { v = __builtin_bswap16(v); std::memcpy(b + ea, &v, 2); }
-inline void st32(uint8_t* b, uint32_t ea, uint32_t v) { v = __builtin_bswap32(v); std::memcpy(b + ea, &v, 4); }
+inline void st32(uint8_t* b, uint32_t ea, uint32_t v) {
+    static const bool trap = std::getenv("PS3BASE_ST32_TRAP") != nullptr;
+    if (trap && ea < 0x10000) {
+        static int n = 0;
+        if (n++ < 20) std::fprintf(stderr, "ST32_TRAP ea=0x%08x v=0x%08x ra=%p\n", ea, v, __builtin_return_address(0));
+    }
+    v = __builtin_bswap32(v);
+    std::memcpy(b + ea, &v, 4);
+}
 inline void st64(uint8_t* b, uint32_t ea, uint64_t v) { v = __builtin_bswap64(v); std::memcpy(b + ea, &v, 8); }
 
 inline double ldf32(uint8_t* b, uint32_t ea) { return static_cast<double>(std::bit_cast<float>(ld32(b, ea))); }

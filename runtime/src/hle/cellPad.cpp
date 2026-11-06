@@ -1,4 +1,5 @@
 #include "common.h"
+#include <cstdio>
 
 #include <chrono>
 #include <cstdlib>
@@ -86,6 +87,43 @@ void load_script() {
     }
 }
 
+/* Read one pending command from the control file, if any. Format: a button
+ * name, optionally followed by a repeat count or a hold in seconds. The file is
+ * truncated on read so a command fires once. */
+bool take_command_file(Press& out, uint32_t& repeat) {
+    static const char* path = std::getenv("PS3BASE_INPUT_CMD");
+    if (!path) return false;
+    FILE* f = std::fopen(path, "r+");
+    if (!f) return false;
+    char line[128] = {};
+    const size_t got = std::fread(line, 1, sizeof line - 1, f);
+    std::fclose(f);
+    if (!got) return false;
+    /* Consume it. */
+    if (FILE* t = std::fopen(path, "w")) std::fclose(t);
+    std::string cmd(line, strnlen(line, sizeof line));
+    while (!cmd.empty() && (cmd.back() == '\n' || cmd.back() == '\r' || cmd.back() == ' ')) cmd.pop_back();
+    while (!cmd.empty() && cmd.front() == ' ') cmd.erase(cmd.begin());
+    if (cmd.empty()) return false;
+    std::string name = cmd;
+    repeat = 1;
+    const size_t sp = cmd.find(' ');
+    if (sp != std::string::npos) {
+        name = cmd.substr(0, sp);
+        const std::string rest = cmd.substr(sp + 1);
+        const size_t sp2 = rest.find(' ');
+        const std::string arg = sp2 == std::string::npos ? rest : rest.substr(0, sp2);
+        const double v = std::atof(arg.c_str());
+        if (v > 0) repeat = (v < 5.0) ? static_cast<uint32_t>(v * 60 + 0.5) : static_cast<uint32_t>(v);
+    }
+    Press p{};
+    if (!button_of(name, p.offset, p.mask, p.pressure)) return false;
+    p.hold = 0.06;   /* ~4 frames at 60 Hz */
+    out = p;
+    LOG_INFO("pad", "cmd '%s' -> %u frame(s)", name.c_str(), repeat);
+    return true;
+}
+
 void fill(uint32_t out) {
     std::call_once(g_script_once, load_script);
     double now = double(ppu::timebase() - g_start) / 80000000.0;
@@ -94,19 +132,52 @@ void fill(uint32_t out) {
     b[4] = b[5] = b[6] = b[7] = 0x80;
     b[20] = b[21] = b[22] = 0x200;
     b[23] = 0x200;
-    for (const Press& p : g_script) {
-        if (now >= p.at && now < p.at + p.hold) {
-            if (!p.mask) {
-                b[p.offset] = p.axis_value;
-                continue;
+    host::poll_pad(b);
+    /* Command file: one press per write, held for a few frames. This is what
+     * lets navigation be driven from outside without timing assumptions. */
+    {
+        static Press pending{};
+        static uint32_t frames_left = 0;
+        if (!frames_left) {
+            Press p{};
+            uint32_t repeat = 1;
+            if (take_command_file(p, repeat)) {
+                pending = p;
+                frames_left = repeat;
             }
-            b[p.offset] |= p.mask;
-            if (p.pressure) b[p.pressure] = 0xFF;
+        }
+        if (frames_left) {
+            b[pending.offset] |= pending.mask;
+            if (pending.pressure) b[pending.pressure] = 0xFF;
+            frames_left--;
         }
     }
-    host::poll_pad(b);
+    /* Apply the injection LAST: poll_pad rebuilds b from the host device and
+     * would overwrite anything written before it. This is why a scripted press
+     * never reached the title. */
     for (const Press& p : g_script) {
-        if (!p.mask && now >= p.at && now < p.at + p.hold) b[p.offset] = p.axis_value;
+        if (now < p.at || now >= p.at + p.hold) continue;
+        if (!p.mask) {
+            b[p.offset] = p.axis_value;
+            continue;
+        }
+        b[p.offset] |= p.mask;
+        if (p.pressure) b[p.pressure] = 0xFF;
+    }
+    /* PS3BASE_PAD_LOG: log the button bytes the title will see, so an input can
+     * be checked to be active for a bounded number of reads and then released. */
+    {
+        static const bool on = std::getenv("PS3BASE_PAD_LOG") != nullptr;
+        static std::atomic<uint32_t> n{0};
+        const uint32_t f = n.fetch_add(1);
+        /* Log only frames where a button is held: an idle frame every 16 ms would
+         * fill any reasonable budget before the interesting moment arrives. */
+        const bool active = (b[2] & 0xFF) || (b[3] & 0xFF) || b[10] || b[18] || b[19];
+        if (on && active && f < 200000) {
+            LOG_INFO("pad", "frame %u bytes %02x %02x %02x %02x %02x %02x %02x %02x t=%.2f",
+                     f, b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+                     double(ppu::timebase() - g_start) / 80000000.0);
+        }
     }
     vm::write32(out, 24);
     for (int i = 0; i < 24; i++) vm::write16(out + 4 + i * 2, b[i]);

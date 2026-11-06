@@ -171,6 +171,11 @@ int32_t resolve(uint32_t index, ImportSlot& slot) {
             return kHle;
         }
     }
+    /* PS3BASE_RESOLVE_LOG: name the imports that resolve nowhere. A title that
+     * faults through a bogus address usually has one of these behind it. */
+    if (std::getenv("PS3BASE_RESOLVE_LOG")) {
+        LOG_WARN("import", "unresolved %s::%s (0x%08x)", imp.module, *imp.name ? imp.name : "?", imp.nid);
+    }
     return kNone;
 }
 
@@ -229,6 +234,27 @@ void call_import_inner(Context& ctx, uint8_t* base, uint32_t index, ImportSlot& 
         LOG_INFO("import", "%s::%s(0x%llx, 0x%llx, 0x%llx, 0x%llx) lr 0x%llx", imp.module, imp.name, static_cast<unsigned long long>(ctx.gpr[3]),
                  static_cast<unsigned long long>(ctx.gpr[4]), static_cast<unsigned long long>(ctx.gpr[5]), static_cast<unsigned long long>(ctx.gpr[6]),
                  static_cast<unsigned long long>(ctx.lr));
+    }
+    /* A pointer argument below the guest's first mapped page is never valid.
+     * Naming the caller and the import is what turns "fault at 0x38" into a
+     * writer. */
+    if (ctx.gpr[3] && ctx.gpr[3] < 0x10000 && std::getenv("PS3BASE_BADPTR_LOG")) {
+        /* The return address alone names only the thunk. Walk the guest stack:
+         * each frame holds the saved LR at r1+16 for this compiler's prologue. */
+        LOG_WARN("import", "low-pointer arg r3=0x%llx to %s::%s lr=0x%llx r4=0x%llx r5=0x%llx",
+                 static_cast<unsigned long long>(ctx.gpr[3]), imp.module, *imp.name ? imp.name : "?",
+                 static_cast<unsigned long long>(ctx.lr),
+                 static_cast<unsigned long long>(ctx.gpr[4]),
+                 static_cast<unsigned long long>(ctx.gpr[5]));
+        uint32_t sp = static_cast<uint32_t>(ctx.gpr[1]);
+        LOG_WARN("import", "  guest stack chain from r1=0x%08x:", sp);
+        for (int d = 0; d < 12 && sp && vm::is_mapped(sp + 0x40); d++) {
+            const uint32_t back = vm::read32(sp);
+            const uint32_t saved_lr = vm::read32(sp + 16);
+            LOG_WARN("import", "   #%d sp=0x%08x back=0x%08x lr=0x%08x", d, sp, back, saved_lr);
+            if (back <= sp || back - sp > 0x10000) break;
+            sp = back;
+        }
     }
     if (st >= 0) {
         const image::ExportEntry& e = image::exports[st];

@@ -198,6 +198,36 @@ void fault_handler(int sig, siginfo_t* si, void* ctx) {
             off += std::snprintf(regs + off, sizeof regs - off, " r%d=0x%llx", i,
                                  static_cast<unsigned long long>(c.gpr[i]));
         LOG_ERROR("crash", "  guest regs:%s", regs);
+        {
+            /* r13 is the thread control block; the liblv2 accessor reads a field
+             * from it. Dump it whenever it is mapped. */
+            const uint32_t tcb = static_cast<uint32_t>(c.gpr[13]);
+            if (tcb && vm::is_mapped(tcb) ) {
+                char w[520]; int o = 0;
+                for (int i = -64; i < 64 && o < 480; i += 4) {
+                    const uint32_t a = uint32_t(int64_t(tcb) + i);
+                    if (!vm::is_mapped(a)) continue;
+                    o += std::snprintf(w + o, sizeof w - o, " %08x", vm::read32(a));
+                }
+                LOG_ERROR("crash", "  tcb r13 (0x%08x):%s", tcb, w);
+            }
+        }
+        {
+            /* The faulting argument came from a TOC slot; dump the liblv2 TOC
+             * around it so the runtime value can be compared with the file. */
+            const uint32_t toc = static_cast<uint32_t>(c.gpr[2]);
+            if (toc == 0x101c620u) {
+                const uint32_t slot = toc - 32444u;   /* 0x1014764 */
+                LOG_ERROR("crash", "  toc slot 0x%08x = 0x%08x (file value 0x01014a40)",
+                          slot, vm::read32(slot));
+                char w[520]; int o = 0;
+                for (int i = -32; i < 64 && o < 460; i += 4) {
+                    const uint32_t a = slot + uint32_t(int64_t(i));
+                    o += std::snprintf(w + o, sizeof w - o, " %08x", vm::read32(a));
+                }
+                LOG_ERROR("crash", "  toc window @0x%08x:%s", slot - 32, w);
+            }
+        }
         for (int r = 3; r <= 7; r++) {
             const uint32_t ea = static_cast<uint32_t>(c.gpr[r]);
             if (!ea || !vm::is_mapped(ea) || !vm::range_mapped(ea, 256)) continue;

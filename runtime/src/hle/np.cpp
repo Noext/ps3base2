@@ -1,4 +1,5 @@
 #include "common.h"
+#include <cstdlib>
 #include "runtime/sysutil_events.h"
 
 #include <cstring>
@@ -14,7 +15,48 @@ constexpr int64_t CELL_NET_CTL_ERROR_NOT_CONNECTED = static_cast<int32_t>(0x8013
 
 }
 
-HLE_FUNC(sys_net, sys_net_initialize_network_ex) { ret(ctx, 0); }
+/* The socket layer. RPCS3 answers these with 0 (success) rather than an error,
+ * so a title that gates its initialisation on them proceeds. Enumerating saves
+ * and starting the world both happen after network setup, so an error here
+ * would silently skip code paths that have nothing to do with the network.
+ * Reference: refs/rpcs3/rpcs3/Emu/Cell/Modules/sys_net_.cpp.
+ * PS3BASE_NET_LOG reports every call and its return. */
+#define NET_ENTER(name, fmt, ...)                                              \
+    do {                                                                       \
+        static const bool on = std::getenv("PS3BASE_NET_LOG") != nullptr;      \
+        if (on) LOG_INFO("sys_net", name " " fmt, __VA_ARGS__);                \
+    } while (0)
+
+HLE_FUNC(sys_net, sys_net_initialize_network_ex) {
+    NET_ENTER("initialize_network_ex", "pool 0x%x size %u", a32(ctx, 0), a32(ctx, 1));
+    ret(ctx, 0);
+}
+
+HLE_FUNC(sys_net, sys_net_socket) {
+    const int32_t family = static_cast<int32_t>(a32(ctx, 0));
+    const int32_t type = static_cast<int32_t>(a32(ctx, 1));
+    const int32_t proto = static_cast<int32_t>(a32(ctx, 2));
+    NET_ENTER("socket", "family %d type %d proto %d -> fd 3", family, type, proto);
+    /* A concrete descriptor, not 0: 0 is stdin on this ABI and a title that
+     * checks for >= 0 then binds would bind the wrong thing. */
+    ret(ctx, 3);
+}
+
+HLE_FUNC(sys_net, sys_net_bind) {
+    NET_ENTER("bind", "s %d addr 0x%x len %u -> 0", a32(ctx, 0), a32(ctx, 1), a32(ctx, 2));
+    ret(ctx, 0);
+}
+
+HLE_FUNC(sys_net, sys_net_setsockopt) {
+    NET_ENTER("setsockopt", "s %d level %d opt %d -> 0",
+              a32(ctx, 0), a32(ctx, 1), a32(ctx, 2));
+    ret(ctx, 0);
+}
+
+HLE_FUNC(sys_net, sys_net_socketclose) {
+    NET_ENTER("socketclose", "s %d -> 0", a32(ctx, 0));
+    ret(ctx, 0);
+}
 HLE_FUNC(sys_net, sys_net_finalize_network) { ret(ctx, 0); }
 /* Events the network dialogs raise; the title polls for them through
  * cellSysutilCheckCallback. */
