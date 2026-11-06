@@ -1,4 +1,5 @@
 #include "common.h"
+#include "runtime/sysutil_events.h"
 #include "runtime/vfs.h"
 
 #include <deque>
@@ -24,6 +25,21 @@ void post(std::function<void(ppu::Context&)> fn) {
     g_pending.push_back(std::move(fn));
 }
 
+}
+
+/* Exposed so other modules can raise sysutil events (cellNetCtl's dialogs do). */
+uint32_t callback_function(int slot) {
+    std::lock_guard lk(g_lock);
+    return (slot >= 0 && slot < 4) ? g_callbacks[slot].func : 0;
+}
+
+uint32_t callback_arg(int slot) {
+    std::lock_guard lk(g_lock);
+    return (slot >= 0 && slot < 4) ? g_callbacks[slot].userdata : 0;
+}
+
+void sysutil_post(std::function<void(ppu::Context&)> fn) {
+    post(std::move(fn));
 }
 
 HLE_FUNC(cellSysutil, cellSysutilRegisterCallback) {

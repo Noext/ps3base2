@@ -210,6 +210,7 @@ void fill_stat(const Op& op, uint32_t sg, bool exists) {
 }
 
 int32_t file_op(const Op& op, uint32_t fs, uint32_t fg) {
+    if (!fs || !vm::range_mapped(fs, 0x40)) return ERR_ACCESS;
     uint32_t oper = vm::read32(fs + 0x0);
     uint32_t type = vm::read32(fs + 0x8);
     std::string name = content_name(type) ? content_name(type) : gstr(vm::read32(fs + 0x1C), 13);
@@ -264,7 +265,11 @@ int32_t run_op(Op& op) {
         return ERR_NODATA;
     }
     fill_stat(op, sg, exists);
-    LOG_INFO("savedata", "'%s' scratch 0x%08x funcStat 0x%08x funcFile 0x%08x setBuf 0x%08x", op.dir_name.c_str(), g_scratch, vm::read32(op.func_stat), vm::read32(op.func_file), op.set_buf);
+    if (!vm::range_mapped(op.func_stat, 4) || !vm::range_mapped(op.func_file, 4)) {
+        LOG_WARN("savedata", "'%s' callback pointers 0x%08x/0x%08x are not mapped",
+                 op.dir_name.c_str(), op.func_stat, op.func_file);
+        return ERR_PARAM;
+    }
     std::memset(vm::ptr(cb), 0, 0x20);
     vm::write32(cb + 0x10, op.userdata);
     std::memset(vm::ptr(ss), 0, 0x10);
@@ -321,6 +326,87 @@ HLE_FUNC(cellSysutil, cellSaveDataAutoSave2) { ret(ctx, auto_op(ctx, true)); }
  * handler, reports failure, and shows a modal error -- which is what stopped the
  * run before the world could load. The user is folded into the directory name so
  * each account keeps its own slot. */
+/* cellSaveDataUserListAutoLoad(version, userId, errDialog, setList, setBuf,
+ * funcFixed, funcStat, funcFile, container, userdata): enumerate the account's
+ * saves rather than loading one.
+ *
+ * For the LIST variants RPCS3 calls funcFixed with (result, listGet, fixedSet)
+ * BEFORE anything else, and the title decides what to do from that. Skipping it
+ * left the title waiting on an empty screen -- the Start Game panel with
+ * placeholder icons. With no save on disk the list is empty and the fixed
+ * callback says "no data", which is the answer that leads to "create a world".
+ * Reference: refs/rpcs3/rpcs3/Emu/Cell/Modules/cellSaveData.cpp, the funcFixed
+ * call site in savedata_op. */
+HLE_FUNC(cellSysutil, cellSaveDataUserListAutoLoad) {
+    const uint32_t version = a32(ctx, 0);
+    const uint32_t user = a32(ctx, 1);
+    const uint32_t err_dialog = a32(ctx, 2);
+    const uint32_t set_list = a32(ctx, 3);
+    const uint32_t set_buf = a32(ctx, 4);
+    const uint32_t func_fixed = a32(ctx, 5);
+    const uint32_t func_stat = a32(ctx, 6);
+    (void)func_stat;
+    LOG_INFO("savedata",
+             "UserListAutoLoad version 0x%x user %u errDialog 0x%x setList 0x%08x setBuf 0x%08x "
+             "funcFixed 0x%08x container 0x%x",
+             version, user, err_dialog, set_list, set_buf, func_fixed, a32(ctx, 8));
+    if (!set_list || !set_buf || !func_fixed) return ret(ctx, static_cast<int32_t>(ERR_PARAM));
+
+    /* The fixed callback decides the flow. Give it a well-formed empty list:
+     * CellSaveDataListGet { u32 dirNum, u32 listNum, ptr dirList, reserved[64] },
+     * and a CellSaveDataCBResult it writes its verdict into. */
+    std::lock_guard lk(g_lock);
+    if (!g_scratch) g_scratch = vm::alloc(vm::Region::Stack, SCRATCH_SIZE, 0x100);
+    if (!g_scratch) return ret(ctx, static_cast<int32_t>(ERR_ACCESS));
+    const uint32_t cb = g_scratch + CB_RESULT;
+    const uint32_t list_get = g_scratch + CB_RESULT + 0x40;
+    const uint32_t fixed_set = list_get + 0x60;
+    std::memset(vm::ptr(list_get), 0, 0x60);
+    vm::write32(list_get + 0, 0);   /* dirNum: nothing saved */
+    vm::write32(list_get + 4, 0);   /* dirListNum */
+    vm::write32(list_get + 8, 0);   /* dirList */
+    std::memset(vm::ptr(fixed_set), 0, 0x10);
+    std::memset(vm::ptr(cb), 0, 0x20);
+    vm::write32(cb + 0x10, a32(ctx, 9));   /* userdata */
+    LOG_INFO("savedata", "UserListAutoLoad: calling funcFixed 0x%08x with empty list",
+             func_fixed);
+    call_guest(ctx, func_fixed, cb, list_get, fixed_set);
+    const int32_t fixed_result = static_cast<int32_t>(vm::read32(cb));
+    LOG_INFO("savedata", "UserListAutoLoad: funcFixed returned %d -> no saved data", fixed_result);
+    ret(ctx, static_cast<int32_t>(ERR_NODATA));
+}
+
+/* cellSaveDataUserAutoSave(version, userId, dirName, errDialog, setBuf,
+ * funcStat, funcFile, container, userdata). This is what "Create New World"
+ * reaches: the title writes the world's save once it has generated it. The
+ * user id is folded into the directory name, as for UserAutoLoad. */
+HLE_FUNC(cellSysutil, cellSaveDataUserAutoSave) {
+    const uint32_t version = a32(ctx, 0);
+    const uint32_t user = a32(ctx, 1);
+    std::string name = gstr(a32(ctx, 2), 64);
+    if (!name.empty()) name = "u" + std::to_string(user) + "_" + name;
+    const std::string dir = save_root() + "/" + name;
+    Op op{ctx, name, dir, a32(ctx, 5), a32(ctx, 6), a32(ctx, 7), a32(ctx, 9), true};
+    LOG_INFO("savedata", "UserAutoSave v 0x%x user %u name 0x%08x '%s' setBuf 0x%08x stat 0x%08x file 0x%08x ud 0x%08x",
+             version, user, a32(ctx, 2), name.c_str(), a32(ctx, 5), a32(ctx, 6), a32(ctx, 7), a32(ctx, 9));
+    if (name.empty() || !op.set_buf || !op.func_stat || !op.func_file) {
+        return ret(ctx, static_cast<int32_t>(ERR_PARAM));
+    }
+    ret(ctx, run_op(op));
+}
+
+/* cellSaveDataEnableOverlay(enable): the autosave indicator. Nothing to draw. */
+HLE_FUNC(cellSysutil, cellSaveDataEnableOverlay) {
+    ret(ctx, 0);
+}
+
+/* cellSaveDataDelete2(container). */
+HLE_FUNC(cellSysutil, cellSaveDataDelete2) { ret(ctx, 0); }
+
+HLE_FUNC(cellSysutil, cellSaveDataFixedDelete) { ret(ctx, 0); }
+
+HLE_FUNC(cellSysutil, cellSaveDataUserFixedDelete) { ret(ctx, 0); }
+
 HLE_FUNC(cellSysutil, cellSaveDataUserAutoLoad) {
     const uint32_t user = a32(ctx, 0);
     std::string name = gstr(a32(ctx, 1), 64);

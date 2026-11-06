@@ -17,8 +17,17 @@ inline void ret(ppu::Context& c, int64_t v) { c.gpr[3] = static_cast<uint64_t>(v
 
 inline std::string gstr(uint32_t addr, size_t max = 1024) {
     if (!addr) return {};
-    const char* p = reinterpret_cast<const char*>(vm::ptr(addr));
-    return std::string(p, strnlen(p, max));
+    /* The title sometimes passes a pointer into a region it has not mapped yet,
+     * and strnlen then walks off the end and faults. Walk only while the bytes
+     * stay mapped. */
+    std::string out;
+    for (size_t i = 0; i < max; i++) {
+        if (!vm::range_mapped(addr + static_cast<uint32_t>(i), 1)) break;
+        const char c = static_cast<char>(vm::ptr(addr)[i]);
+        if (!c) break;
+        out.push_back(c);
+    }
+    return out;
 }
 
 inline void put_str(uint32_t addr, const std::string& s, size_t cap) {

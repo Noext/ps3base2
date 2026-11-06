@@ -1,4 +1,5 @@
 #include "common.h"
+#include "runtime/sysutil_events.h"
 
 #include <cstring>
 
@@ -15,6 +16,26 @@ constexpr int64_t CELL_NET_CTL_ERROR_NOT_CONNECTED = static_cast<int32_t>(0x8013
 
 HLE_FUNC(sys_net, sys_net_initialize_network_ex) { ret(ctx, 0); }
 HLE_FUNC(sys_net, sys_net_finalize_network) { ret(ctx, 0); }
+/* Events the network dialogs raise; the title polls for them through
+ * cellSysutilCheckCallback. */
+static constexpr int32_t CELL_NET_CTL_ERROR_DIALOG_CANCELED = static_cast<int32_t>(0x80130107);
+
+static constexpr uint64_t CELL_SYSUTIL_NET_CTL_NETSTART_LOADED   = 0x0801;
+static constexpr uint64_t CELL_SYSUTIL_NET_CTL_NETSTART_FINISHED = 0x0802;
+static constexpr uint64_t CELL_SYSUTIL_NET_CTL_NETSTART_UNLOADED = 0x0803;
+
+/* Raise a system command to every registered sysutil callback. */
+static void sysutil_send(uint64_t event) {
+    for (int slot = 0; slot < 4; slot++) {
+        const uint32_t fn = callback_function(slot);
+        if (!fn) continue;
+        const uint32_t arg = callback_arg(slot);
+        sysutil_post([fn, arg, event](ppu::Context& c) {
+            call_guest(c, fn, arg, event, 0);
+        });
+    }
+}
+
 HLE_FUNC(cellNetCtl, cellNetCtlInit) { ret(ctx, 0); }
 HLE_FUNC(cellNetCtl, cellNetCtlTerm) { ret(ctx, 0); }
 HLE_FUNC(cellNetCtl, cellNetCtlAddHandler) {
@@ -23,15 +44,60 @@ HLE_FUNC(cellNetCtl, cellNetCtlAddHandler) {
 }
 HLE_FUNC(cellNetCtl, cellNetCtlDelHandler) { ret(ctx, 0); }
 HLE_FUNC(cellNetCtl, cellNetCtlGetState) {
+    LOG_INFO("cellNetCtl", "GetState called");
     if (uint32_t p = a32(ctx, 0)) vm::write32(p, CELL_NET_CTL_STATE_Disconnected);
     ret(ctx, 0);
 }
 HLE_FUNC(cellNetCtl, cellNetCtlGetInfo) { ret(ctx, CELL_NET_CTL_ERROR_NOT_CONNECTED); }
+
+/* The "connect to PSN" dialog the title raises before starting a world. There is
+ * no network, so it is driven to its offline conclusion: LOADED then FINISHED
+ * from the load call, "cancelled" plus UNLOADED from the unload call. The title
+ * then offers "Continue playing offline".
+ * Reference: refs/rpcs3/rpcs3/Emu/Cell/Modules/cellNetCtl.cpp, netstart_hack and
+ * cellNetCtlNetStartDialogUnloadAsync. */
+HLE_FUNC(cellNetCtl, cellNetCtlNetStartDialogLoadAsync) {
+    const uint32_t param = a32(ctx, 0);
+    if (param) {
+        LOG_INFO("cellNetCtl", "NetStartDialogLoadAsync size %d type %d flag %d",
+                 static_cast<int32_t>(vm::read32(param)),
+                 static_cast<int32_t>(vm::read32(param + 4)),
+                 static_cast<int32_t>(vm::read32(param + 8)));
+    }
+    sysutil_send(CELL_SYSUTIL_NET_CTL_NETSTART_LOADED);
+    sysutil_send(CELL_SYSUTIL_NET_CTL_NETSTART_FINISHED);
+    LOG_INFO("cellNetCtl", "NetStartDialogLoadAsync -> LOADED + FINISHED (offline)");
+    ret(ctx, 0);
+}
+
+HLE_FUNC(cellNetCtl, cellNetCtlNetStartDialogAbortAsync) { ret(ctx, 0); }
+
+HLE_FUNC(cellNetCtl, cellNetCtlNetStartDialogUnloadAsync) {
+    LOG_INFO("cellNetCtl", "NetStartDialogUnloadAsync called result=0x%08x", a32(ctx, 0));
+    const uint32_t result = a32(ctx, 0);
+    /* CellNetCtlNetStartDialogResult: s32 size, s32 result. Offline means the
+     * dialog was cancelled, which is the title's "play offline" path. */
+    if (result) {
+        vm::write32(result + 0, 8);
+        vm::write32(result + 4, static_cast<uint32_t>(CELL_NET_CTL_ERROR_DIALOG_CANCELED));
+    }
+    sysutil_send(CELL_SYSUTIL_NET_CTL_NETSTART_UNLOADED);
+    LOG_INFO("cellNetCtl", "NetStartDialogUnloadAsync -> CANCELED + UNLOADED");
+    ret(ctx, 0);
+}
 HLE_FUNC(cellNetCtl, cellNetCtlGetNatInfo) { ret(ctx, CELL_NET_CTL_ERROR_NOT_CONNECTED); }
 
 HLE_FUNC(sceNp2, sceNp2Init) { ret(ctx, 0); }
 HLE_FUNC(sceNp2, sceNp2Term) { ret(ctx, 0); }
-HLE_FUNC(sceNp, sceNpInit) { ret(ctx, 0); }
+/* PS3BASE_NP_LOG: report every sceNp call, to find which one the title's
+ * "you are offline" dialogue keyed on. */
+#define NP_ENTER(name)                                                        \
+    do {                                                                      \
+        static const bool on = std::getenv("PS3BASE_NP_LOG") != nullptr;      \
+        if (on) LOG_INFO("sceNp", name " r3=0x%x r4=0x%x", a32(ctx, 0), a32(ctx, 1)); \
+    } while (0)
+
+HLE_FUNC(sceNp, sceNpInit) { NP_ENTER("sceNpInit"); ret(ctx, 0); }
 HLE_FUNC(sceNp, sceNpTerm) { ret(ctx, 0); }
 HLE_FUNC(sceNp, sceNpLookupInit) { ret(ctx, 0); }
 HLE_FUNC(sceNp, sceNpManagerRegisterCallback) { ret(ctx, 0); }
