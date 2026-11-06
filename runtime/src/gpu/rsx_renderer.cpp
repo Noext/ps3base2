@@ -3740,6 +3740,15 @@ void frame_complete_body() {
 namespace {
 
 inline void vp_word(uint32_t arg) {
+    /* PS3BASE_VP_LOG=1: every loaded instruction with its slot, and the LOAD
+     * register that placed it. The decompiler needs a program that is
+     * contiguous from its start slot; this is the evidence for whether the one
+     * it receives is complete or has holes. */
+    static const bool vp_log = std::getenv("PS3BASE_VP_LOG") != nullptr;
+    if (vp_log) {
+        LOG_INFO("vpload", "load %u slot %u word 0x%08x", R(TRANSFORM_PROGRAM_LOAD),
+                 g_vp_load_word / 4, arg);
+    }
     uint32_t load = R(TRANSFORM_PROGRAM_LOAD);
     if (g_vp_load_word / 4 != load && (g_vp_load_word % 4) == 0) g_vp_load_word = load * 4;
     if (g_vp_load_word < 544 * 4 && g_vp_ucode[g_vp_load_word] != arg) {
@@ -3802,7 +3811,11 @@ void method(uint32_t reg, uint32_t arg) {
         vp_word(arg);
         return;
     }
-    if (reg == TRANSFORM_PROGRAM_LOAD) g_vp_load_word = arg * 4;
+    if (reg == TRANSFORM_PROGRAM_LOAD) {
+        static const bool vp_log = std::getenv("PS3BASE_VP_LOG") != nullptr;
+        if (vp_log) LOG_INFO("vpload", "SET_TRANSFORM_PROGRAM_LOAD slot %u", arg);
+        g_vp_load_word = arg * 4;
+    }
     if (g_trace && reg == TRANSFORM_CONSTANT_LOAD) LOG_INFO("rsx", "  const load %u", arg);
     if (reg >= TRANSFORM_CONSTANT && reg < TRANSFORM_CONSTANT + 128) {
         uint32_t idx = R(TRANSFORM_CONSTANT_LOAD) * 4 + ((reg - TRANSFORM_CONSTANT) >> 2);

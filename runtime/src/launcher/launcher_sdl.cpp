@@ -1,5 +1,6 @@
 #ifndef _WIN32
 #include "launcher_ui.h"
+#include "runtime/window_title.h"
 #include "runtime/log.h"
 
 #include <SDL3/SDL.h>
@@ -32,7 +33,7 @@ Result run() {
         LOG_WARN("launcher", "SDL init failed: %s", SDL_GetError());
         return Result::Play;
     }
-    SDL_Window* window = SDL_CreateWindow("God of War: Ascension", 1120, 640, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    SDL_Window* window = SDL_CreateWindow(ps3base::window_title().c_str(), 1120, 640, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     g_renderer = window ? SDL_CreateRenderer(window, nullptr) : nullptr;
     if (!g_renderer) {
         LOG_WARN("launcher", "launcher window failed: %s", SDL_GetError());

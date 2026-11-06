@@ -1,5 +1,6 @@
 #ifdef _WIN32
 #include "launcher_ui.h"
+#include "runtime/window_title.h"
 #include "runtime/log.h"
 
 #define WIN32_LEAN_AND_MEAN
@@ -114,7 +115,7 @@ Result run() {
     RECT r{0, 0, 1120, 640};
     AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
     int w = r.right - r.left, h = r.bottom - r.top;
-    HWND hwnd = CreateWindowW(wc.lpszClassName, L"God of War: Ascension", WS_OVERLAPPEDWINDOW, (GetSystemMetrics(SM_CXSCREEN) - w) / 2, (GetSystemMetrics(SM_CYSCREEN) - h) / 2, w, h, nullptr, nullptr,
+    HWND hwnd = CreateWindowW(wc.lpszClassName, ps3base::window_title_w(), WS_OVERLAPPEDWINDOW, (GetSystemMetrics(SM_CXSCREEN) - w) / 2, (GetSystemMetrics(SM_CYSCREEN) - h) / 2, w, h, nullptr, nullptr,
                               wc.hInstance, nullptr);
     if (!hwnd || !create_device(hwnd)) {
         LOG_WARN("launcher", "launcher window failed");

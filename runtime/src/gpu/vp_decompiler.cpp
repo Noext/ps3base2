@@ -1,8 +1,10 @@
 #include "vp_decompiler.h"
+#include "runtime/log.h"
 
 #include <cstdio>
 #include <set>
 #include <sstream>
+#include <stdexcept>
 #include <vector>
 
 namespace gpu {
@@ -18,6 +20,20 @@ struct Insn {
     bool end() const { return d3 & 1; }
     uint32_t target() const { return (((d0 >> 23) & 1) << 9) | ((d2 & 0x3F) << 3) | ((d3 >> 29) & 7); }
 };
+
+/* A vertex program is guest data. Scan it linearly from the entry, bounded by
+ * the table, and stop at the end bit. Anything that runs off the end is not a
+ * program this decompiler can represent, and decompiling garbage is what took
+ * the RSX thread down in the middle of a draw. */
+bool program_is_sane(const uint32_t* ucode, uint32_t start_slot, uint32_t slots)
+{
+    if (!ucode || start_slot >= slots) return false;
+    for (uint32_t s = start_slot; s < slots; s++) {
+        const uint32_t* w = &ucode[s * 4];
+        if (w[3] & 1u) return true;
+    }
+    return false;
+}
 
 bool is_flow(uint32_t sca) { return sca == 0x08 || sca == 0x09 || sca == 0x0A || sca == 0x0B || sca == 0x0C || sca == 0x11 || sca == 0x12; }
 
@@ -106,7 +122,10 @@ private:
     uint32_t inputs_ = 0;
     uint32_t textures_ = 0;
 
-    Insn at(uint32_t s) const { return {code_[s * 4], code_[s * 4 + 1], code_[s * 4 + 2], code_[s * 4 + 3]}; }
+    Insn at(uint32_t s) const {
+        if (!code_ || s >= SLOTS) return {};
+        return {code_[s * 4], code_[s * 4 + 1], code_[s * 4 + 2], code_[s * 4 + 3]};
+    }
 
     bool discover() {
         std::vector<uint32_t> work{start_};
@@ -320,8 +339,23 @@ private:
 }
 
 VertexProgramInfo decompile_vertex_program(const uint32_t* ucode, uint32_t start_slot) {
-    if (start_slot >= SLOTS) return {};
-    return Decompiler(ucode, start_slot).run();
+    if (!ucode || start_slot >= SLOTS) return {};
+    /* The ucode comes from guest memory and is not trusted: a program that is
+     * truncated, that branches outside itself, or that the guest is still
+     * writing must yield no shader at all rather than take the host down. */
+    if (!program_is_sane(ucode, start_slot, SLOTS)) {
+        LOG_WARN("vp", "slot %u: no end instruction within %u slots, refusing", start_slot, SLOTS);
+        return {};
+    }
+    try {
+        return Decompiler(ucode, start_slot).run();
+    } catch (const std::exception& e) {
+        LOG_WARN("vp", "decompiling slot %u threw: %s", start_slot, e.what());
+        return {};
+    } catch (...) {
+        LOG_WARN("vp", "decompiling slot %u threw an unknown exception", start_slot);
+        return {};
+    }
 }
 
 }

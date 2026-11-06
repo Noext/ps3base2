@@ -17,3 +17,12 @@
 *.SELF
 *.pkg
 *.pup
+
+# Run artefacts: SPU local-store dumps, logs, captures, scratch scripts.
+*.ls
+gowa.log
+trace.bin
+frames.bin
+/spucap/
+*.ppm
+/refs

@@ -528,6 +528,21 @@ void fifo_thread() {
         exec_tsc += dx;
         methods += count;
         uint32_t end = noninc ? method + 4 : method + count * 4;
+        /* PS3BASE_DRAW_LOG=1: one line per draw packet. A draw is a BEGIN_END
+         * (0x1808). Primitive, vertex count, target surface and texture state
+         * all live in the register file, so this works without a GPU -- which
+         * matters, because the Vulkan renderer cannot start in this environment
+         * and the guest buffer therefore never receives the result. */
+        {
+            static const bool draw_log = std::getenv("PS3BASE_DRAW_LOG") != nullptr;
+            if (draw_log && method <= 0x1808 && 0x1808 < end) {
+                auto reg = [&](uint32_t r) { return regs[r >> 2]; };
+                LOG_INFO("draw", "prim 0x%x idx 0x%x/%u vtx 0x%x target 0x%x %ux%u tex %s off 0x%x",
+                         reg(0x1808), reg(0x1674), reg(0x1678) & 0xFFFF, reg(0x1680),
+                         reg(0x0200), reg(0x0208), reg(0x020C),
+                         reg(0x1D00) ? "on" : "off", reg(0x1A00));
+            }
+        }
         int kind = (method <= 0x1808 && 0x1808 < end) ? 0 : (method <= 0xE924 && 0xE920 < end) ? 1 : (method <= 0x1D94 && 0x1D94 < end) ? 2
                  : (!noninc && (method == 0x0100 || (method >= 0x0B80 && method < 0x0C00) || (method >= 0x1EFC && method < 0x2000))) ? 3 : 4;
         kind_tsc[kind] += dx;
@@ -660,7 +675,20 @@ LV2_SYSCALL(670, sys_rsx_context_allocate) {
     vm::write64(u32arg(ctx, 2), g_rsx.driver_info);
     vm::write64(u32arg(ctx, 3), g_rsx.reports);
     if (!g_rsx.running.exchange(true)) {
-        std::thread(fifo_thread).detach();
+        /* A dedicated stack for the FIFO thread: the vertex decompiler builds
+         * multi-megabyte GLSL strings, and the default 8 MiB was not enough --
+         * the overflow corrupted an ostream and surfaced as a crash inside
+         * operator<<, several frames from the real cause. */
+        std::thread t([] {
+            pthread_attr_t attr;
+            pthread_attr_init(&attr);
+            pthread_attr_setstacksize(&attr, 32 * 1024 * 1024);
+            pthread_t th;
+            pthread_create(&th, &attr, [] (void*) -> void* { fifo_thread(); return nullptr; }, nullptr);
+            pthread_attr_destroy(&attr);
+            pthread_join(th, nullptr);
+        });
+        t.detach();
         std::thread(vblank_thread).detach();
     }
     LOG_INFO("rsx", "context at 0x%08x (driver 0x%08x reports 0x%08x queue 0x%x)", area, g_rsx.driver_info, g_rsx.reports, g_rsx.queue_id);

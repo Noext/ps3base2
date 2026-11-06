@@ -38,5 +38,10 @@
   "name": "libsmvd2",
   "elf": "../fw/4.91/reloc/libsmvd2.elf",
   "file": "fw/4.91/reloc/libsmvd2.elf"
+ },
+ {
+  "name": "libspurs_jq",
+  "elf": "../fw/4.91/reloc/libspurs_jq.elf",
+  "file": "fw/4.91/reloc/libspurs_jq.elf"
  }
 ]

@@ -247,6 +247,16 @@ LV2_SYSCALL(802, sys_fs_read) {
     }
     static const double us_per_kb = std::getenv("GOWA_FS_US_PER_KB") ? std::atof(std::getenv("GOWA_FS_US_PER_KB")) : 0.0;
     if (us_per_kb > 0.0 && got) host::sleep_us(static_cast<uint64_t>(us_per_kb * double(got) / 1024.0));
+    /* PS3BASE_FS_LOG=1: requested against returned, per read. A short read is
+     * silent corruption further down -- the title parses a truncated archive and
+     * reports a missing entry, which looks like a mount problem and is not. */
+    static const bool fs_log = std::getenv("PS3BASE_FS_LOG") != nullptr;
+    if (fs_log) {
+        LOG_INFO("fs", "read fd %u req %llu got %llu -> 0x%llx",
+                 u32arg(ctx, 0), static_cast<unsigned long long>(n),
+                 static_cast<unsigned long long>(got),
+                 static_cast<unsigned long long>(r));
+    }
     vm::write64(nread, got);
     return r;
 }

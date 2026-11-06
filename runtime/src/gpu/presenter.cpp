@@ -1,4 +1,5 @@
 #include "runtime/placement.h"
+#include "runtime/window_title.h"
 #include "runtime/host.h"
 #include "gpu/presenter.h"
 #include "gpu/rsx.h"
@@ -19,6 +20,7 @@
 #include <mutex>
 #include <thread>
 #include <vector>
+#include <filesystem>
 
 #ifndef _WIN32
 #include <SDL3/SDL.h>
@@ -511,6 +513,50 @@ void barrier(VkImage img, VkImageLayout from, VkImageLayout to, VkAccessFlags sr
     vkCmdPipelineBarrier(g.cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
 }
 
+
+/* PS3BASE_DUMP_FRAMES=<n>: write every n-th presented buffer to a PNG. The FIFO
+ * statistics report how many draws a frame contains; only the pixels say whether
+ * those draws put anything on screen. The source is exactly what convert() feeds
+ * the swapchain: LOCAL_BASE + offset, pitch bytes per row, XRGB8888 big-endian.
+ */
+static void dump_frame_png(const DisplayBuffer& d, uint64_t index)
+{
+    const char* dir_env = std::getenv("PS3BASE_FRAME_DIR");
+    const std::string dir = dir_env ? dir_env : "frames";
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+
+    std::vector<uint8_t> rgb(size_t(d.width) * d.height * 3);
+    uint64_t nonblack = 0;
+    for (uint32_t y = 0; y < d.height; y++) {
+        const uint8_t* row = vm::ptr(LOCAL_BASE + d.offset + y * d.pitch);
+        for (uint32_t x = 0; x < d.width; x++) {
+            uint32_t v;
+            std::memcpy(&v, row + x * 4, 4);
+            v = __builtin_bswap32(v);
+            const uint8_t r = (v >> 16) & 0xFF, g2 = (v >> 8) & 0xFF, b = v & 0xFF;
+            uint8_t* o = rgb.data() + (size_t(y) * d.width + x) * 3;
+            o[0] = r; o[1] = g2; o[2] = b;
+            if (r || g2 || b) nonblack++;
+        }
+    }
+    const uint64_t total = uint64_t(d.width) * d.height;
+    LOG_INFO("frame", "flip %llu %ux%u nonblack %llu/%llu (%.2f%%)",
+             static_cast<unsigned long long>(index), d.width, d.height,
+             static_cast<unsigned long long>(nonblack),
+             static_cast<unsigned long long>(total),
+             total ? 100.0 * double(nonblack) / double(total) : 0.0);
+
+    char name[512];
+    std::snprintf(name, sizeof name, "%s/frame_%06llu.ppm", dir.c_str(),
+                  static_cast<unsigned long long>(index));
+    FILE* f = std::fopen(name, "wb");
+    if (!f) return;
+    std::fprintf(f, "P6\n%u %u\n255\n", d.width, d.height);
+    std::fwrite(rgb.data(), 1, rgb.size(), f);
+    std::fclose(f);
+}
+
 void convert(const DisplayBuffer& d) {
     wait_all_frames();
     auto* dst = static_cast<uint32_t*>(g.staging_ptr);
@@ -601,7 +647,7 @@ bool init() {
             int cw = static_cast<int>(1280 * ws), ch = static_cast<int>(720 * ws);
             SDL_Rect usable{};
             if (SDL_GetDisplayUsableBounds(SDL_GetPrimaryDisplay(), &usable)) fit_window(cw, ch, usable.w, usable.h - 40);
-            w = SDL_CreateWindow("God of War: Ascension", cw, ch, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | (want_fullscreen() ? SDL_WINDOW_FULLSCREEN : 0));
+            w = SDL_CreateWindow(ps3base::window_title().c_str(), cw, ch, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | (want_fullscreen() ? SDL_WINDOW_FULLSCREEN : 0));
         }
         if (!w) LOG_ERROR("gpu", "SDL window creation failed: %s", SDL_GetError());
         {
@@ -1023,7 +1069,21 @@ void present_image(VkImage img, VkImageLayout& layout, uint32_t w, uint32_t h) {
 }
 
 void flip(uint32_t id) {
-    if (!g_enabled || id >= 8) return;
+    if (id >= 8) return;
+    /* The frame dump works whether or not there is a GPU: it reads guest memory
+     * directly. Headless runs are exactly where it is needed. */
+    {
+        static const long every = std::getenv("PS3BASE_DUMP_FRAMES")
+                                      ? std::atol(std::getenv("PS3BASE_DUMP_FRAMES"))
+                                      : 0;
+        static std::atomic<uint64_t> n{0};
+        const uint64_t k = n.fetch_add(1, std::memory_order_relaxed);
+        if (every > 0 && (k % static_cast<uint64_t>(every)) == 0) {
+            std::lock_guard lk(g.m);
+            dump_frame_png(g.buffers[id], k);
+        }
+    }
+    if (!g_enabled) return;
     std::lock_guard lk(g.m);
     const DisplayBuffer d = g.buffers[id];
     if (!d.width || !d.height || !d.pitch) return;
