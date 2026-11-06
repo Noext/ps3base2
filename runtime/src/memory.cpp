@@ -195,10 +195,20 @@ bool watch_fault(uint32_t addr, bool repair_stale) {
             }
         }
 #else
-        if (repair_stale && is_mapped(addr)) {
+        /* A page that belongs to the guest must be writable. If a fault lands
+         * on a mapped page that is not currently watched, the protection is
+         * stale -- left read-only by an earlier watch_range -- and letting the
+         * fault through kills the guest thread for a page it owns. Repair it
+         * regardless of whether other watches exist; the old repair_stale
+         * condition (no watches at all) left this window open for as long as
+         * any watch was active, which is most of the run. */
+        if (is_mapped(addr)) {
             host::vm_protect(g_base + (uint64_t(page) << 12), 0x1000, host::Prot::ReadWrite);
             g_page_epoch[page].fetch_add(1, std::memory_order_acq_rel);
+            g_stale_repairs.fetch_add(1, std::memory_order_relaxed);
             handled = true;
+        } else if (repair_stale) {
+            handled = false;
         }
 #endif
     }

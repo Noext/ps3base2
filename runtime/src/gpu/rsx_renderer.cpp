@@ -514,7 +514,18 @@ public:
     void submit(std::function<void()> job) {
         std::call_once(started_, [this] {
             for (int i = 0; i < 2; i++) {
-                std::thread([this] { run(); }).detach();
+                std::thread([this] {
+                    pthread_attr_t attr;
+                    pthread_attr_init(&attr);
+                    pthread_attr_setstacksize(&attr, 32 * 1024 * 1024);
+                    pthread_t th;
+                    pthread_create(&th, &attr, [](void* self) -> void* {
+                        static_cast<CompilePool*>(self)->run();
+                        return nullptr;
+                    }, this);
+                    pthread_attr_destroy(&attr);
+                    pthread_detach(th);
+                }).detach();
             }
         });
         {
