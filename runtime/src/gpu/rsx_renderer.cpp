@@ -3987,9 +3987,64 @@ void mv_draw(const std::vector<Surface*>& colors, uint32_t w, uint32_t h, uint64
 
 }
 
+/* PS3BASE_DUMP_FRAMES=<n>: write every n-th presented buffer. This is the
+ * enabled path; the dump in presenter.cpp::flip only runs when the renderer is
+ * off, which cannot produce a picture. */
+static void dump_presented(uint32_t buffer_id, uint64_t n)
+{
+    uint32_t offset = 0, pitch = 0, width = 0, height = 0;
+    if (!display_buffer(buffer_id, offset, pitch, width, height)) return;
+    if (!width || !height || !pitch) return;
+    const uint32_t base = 0xC0000000u;
+    std::vector<uint8_t> rgb(size_t(width) * height * 3);
+    uint64_t nonblack = 0;
+    for (uint32_t y = 0; y < height; y++) {
+        const uint8_t* row = vm::ptr(base + offset + y * pitch);
+        for (uint32_t x = 0; x < width; x++) {
+            uint32_t v;
+            std::memcpy(&v, row + x * 4, 4);
+            v = __builtin_bswap32(v);
+            const uint8_t r = (v >> 16) & 0xFF, g2 = (v >> 8) & 0xFF, b = v & 0xFF;
+            rgb[(size_t(y) * width + x) * 3 + 0] = r;
+            rgb[(size_t(y) * width + x) * 3 + 1] = g2;
+            rgb[(size_t(y) * width + x) * 3 + 2] = b;
+            if (r || g2 || b) nonblack++;
+        }
+    }
+    const char* dir_env = std::getenv("PS3BASE_FRAME_DIR");
+    const std::string dir = dir_env ? dir_env : "frames";
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    const uint64_t total = uint64_t(width) * height;
+    LOG_INFO("frame", "flip %llu %ux%u nonblack %llu/%llu (%.2f%%)",
+             static_cast<unsigned long long>(n), width, height,
+             static_cast<unsigned long long>(nonblack),
+             static_cast<unsigned long long>(total),
+             total ? 100.0 * double(nonblack) / double(total) : 0.0);
+    char name[512];
+    std::snprintf(name, sizeof name, "%s/frame_%06llu.ppm", dir.c_str(),
+                  static_cast<unsigned long long>(n));
+    if (FILE* f = std::fopen(name, "wb")) {
+        std::fprintf(f, "P6\n%u %u\n255\n", width, height);
+        std::fwrite(rgb.data(), 1, rgb.size(), f);
+        std::fclose(f);
+    }
+}
+
 bool present(uint32_t buffer_id) {
     if (!enabled()) return false;
     end_pass();
+    {
+        static const long every = std::getenv("PS3BASE_DUMP_FRAMES")
+                                      ? std::atol(std::getenv("PS3BASE_DUMP_FRAMES"))
+                                      : 0;
+        static std::atomic<uint64_t> seq{0};
+        const uint64_t k = seq.fetch_add(1, std::memory_order_relaxed);
+        /* The picture lives in the GPU surface, not in the guest display
+         * buffer, which stays black because nothing writes it back. Dump the
+         * main surface: it is what the swapchain receives. */
+        if (every > 0 && (k % static_cast<uint64_t>(every)) == 0) schedule_dumps();
+    }
     schedule_writebacks();
     static uint64_t presents = 0;
     static const double slow_ms = std::getenv("GOWA_SLOW_FRAME_MS") ? std::atof(std::getenv("GOWA_SLOW_FRAME_MS")) : 0.0;

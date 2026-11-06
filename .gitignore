@@ -26,3 +26,4 @@ frames.bin
 /spucap/
 *.ppm
 /refs
+/surface_*.ppm
