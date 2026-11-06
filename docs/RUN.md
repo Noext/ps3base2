@@ -128,8 +128,79 @@ done
 
 Five `exit=124` with a rising flip count is a pass.
 
+## Driving the menus without a keyboard
+
+The runtime polls SDL for the pad, and `SDL_GetKeyboardFocus()` does not return
+our window under Xvfb or a bare WM. Synthetic X key events therefore never reach
+`cellPadGetData`, which is why navigating by `xdotool key` is unreliable: the
+selection appears to drift and the same menu is re-entered.
+
+Two mechanisms inject at the pad frame instead, independent of the window:
+
+```
+GOWA_AUTOPAD='cross@44:0.4,cross@54:0.4,...'   # fixed timeline, brittle
+PS3BASE_INPUT_CMD=/tmp/icmd                     # one command per file write
+```
+
+`PS3BASE_INPUT_CMD` is the reliable one: the runtime reads the file at the next
+frame, truncates it, and holds the button for about four frames. Write a button
+name into the file and nothing else:
+
+```bash
+rm -f /tmp/icmd; touch /tmp/icmd
+echo cross > /tmp/icmd     # Cross / "X Select"
+echo down  > /tmp/icmd     # d-pad
+echo up    > /tmp/icmd
+echo circle > /tmp/icmd    # Circle / "Back"
+echo start > /tmp/icmd
+```
+
+Available names are the table in `runtime/src/hle/cellPad.cpp`: `select`,
+`start`, `up`, `down`, `left`, `right`, `triangle`, `circle`, `cross`,
+`square`, `l1`, `r1`, `l2`, `r2`, `l3`, `r3`.
+
+### Verified sequence to "Create New World"
+
+Drive one command at a time and capture between each; the PSN dialogue can
+reappear after "Play Game" and has to be closed again each time.
+
+| screen | what is highlighted | command |
+|---|---|---|
+| TERMS OF USE | Accept | `cross` |
+| autosave notice | OK | `cross` |
+| main menu | Play Game | `cross` |
+| "Online ID currently not online" | Connect to PSN | `down` then `cross` |
+| Start Game / Join Game | Create New World | `cross` |
+| world creation | World Name (text field) | `down` |
+| world creation | Game Mode | `down` |
+| world creation | Texture Packs | `down` |
+| world creation | Difficulty | `down` |
+| world creation | More Options | `down` |
+| world creation | **Create New World** | `down`, then `cross` |
+
+From World Name the button list is Name → Seed → Game Mode → Texture Packs →
+Difficulty → More Options → Create New World. The list wraps, and a text field
+that has focus swallows a `down`, so count the captures rather than the presses.
+
+If the PSN dialogue is on screen when you expected the main menu, send
+`down` + `cross` and continue; it does not block progress, it only costs a
+round trip.
+
+Validation is mechanical: the log then shows
+
+```
+savedata: UserAutoSave v 0x1 user 0 ...
+savedata: write u0_BLES01976-OPTIONS/ICON0.PNG  size 0x100e4
+savedata: write u0_BLES01976-OPTIONS/OPTVER     size 0x2
+savedata: write u0_BLES01976-OPTIONS/OPTDATA    size 0x3cc
+```
+
+and the files exist under
+`vfs/dev_hdd0/home/00000001/savedata/u0_BLES01976-OPTIONS/`.
+
 ## Known state at this commit
 
-The title screen and menu render and are navigable. All text — buttons, prompt,
-diagonal splash — renders as noise while textures loaded from the disc archive
-are correct. That points at the glyph atlas path, which is the next thing to fix.
+The text renders legibly (commit `b20cf58`). The main menu, the PSN dialogue,
+Start Game, and the full world-creation screen are all reachable and driven by
+`PS3BASE_INPUT_CMD`. Creating a world writes its save. The game's internal
+server then faults storing through a null pointer; that is the current wall.
