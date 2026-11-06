@@ -16,6 +16,106 @@ struct Container : Object {
 
 }
 
+/* sys_vm_memory_map(vsize, psize, cid, flags, policy, addr) -- syscall 300.
+ *
+ * The game's server pool calls this to reserve 64 MiB of virtual memory. It was
+ * missing, so the call fell through to the unimplemented handler, returned 0,
+ * and the caller stored that 0 into its pool pointer. The next write through
+ * that pointer faulted at guest address 0.
+ * Reference: refs/rpcs3/rpcs3/Emu/Cell/lv2/sys_vm.cpp.
+ *
+ * The virtual address is reserved and the physical pages are counted against
+ * the user budget; the guest address returned is the base of the reservation.
+ */
+LV2_SYSCALL(300, sys_vm_memory_map) {
+    const uint64_t vsize = u64arg(ctx, 0);
+    const uint64_t psize = u64arg(ctx, 1);
+    const uint32_t cid = u32arg(ctx, 2);
+    const uint64_t flag = u64arg(ctx, 3);
+    const uint64_t policy = u64arg(ctx, 4);
+    const uint32_t out = u32arg(ctx, 5);
+    (void)cid;
+    LOG_INFO("vm", "sys_vm_memory_map vsize 0x%llx psize 0x%llx flags 0x%llx policy 0x%llx",
+             static_cast<unsigned long long>(vsize), static_cast<unsigned long long>(psize),
+             static_cast<unsigned long long>(flag), static_cast<unsigned long long>(policy));
+    if (!vsize || !psize) return CELL_EINVAL;
+    if (vsize % 0x2000000 || vsize > 0x10000000) return CELL_EINVAL;
+    if (psize % 0x10000) return CELL_EINVAL;
+    /* SYS_VM_POLICY_AUTO_RECOMMENDED is 1, not 0. Reading it as 1 was the
+     * difference between the server pool being allocated and the caller storing
+     * a null pointer.
+     * refs/rpcs3/rpcs3/Emu/Cell/lv2/sys_vm.h:15. */
+    if (policy != 1) return CELL_EINVAL;
+    if (flag & 0xF4) return CELL_EINVAL;
+    if (!out) return CELL_EFAULT;
+    const uint64_t page = (flag & 0xF00) == 0x200 ? 0x10000 : 0x100000;
+    std::lock_guard lk(g_lock);
+    if (g_used + psize > kUserMemory) {
+        LOG_WARN("vm", "vm_memory_map REFUSED: used 0x%x of 0x%x", g_used, kUserMemory);
+        return CELL_ENOMEM;
+    }
+    const uint32_t addr = vm::alloc(page == 0x10000 ? vm::Region::User64K : vm::Region::User1M,
+                                    static_cast<uint32_t>(vsize), static_cast<uint32_t>(page));
+    if (!addr) return CELL_ENOMEM;
+    g_used += static_cast<uint32_t>(psize);
+    g_allocs[addr] = static_cast<uint32_t>(vsize);
+    vm::write32(out, addr);
+    LOG_INFO("vm", "sys_vm_memory_map -> 0x%08x (used 0x%x / 0x%x)", addr, g_used, kUserMemory);
+    return CELL_OK;
+}
+
+/* The virtual-memory pool the server uses. sys_vm_memory_map reserves the
+ * address range; these three attach and account for the physical pages. Without
+ * 302 the server starts, finds its pool unmapped, and exits before the world can
+ * load -- which is exactly what "Finalizing..." showed.
+ * Reference: refs/rpcs3/rpcs3/Emu/Cell/lv2/sys_vm.cpp:179.
+ */
+LV2_SYSCALL(302, sys_vm_append_memory) {
+    const uint32_t addr = u32arg(ctx, 0);
+    const uint64_t size = u64arg(ctx, 1);
+    LOG_INFO("vm", "sys_vm_append_memory addr 0x%x size 0x%llx", addr,
+             static_cast<unsigned long long>(size));
+    if (!size || size % 0x100000) return CELL_EINVAL;
+    {
+        std::lock_guard lk(g_lock);
+        if (g_allocs.find(addr) == g_allocs.end()) return CELL_EINVAL;
+    }
+    /* Commit outside g_lock: vm::commit takes the runtime's memory lock itself,
+     * and holding ours across the call deadlocks the first append. */
+    if (!vm::commit(addr, static_cast<uint32_t>(size))) {
+        LOG_WARN("vm", "append_memory: commit 0x%x+0x%llx failed", addr,
+                 static_cast<unsigned long long>(size));
+        return CELL_ENOMEM;
+    }
+    LOG_INFO("vm", "sys_vm_append_memory -> ok (committed 0x%llx)", static_cast<unsigned long long>(size));
+    return CELL_OK;
+}
+
+LV2_SYSCALL(303, sys_vm_return_memory) {
+    const uint32_t addr = u32arg(ctx, 0);
+    const uint64_t size = u64arg(ctx, 1);
+    LOG_INFO("vm", "sys_vm_return_memory addr 0x%x size 0x%llx", addr,
+             static_cast<unsigned long long>(size));
+    if (!size || size % 0x100000) return CELL_EINVAL;
+    return CELL_OK;
+}
+
+LV2_SYSCALL(312, sys_vm_get_statistics) {
+    const uint32_t addr = u32arg(ctx, 0);
+    const uint32_t stat = u32arg(ctx, 1);
+    std::lock_guard lk(g_lock);
+    auto it = g_allocs.find(addr);
+    if (it == g_allocs.end()) return CELL_EINVAL;
+    if (stat && vm::range_mapped(stat, 64)) {
+        /* sys_vm_statistics_t: six u64 counters. Report the area's size as in use
+         * and nothing as free, which is what a fully committed pool looks like. */
+        for (int i = 0; i < 8; i++) vm::write64(stat + i * 8, 0);
+        vm::write64(stat + 0, it->second);
+        vm::write64(stat + 8, it->second);
+    }
+    return CELL_OK;
+}
+
 LV2_SYSCALL(348, sys_memory_allocate) {
     uint32_t size = u32arg(ctx, 0);
     uint64_t flags = u64arg(ctx, 1);
@@ -24,13 +124,24 @@ LV2_SYSCALL(348, sys_memory_allocate) {
     if (!size || size % page) return CELL_EALIGN;
     if (!out) return CELL_EFAULT;
     std::lock_guard lk(g_lock);
-    if (g_used + size > kUserMemory) return CELL_ENOMEM;
+    if (g_used + size > kUserMemory) {
+        /* The server asks for a 64 MiB pool. Reporting the budget and the usage
+         * at the moment of refusal is what tells a real exhaustion apart from a
+         * wrongly sized budget. */
+        LOG_WARN("memory", "sys_memory_allocate(0x%x) REFUSED: used 0x%x of 0x%x (%.0f MiB of %.0f MiB)",
+                 size, g_used, kUserMemory, g_used / 1048576.0, kUserMemory / 1048576.0);
+        return CELL_ENOMEM;
+    }
     uint32_t addr = vm::alloc(page == 0x10000 ? vm::Region::User64K : vm::Region::User1M, size, page);
-    if (!addr) return CELL_ENOMEM;
+    if (!addr) {
+        LOG_WARN("memory", "sys_memory_allocate(0x%x) -> vm::alloc failed (used 0x%x)", size, g_used);
+        return CELL_ENOMEM;
+    }
     g_used += size;
     g_allocs[addr] = size;
     vm::write32(out, addr);
-    LOG_DEBUG("memory", "sys_memory_allocate(0x%x, 0x%llx) -> 0x%08x", size, static_cast<unsigned long long>(flags), addr);
+    LOG_INFO("memory", "sys_memory_allocate(0x%x flags 0x%llx) -> 0x%08x (used now 0x%x / 0x%x, %.0f MiB)",
+             size, static_cast<unsigned long long>(flags), addr, g_used, kUserMemory, g_used / 1048576.0);
     return CELL_OK;
 }
 

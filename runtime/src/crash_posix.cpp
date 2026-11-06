@@ -188,6 +188,25 @@ void fault_handler(int sig, siginfo_t* si, void* ctx) {
         auto& c = t->ctx;
         LOG_ERROR("crash", "  guest lr 0x%llx r1 0x%llx r2 0x%llx r3 0x%llx r4 0x%llx r5 0x%llx", static_cast<unsigned long long>(c.lr), static_cast<unsigned long long>(c.gpr[1]),
                   static_cast<unsigned long long>(c.gpr[2]), static_cast<unsigned long long>(c.gpr[3]), static_cast<unsigned long long>(c.gpr[4]), static_cast<unsigned long long>(c.gpr[5]));
+        /* Dump the objects the failing call was built from, and every general
+         * register, so the null field and its loader can be read from the crash
+         * instead of inferred from symbolised frames (inlining makes those
+         * ambiguous). */
+        char regs[512];
+        int off = 0;
+        for (int i = 0; i < 32 && off < 480; i++)
+            off += std::snprintf(regs + off, sizeof regs - off, " r%d=0x%llx", i,
+                                 static_cast<unsigned long long>(c.gpr[i]));
+        LOG_ERROR("crash", "  guest regs:%s", regs);
+        for (int r = 3; r <= 7; r++) {
+            const uint32_t ea = static_cast<uint32_t>(c.gpr[r]);
+            if (!ea || !vm::is_mapped(ea) || !vm::range_mapped(ea, 256)) continue;
+            char words[700];
+            int o2 = 0;
+            for (int i = 0; i < 64 && o2 < 660; i += 4)
+                o2 += std::snprintf(words + o2, sizeof words - o2, " %08x", vm::read32(ea + i));
+            LOG_ERROR("crash", "  object r%d (0x%08x):%s", r, ea, words);
+        }
     }
     if (!std::getenv("GOWA_CRASH_NO_BLACKBOX")) hooks::capture("crash");
     std::fflush(nullptr);

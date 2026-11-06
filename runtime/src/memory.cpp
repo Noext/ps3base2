@@ -62,7 +62,8 @@ uint32_t reserve_slot_locked(uint32_t size, uint32_t align) {
 std::map<uint32_t, uint32_t> g_blocks;
 uint32_t g_used[static_cast<size_t>(Region::Count)] = {};
 
-bool commit(uint32_t addr, uint32_t size) {
+/* Callers inside this file already hold g_lock, so this must not take it. */
+bool commit_locked(uint32_t addr, uint32_t size) {
     watch_reset(addr, size);
     return host::vm_commit(g_base + addr, size);
 }
@@ -268,7 +269,7 @@ bool map(uint32_t addr, uint32_t size) {
     std::lock_guard lk(g_lock);
     uint32_t a = addr & ~0xFFFFu;
     uint32_t e = (addr + size + 0xFFFF) & ~0xFFFFu;
-    if (!commit(a, e - a)) return false;
+    if (!commit_locked(a, e - a)) return false;
     g_blocks[a] = e - a;
     refresh_pages_locked(a, uint64_t(e - a));
     return true;
@@ -282,6 +283,11 @@ uint32_t reserve_slot(uint32_t size, uint32_t align) {
 void release_slot(uint32_t addr) {
     std::lock_guard lk(g_lock);
     g_slots.erase(addr);
+}
+
+bool commit(uint32_t addr, uint32_t size) {
+    std::lock_guard lk(g_lock);
+    return commit_locked(addr, size);
 }
 
 uint32_t alloc(Region region, uint32_t size, uint32_t align) {
@@ -306,7 +312,7 @@ uint32_t alloc(Region region, uint32_t size, uint32_t align) {
                 continue;
             }
         }
-        if (!commit(uint32_t(a), size)) return 0;
+        if (!commit_locked(uint32_t(a), size)) return 0;
         std::memset(g_base + a, 0, size);
         g_blocks[uint32_t(a)] = size;
         refresh_pages_locked(uint32_t(a), size);

@@ -22,6 +22,8 @@ extern uint8_t* g_base;
 bool init();
 bool map(uint32_t addr, uint32_t size);
 uint32_t alloc(Region region, uint32_t size, uint32_t align);
+/* Make an already reserved range touchable. */
+bool commit(uint32_t addr, uint32_t size);
 uint32_t reserve_slot(uint32_t size, uint32_t align);
 void release_slot(uint32_t addr);
 bool dealloc(uint32_t addr);
