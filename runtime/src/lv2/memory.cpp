@@ -1,5 +1,8 @@
 #include "object.h"
 
+#include <atomic>
+#include <cstdlib>
+
 namespace lv2 {
 
 namespace {
@@ -101,17 +104,25 @@ LV2_SYSCALL(303, sys_vm_return_memory) {
 }
 
 LV2_SYSCALL(312, sys_vm_get_statistics) {
+    static const bool on = std::getenv("PS3BASE_VM_TRACE") != nullptr;
+    static std::atomic<int> n{0};
+    if (on && n.fetch_add(1) < 40)
+        LOG_INFO("vm", "sys_vm_get_statistics(addr=0x%x, stat=0x%x)", u32arg(ctx, 0), u32arg(ctx, 1));
     const uint32_t addr = u32arg(ctx, 0);
     const uint32_t stat = u32arg(ctx, 1);
     std::lock_guard lk(g_lock);
     auto it = g_allocs.find(addr);
     if (it == g_allocs.end()) return CELL_EINVAL;
-    if (stat && vm::range_mapped(stat, 64)) {
-        /* sys_vm_statistics_t: six u64 counters. Report the area's size as in use
-         * and nothing as free, which is what a fully committed pool looks like. */
-        for (int i = 0; i < 8; i++) vm::write64(stat + i * 8, 0);
-        vm::write64(stat + 0, it->second);
-        vm::write64(stat + 8, it->second);
+    if (stat && vm::range_mapped(stat, 48)) {
+        /* sys_vm_statistics_t is SIX u64 counters -- 48 bytes, not 64. Writing
+         * eight clobbered the caller's saved r30/r31: the guest passes r1+112 as
+         * the output buffer and keeps those registers at r1+160/r1+168, so the
+         * two extra words overwrote them with zero. That is what made the pool
+         * pointer null four milliseconds later.
+         * refs/rpcs3/rpcs3/Emu/Cell/lv2/sys_vm.cpp:436 sets exactly six fields. */
+        for (int i = 0; i < 6; i++) vm::write64(stat + i * 8, 0);
+        vm::write64(stat + 32, it->second);   /* pmem_total */
+        vm::write64(stat + 40, 0);            /* pmem_used  */
     }
     return CELL_OK;
 }
