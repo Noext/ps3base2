@@ -1,4 +1,6 @@
 #include "common.h"
+
+#include <atomic>
 #include "runtime/sysutil_events.h"
 #include "runtime/vfs.h"
 
@@ -47,6 +49,17 @@ HLE_FUNC(cellSysutil, cellSysutilRegisterCallback) {
     if (slot > 3) return ret(ctx, static_cast<int32_t>(0x8002b101));
     std::lock_guard lk(g_lock);
     g_callbacks[slot] = {a32(ctx, 1), a32(ctx, 2)};
+    static std::atomic<int> seen{0};
+    if (seen.fetch_add(1) < 20) {
+        const uint32_t opd = a32(ctx, 1);
+        uint32_t code = 0, toc = 0;
+        if (opd && vm::range_mapped(opd, 8)) {
+            code = vm::read32(opd);
+            toc = vm::read32(opd + 4);
+        }
+        LOG_INFO("sysutil", "RegisterCallback slot %u opd 0x%08x -> code 0x%08x toc 0x%08x arg 0x%08x",
+                 slot, opd, code, toc, a32(ctx, 2));
+    }
     ret(ctx, 0);
 }
 
@@ -148,6 +161,13 @@ HLE_FUNC(cellSysutil, cellVideoOutConfigure) {
 HLE_FUNC(cellSysutil, cellAudioOutGetSoundAvailability) {
     uint32_t type = a32(ctx, 1);
     ret(ctx, type == 0 ? 2 : 0);
+}
+
+/* cellAudioOutSetCopyControl(mode): the copy-protection flag on the audio
+ * output. Nothing we can act on, but the title calls it during startup and an
+ * unimplemented import returns 0 without setting its out-parameter. */
+HLE_FUNC(cellSysutil, cellAudioOutSetCopyControl) {
+    ret(ctx, 0);
 }
 
 HLE_FUNC(cellSysutil, cellAudioOutConfigure) {
