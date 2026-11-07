@@ -252,6 +252,15 @@ target_compile_options(reservation_xproc PRIVATE ${PS3BASE_ARCH_FLAGS})
 target_link_libraries(reservation_xproc PRIVATE ${CMAKE_DL_LIBS} pthread)
 add_test(NAME reservation_xproc COMMAND reservation_xproc)
 
+# Two guest threads, one shared counter, one million increments each. A lost
+# update proves the reservation fast path is broken.
+add_executable(lock_counter tests/lock_counter.cpp runtime/src/memory.cpp runtime/src/reservation.cpp runtime/src/host.cpp runtime/src/log.cpp)
+target_include_directories(lock_counter PRIVATE runtime/include "${CMAKE_SOURCE_DIR}/runtime/src")
+target_compile_options(lock_counter PRIVATE ${PS3BASE_ARCH_FLAGS})
+target_link_libraries(lock_counter PRIVATE ${CMAKE_DL_LIBS} pthread)
+add_test(NAME lock_counter COMMAND lock_counter)
+
+
 
 if(EXISTS "${CMAKE_SOURCE_DIR}/out/conformance/tests.cpp")
     add_executable(ppu_conformance tests/ppu_conformance/harness.cpp "${CMAKE_SOURCE_DIR}/out/conformance/tests.cpp")
