@@ -236,6 +236,37 @@ void call_import_inner(Context& ctx, uint8_t* base, uint32_t index, ImportSlot& 
         LOG_INFO("spurs", "Initialize args spurs=0x%08x attr=0x%08x",
                  static_cast<unsigned>(ctx.gpr[3]), static_cast<unsigned>(ctx.gpr[4]));
     }
+    /* PS3BASE_IMPORT_THREAD=<id>: every HLE import called BY ONE THREAD, with
+     * arguments and return value. A thread that exits early is diagnosed by
+     * what it called, not by its exit code. */
+    bool import_thread_match = false;
+    {
+        static const uint32_t only = std::getenv("PS3BASE_IMPORT_THREAD")
+            ? static_cast<uint32_t>(std::strtoul(std::getenv("PS3BASE_IMPORT_THREAD"), nullptr, 0)) : 0;
+        if (only) {
+            guest::Thread* t = guest::current();
+            import_thread_match = t && t->id == only;
+            if (import_thread_match) {
+                static std::atomic<uint64_t> n{0};
+                LOG_INFO("impthr", "#%llu %s::%s(0x%llx,0x%llx,0x%llx,0x%llx) lr=0x%08x",
+                         static_cast<unsigned long long>(n.fetch_add(1) + 1),
+                         imp.module, imp.name,
+                         static_cast<unsigned long long>(ctx.gpr[3]),
+                         static_cast<unsigned long long>(ctx.gpr[4]),
+                         static_cast<unsigned long long>(ctx.gpr[5]),
+                         static_cast<unsigned long long>(ctx.gpr[6]),
+                         static_cast<unsigned>(ctx.lr));
+            }
+        }
+    }
+    if (imp.name && std::strstr(imp.name, "ppu_thread_exit") && std::getenv("PS3BASE_EXIT_TRACE")) {
+        guest::Thread* t = guest::current();
+        const uint32_t desc = static_cast<uint32_t>(ctx.gpr[31]);
+        LOG_INFO("threadexit", "thread=%s(0x%x) desc=0x%08x entry_ret=0x%x reason=0x%llx",
+                 t ? t->name.c_str() : "?", t ? t->id : 0, desc,
+                 vm::range_mapped(desc + 80, 4) ? vm::read32(desc + 80) : 0xFFFFFFFFu,
+                 static_cast<unsigned long long>(ctx.gpr[3]));
+    }
     if (slot.log_args) {
         LOG_INFO("import", "%s::%s(0x%llx, 0x%llx, 0x%llx, 0x%llx) lr 0x%llx", imp.module, imp.name, static_cast<unsigned long long>(ctx.gpr[3]),
                  static_cast<unsigned long long>(ctx.gpr[4]), static_cast<unsigned long long>(ctx.gpr[5]), static_cast<unsigned long long>(ctx.gpr[6]),
@@ -292,6 +323,17 @@ void call_import_inner(Context& ctx, uint8_t* base, uint32_t index, ImportSlot& 
         call_indirect(ctx, base, code);
         ctx.gpr[2] = ld64(base, sp + 0x28);
         if (slot.log_args) LOG_INFO("import", "%s::%s returned 0x%llx", imp.module, imp.name, static_cast<unsigned long long>(ctx.gpr[3]));
+        {
+            static const uint32_t only_t = std::getenv("PS3BASE_IMPORT_THREAD")
+                ? static_cast<uint32_t>(std::strtoul(std::getenv("PS3BASE_IMPORT_THREAD"), nullptr, 0)) : 0;
+            if (only_t) {
+                guest::Thread* t = guest::current();
+                if (t && t->id == only_t)
+                    LOG_INFO("impthr", "        LLE ret=0x%llx %s::%s", 
+                             static_cast<unsigned long long>(ctx.gpr[3]), imp.module,
+                             imp.name ? imp.name : "?");
+            }
+        }
         if (wait_seq > 0) {
             LOG_INFO("lle", "wait-out #%d t=%.6f ret=0x%llx mask_out=0x%llx",
                      wait_seq, ppu::timebase() / 79.8e6,
@@ -310,6 +352,8 @@ void call_import_inner(Context& ctx, uint8_t* base, uint32_t index, ImportSlot& 
     if (st == kHle) {
         LOG_TRACE("import", "%s::%s -> HLE", imp.module, imp.name);
         slot.hle(ctx, base);
+        if (import_thread_match)
+            LOG_INFO("impthr", "        -> ret=0x%llx", static_cast<unsigned long long>(ctx.gpr[3]));
         if (slot.log_args) LOG_INFO("import", "%s::%s returned 0x%llx", imp.module, imp.name, static_cast<unsigned long long>(ctx.gpr[3]));
         return;
     }
