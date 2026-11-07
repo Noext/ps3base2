@@ -5,6 +5,7 @@
 #include "runtime/kernel.h"
 #include "runtime/loader.h"
 #include "runtime/log.h"
+#include "runtime/force.h"
 #include "runtime/trace.h"
 #include <atomic>
 #include "runtime/thread.h"
@@ -184,11 +185,39 @@ int32_t resolve(uint32_t index, ImportSlot& slot) {
 bool has_code_at(uint32_t addr) { return lookup(addr) != nullptr; }
 
 void call_indirect(Context& ctx, uint8_t* base, uint32_t addr) {
+    /* Log the vtable target and its owners just before dispatch from
+     * f_0006ee9c (lr 0x6eec4): the target is what returns the decisive 0. */
+    if (std::getenv("PS3BASE_VTARGET")) {
+        const uint32_t lr0 = static_cast<uint32_t>(ctx.lr);
+        if (lr0 == 0x749e8u || lr0 == 0x74a1cu || lr0 == 0x6eec4u)
+            LOG_INFO("vchain", "lr=0x%08x -> ctr=0x%08x r3=0x%x r4=0x%x",
+                     lr0, static_cast<uint32_t>(ctx.ctr),
+                     static_cast<unsigned>(ctx.gpr[3]), static_cast<unsigned>(ctx.gpr[4]));
+        /* The leaf f_00216258 reads one byte; capture its address and value. */
+        if (lr0 == 0x749e8u) {
+            const uint32_t obj = static_cast<uint32_t>(ctx.gpr[3]);
+            const uint32_t ea = obj + 593u;
+            LOG_INFO("vleaf", "obj=0x%08x ea=0x%08x mapped=%d value=0x%02x",
+                     obj, ea, int(vm::range_mapped(ea, 1)),
+                     vm::range_mapped(ea, 1) ? static_cast<unsigned>(vm::ptr(ea)[0]) : 0xff);
+        }
+    }
+    if (std::getenv("PS3BASE_VTARGET") && static_cast<uint32_t>(ctx.lr) == 0x6eec4u) {
+        const uint32_t g = vm::range_mapped(0xc00000u - 4596u, 4) ? vm::read32(0xc00000u - 4596u) : 0;
+        const uint32_t o = g && vm::range_mapped(g, 4) ? vm::read32(g) : 0;
+        const uint32_t s1 = o && vm::range_mapped(o + 72, 4) ? vm::read32(o + 72) : 0;
+        LOG_INFO("vtarget", "global=0x%08x obj=0x%08x slot=0x%08x fn=0x%08x ctr=0x%08x r3=0x%x",
+                 g, o, s1, addr, static_cast<uint32_t>(ctx.ctr),
+                 static_cast<unsigned>(ctx.gpr[3]));
+    }
     Func fn = lookup(addr);
     if (!fn) {
         LOG_FATAL("ppu", "unknown indirect target 0x%08x (lr=0x%08llx, thread 0x%x)", addr, static_cast<unsigned long long>(ctx.lr), ctx.thread_id);
     }
+    force::on_call(addr);
+    const uint32_t saved_lr = static_cast<uint32_t>(ctx.lr);
     fn(ctx, base);
+    force::on_return(addr, saved_lr, ctx.gpr[3]);
 }
 
 void call_import_body(Context& ctx, uint8_t* base, uint32_t index, ImportSlot& slot, int32_t st, const image::ImportEntry& imp);
@@ -243,9 +272,14 @@ void call_import_inner(Context& ctx, uint8_t* base, uint32_t index, ImportSlot& 
     {
         static const uint32_t only = std::getenv("PS3BASE_IMPORT_THREAD")
             ? static_cast<uint32_t>(std::strtoul(std::getenv("PS3BASE_IMPORT_THREAD"), nullptr, 0)) : 0;
-        if (only) {
+        /* The thread id differs between runs, so a name filter is the stable
+         * way to follow one worker. */
+        static const std::string only_name = std::getenv("PS3BASE_IMPORT_NAME")
+            ? std::getenv("PS3BASE_IMPORT_NAME") : std::string();
+        if (only || !only_name.empty()) {
             guest::Thread* t = guest::current();
-            import_thread_match = t && t->id == only;
+            import_thread_match = t && ((only && t->id == only) ||
+                                        (!only_name.empty() && t->name == only_name));
             if (import_thread_match) {
                 static std::atomic<uint64_t> n{0};
                 LOG_INFO("impthr", "#%llu %s::%s(0x%llx,0x%llx,0x%llx,0x%llx) lr=0x%08x",
@@ -262,10 +296,21 @@ void call_import_inner(Context& ctx, uint8_t* base, uint32_t index, ImportSlot& 
     if (imp.name && std::strstr(imp.name, "ppu_thread_exit") && std::getenv("PS3BASE_EXIT_TRACE")) {
         guest::Thread* t = guest::current();
         const uint32_t desc = static_cast<uint32_t>(ctx.gpr[31]);
-        LOG_INFO("threadexit", "thread=%s(0x%x) desc=0x%08x entry_ret=0x%x reason=0x%llx",
-                 t ? t->name.c_str() : "?", t ? t->id : 0, desc,
+        uint32_t opd = 0, code = 0, name_ea = 0;
+        if (vm::range_mapped(desc, 48)) {
+            opd = vm::read32(desc + 4);
+            name_ea = desc + 12;
+            if (vm::range_mapped(opd, 4)) code = vm::read32(opd);
+        }
+        LOG_INFO("threadexit", "thread=%s(0x%x) t=%.6f lr=0x%08x desc=0x%08x opd=0x%08x entry=0x%08x "
+                 "entry_ret=0x%x reason=0x%llx name='%s'",
+                 t ? t->name.c_str() : "?", t ? t->id : 0,
+                 double(ppu::timebase()) / 80000000.0,
+                 static_cast<unsigned>(ctx.lr), desc, opd, code,
                  vm::range_mapped(desc + 80, 4) ? vm::read32(desc + 80) : 0xFFFFFFFFu,
-                 static_cast<unsigned long long>(ctx.gpr[3]));
+                 static_cast<unsigned long long>(ctx.gpr[3]),
+                 vm::range_mapped(name_ea, 32) ?
+                     reinterpret_cast<const char*>(vm::ptr(name_ea)) : "");
     }
     if (slot.log_args) {
         LOG_INFO("import", "%s::%s(0x%llx, 0x%llx, 0x%llx, 0x%llx) lr 0x%llx", imp.module, imp.name, static_cast<unsigned long long>(ctx.gpr[3]),
@@ -323,17 +368,8 @@ void call_import_inner(Context& ctx, uint8_t* base, uint32_t index, ImportSlot& 
         call_indirect(ctx, base, code);
         ctx.gpr[2] = ld64(base, sp + 0x28);
         if (slot.log_args) LOG_INFO("import", "%s::%s returned 0x%llx", imp.module, imp.name, static_cast<unsigned long long>(ctx.gpr[3]));
-        {
-            static const uint32_t only_t = std::getenv("PS3BASE_IMPORT_THREAD")
-                ? static_cast<uint32_t>(std::strtoul(std::getenv("PS3BASE_IMPORT_THREAD"), nullptr, 0)) : 0;
-            if (only_t) {
-                guest::Thread* t = guest::current();
-                if (t && t->id == only_t)
-                    LOG_INFO("impthr", "        LLE ret=0x%llx %s::%s", 
-                             static_cast<unsigned long long>(ctx.gpr[3]), imp.module,
-                             imp.name ? imp.name : "?");
-            }
-        }
+        if (import_thread_match)
+            LOG_INFO("impthr", "        -> ret=0x%llx", static_cast<unsigned long long>(ctx.gpr[3]));
         if (wait_seq > 0) {
             LOG_INFO("lle", "wait-out #%d t=%.6f ret=0x%llx mask_out=0x%llx",
                      wait_seq, ppu::timebase() / 79.8e6,

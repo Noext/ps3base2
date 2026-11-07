@@ -1,5 +1,7 @@
 #include "ppu/ops.h"
 #include "runtime/host.h"
+#include "runtime/force.h"
+#include "runtime/thread.h"
 #include "runtime/critpath.h"
 #include "runtime/hooks.h"
 #include "runtime/game_profile.h"
@@ -172,9 +174,90 @@ void load_names(const char* path) {
 
 bool benign_game_error(const std::string& msg) { return msg.rfind("BATCHJOB: AddJob: waiting for room", 0) == 0; }
 
+
+/* Generic lifted-call tracer for ONE thread: every entry and exit with depth,
+ * r3 in, r3 out and duration. PS3BASE_CALL_TRACE=<thread name>. The tree is
+ * what shows which branch a worker actually took, and what made it leave. */
+namespace calltrace {
+struct Frame {
+    uint32_t addr;
+    uint64_t r3_in;
+    uint64_t t0;
+};
+thread_local std::vector<Frame> t_stack;
+
+bool enabled_for_current() {
+    static const std::string want = std::getenv("PS3BASE_CALL_TRACE")
+                                        ? std::getenv("PS3BASE_CALL_TRACE")
+                                        : std::string();
+    if (want.empty()) return false;
+    guest::Thread* t = guest::current();
+    return t && t->name == want;
+}
+
+void enter(uint32_t addr, uint64_t r3) {
+    const int depth = static_cast<int>(t_stack.size());
+    static std::atomic<uint64_t> n{0};
+    const uint64_t k = n.fetch_add(1) + 1;
+    if (k <= 20000)
+        LOG_INFO("calltree", "%*s-> f_%08x #%llu r3=0x%llx", depth * 2, "", addr,
+                 static_cast<unsigned long long>(k), static_cast<unsigned long long>(r3));
+    t_stack.push_back({addr, r3, ppu::timebase()});
+}
+
+void peek(uint32_t addr, ppu::Context& ctx) {
+    if (addr != 0x188428u) return;
+    const uint32_t obj = static_cast<uint32_t>(ctx.gpr[3]);
+    if (!vm::range_mapped(obj + 28, 1)) return;
+    static std::atomic<int> n{0};
+    const int k = n.fetch_add(1);
+    {
+        /* Decode the two head-of-loop exit tests exactly.
+         * L1084: bc_cond(12,2) with cr0.eq = (byte==0) -> exits when byte==0
+         * L1088: bc_cond(4,2)  -> exits when byte!=0                             */
+        const unsigned b28 = vm::ptr(obj)[28];
+        const unsigned g = vm::range_mapped(0xc82601, 1) ? vm::ptr(0xc82601)[0] : 0xff;
+        static std::atomic<int> m{0};
+        if (m.fetch_add(1) < 40)
+            LOG_INFO("loopdec", "#%d obj=0x%x b28=%u -> L1084 %s ; global=%u -> L1088 %s",
+                     m.load(), obj, b28, b28 == 0 ? "EXIT" : "continue",
+                     g, g != 0 ? "EXIT" : "continue");
+    }
+    if (k == 0 && vm::range_mapped(obj, 0x200))
+        LOG_INFO("looppeek", "TRAPADDR obj=0x%x quit_ea=0x%x", obj, obj + 28);
+    if (k < 60)
+        LOG_INFO("looppeek", "#%d obj=0x%x bytes24..31=%02x%02x%02x%02x%02x%02x%02x%02x "
+                 "b28=%u b29=%u global=0x%x",
+                 k, obj,
+                 vm::ptr(obj)[24], vm::ptr(obj)[25], vm::ptr(obj)[26], vm::ptr(obj)[27],
+                 vm::ptr(obj)[28], vm::ptr(obj)[29], vm::ptr(obj)[30], vm::ptr(obj)[31],
+                 static_cast<unsigned>(vm::ptr(obj)[28]),
+                 static_cast<unsigned>(vm::ptr(obj)[29]),
+                 vm::range_mapped(0xc82601, 1) ? static_cast<unsigned>(vm::ptr(0xc82601)[0]) : 0xff);
+}
+
+void leave(ppu::Context& ctx) {
+    if (t_stack.empty()) return;
+    Frame f = t_stack.back();
+    t_stack.pop_back();
+    const int depth = static_cast<int>(t_stack.size());
+    const uint64_t us = (ppu::timebase() - f.t0) / 79.8;
+    LOG_INFO("calltree", "%*s<- f_%08x r3_out=0x%llx %llu us", depth * 2, "", f.addr,
+             static_cast<unsigned long long>(ctx.gpr[3]),
+             static_cast<unsigned long long>(us));
+}
+}  // namespace calltrace
+
 void impl_body(Hook* h, ppu::Context& ctx, uint8_t* base, uint32_t addr, ppu::BodyFn fn);
 
 void impl(ppu::Context& ctx, uint8_t* base, uint32_t addr, ppu::BodyFn fn) {
+    if (calltrace::enabled_for_current()) {
+        calltrace::enter(addr, ctx.gpr[3]);
+        calltrace::peek(addr, ctx);
+        fn(ctx, base);
+        calltrace::leave(ctx);
+        return;
+    }
     auto found = g_hooks.find(addr);
     Hook* h = found != g_hooks.end() ? found->second : nullptr;
     if (!h) {
@@ -245,6 +328,8 @@ void impl_body(Hook* h, ppu::Context& ctx, uint8_t* base, uint32_t addr, ppu::Bo
     t_depth--;
     LOG_INFO("hook", "%*s<- %s #%u r3=%llx f1=%g%s", t_depth * 2, "", name.c_str(), n, static_cast<unsigned long long>(ctx.gpr[3]), ctx.fpr[1], ctx.gpr[1] != r1 ? " (stack mismatch)" : "");
 }
+
+
 
 std::string batch_state(uint32_t obj) {
     std::string s;
@@ -667,6 +752,14 @@ void init() {
         g_hooks[h.guest_addr] = nullptr;
     }
     profile.install_ppu_shims();
+    /* Force and call-trace modes need every lifted call to funnel through impl
+     * so a return value can be overridden or recorded. They must still honour
+     * GOWA_HOOK specs, so the flags are filled and the parse continues. */
+    const bool route_all = std::getenv("PS3BASE_FORCE") || std::getenv("PS3BASE_CALL_TRACE");
+    if (route_all) {
+        std::memset(ppu::hook_flags, 1, sizeof ppu::hook_flags);
+        ppu::hook_impl = impl;
+    }
     if (!g_hooks.empty() && !ppu::hook_impl) ppu::hook_impl = impl;
     if (std::getenv("PS3BASE_GAME_HOOKS") == nullptr) return;
     if (std::getenv("GOWA_BATCH_DIAG")) std::thread(batch_diag_thread).detach();

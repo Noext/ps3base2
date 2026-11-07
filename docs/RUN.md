@@ -204,3 +204,25 @@ The text renders legibly (commit `b20cf58`). The main menu, the PSN dialogue,
 Start Game, and the full world-creation screen are all reachable and driven by
 `PS3BASE_INPUT_CMD`. Creating a world writes its save. The game's internal
 server then faults storing through a null pointer; that is the current wall.
+
+
+## Forced run (reach the world)
+
+PS3BASE_FORCE is inert unless the variable is set, so a normal run is unchanged.
+This is the recipe that gets past the server's 66 ms exit and into spawn-area
+generation:
+
+```bash
+DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/0 \
+PS3BASE_DISC_DIR=/root/Dev/mc-port/disc \
+PS3BASE_LOG=info \
+PS3BASE_FORCE="f216258=1" \
+PS3BASE_INPUT_CMD=/tmp/live.txt \
+timeout 1200 ./build/ps3base --no-launcher
+```
+
+`f216258=1` overrides r3 to 1 on return from the lifted function at 0x216258
+(`f_00216258`), which is the byte read at `CellServer+593` that otherwise ends
+the server loop after 66 ms. The list of active forcings and what each one
+unblocks lives in `docs/forcings.md`; each is a debt to be replaced by the real
+fix.
