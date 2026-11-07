@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include "runtime/reservation.h"
 #include <string>
 
 namespace vm {
@@ -51,8 +52,18 @@ inline uint8_t* ptr(uint32_t addr) { return g_base + addr; }
 inline uint32_t read32(uint32_t addr) { uint32_t v; std::memcpy(&v, g_base + addr, 4); return __builtin_bswap32(v); }
 inline uint64_t read64(uint32_t addr) { uint64_t v; std::memcpy(&v, g_base + addr, 8); return __builtin_bswap64(v); }
 inline uint16_t read16(uint32_t addr) { uint16_t v; std::memcpy(&v, g_base + addr, 2); return __builtin_bswap16(v); }
-inline void write32(uint32_t addr, uint32_t v) { v = __builtin_bswap32(v); std::memcpy(g_base + addr, &v, 4); }
-inline void write64(uint32_t addr, uint64_t v) { v = __builtin_bswap64(v); std::memcpy(g_base + addr, &v, 8); }
-inline void write16(uint32_t addr, uint16_t v) { v = __builtin_bswap16(v); std::memcpy(g_base + addr, &v, 2); }
+inline void write32(uint32_t addr, uint32_t v) {
+    v = __builtin_bswap32(v);
+    rsv::store_range(addr, reinterpret_cast<const uint8_t*>(&v), 4);
+}
+inline void write64(uint32_t addr, uint64_t v) {
+    v = __builtin_bswap64(v);
+    rsv::store_range(addr, reinterpret_cast<const uint8_t*>(&v), 8);
+}
+inline void write16(uint32_t addr, uint16_t v) {
+    v = __builtin_bswap16(v);
+    rsv::store_range(addr, reinterpret_cast<const uint8_t*>(&v), 2);
+}
+inline void write8(uint32_t addr, uint8_t v) { rsv::store_range(addr, &v, 1); }
 
 }
