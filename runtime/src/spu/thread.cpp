@@ -483,7 +483,8 @@ void SpuThread::write_channel(uint32_t ch, uint32_t value) {
             if (reply) push_in_mbox(static_cast<uint32_t>(r));
             else if (r) LOG_WARN("spu", "thread 0x%x throw_event port %u failed 0x%llx", id, port, static_cast<unsigned long long>(r));
         } else if (code == 128 || code == 192) {
-            int64_t r = lv2::event_flag_set_bits(data1, 1ull << (data0 & 63));
+            int64_t r = lv2::event_flag_set_bits_traced(data1, 1ull << (data0 & 63),
+                                                       ctx.pc, "spu-wroutintrmbox");
             LOG_DEBUG("spu", "thread 0x%x event_flag_set 0x%x bit %u -> 0x%llx", id, data1, data0 & 63, static_cast<unsigned long long>(r));
             if (code == 128) push_in_mbox(static_cast<uint32_t>(r));
         } else {

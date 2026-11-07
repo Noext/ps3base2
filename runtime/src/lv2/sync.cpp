@@ -503,19 +503,34 @@ LV2_SYSCALL(86, sys_event_flag_trywait) {
 }
 
 
+int64_t event_flag_set_bits_traced(uint32_t id, uint64_t bits, uint32_t from_lr,
+                                  const char* who);
+
 int64_t event_flag_set_bits(uint32_t id, uint64_t bits) {
+    return event_flag_set_bits_traced(id, bits, 0, nullptr);
+}
+
+int64_t event_flag_set_bits_traced(uint32_t id, uint64_t bits, uint32_t from_lr,
+                                  const char* who) {
     auto f = get<EventFlag>(id);
     if (!f) return CELL_ESRCH;
     std::lock_guard lk(f->m);
     const uint64_t before = f->pattern;
     f->pattern |= bits;
-    flag_trace("set", id, bits, 0, 0, before, f->pattern);
+    if (id == FLAG_TRACE_ID && !who)
+        who = guest::current() ? guest::current()->name.c_str() : "?";
+    if (id == FLAG_TRACE_ID)
+        LOG_INFO("flagtrace", "set      from=%s lr=0x%08x bits=0x%llx pattern 0x%llx -> 0x%llx waiters=%d",
+                 who, from_lr, static_cast<unsigned long long>(bits),
+                 static_cast<unsigned long long>(before),
+                 static_cast<unsigned long long>(f->pattern), flag_waiters(id));
     f->cv.notify_all();
     return CELL_OK;
 }
 
 LV2_SYSCALL(87, sys_event_flag_set) {
-    return event_flag_set_bits(u32arg(ctx, 0), u64arg(ctx, 1));
+    return event_flag_set_bits_traced(u32arg(ctx, 0), u64arg(ctx, 1),
+                                     static_cast<uint32_t>(ctx.lr), nullptr);
 }
 
 LV2_SYSCALL(118, sys_event_flag_clear) {
