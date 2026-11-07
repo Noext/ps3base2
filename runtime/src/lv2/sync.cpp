@@ -60,6 +60,27 @@ bool flag_match(uint64_t pattern, uint64_t bits, uint32_t mode) {
     return (mode & 0xF) == 1 ? (pattern & bits) == bits : (pattern & bits) != 0;
 }
 
+constexpr uint32_t FLAG_TRACE_ID = 0x98046c00u;
+
+int flag_waiters(uint32_t id) {
+    auto f = get<EventFlag>(id);
+    return f ? int(f->waiters) : -1;
+}
+
+/* One event flag, traced at every operation, uncapped: a static read cannot say
+ * whether a bit is ever produced, only execution order can. */
+void flag_trace(const char* op, uint32_t id, uint64_t bits, uint32_t mode,
+                uint32_t lr, uint64_t before, uint64_t after) {
+    if (id != FLAG_TRACE_ID) return;
+    const guest::Thread* t = guest::current();
+    LOG_INFO("flagtrace", "%-8s thread=%s(0x%x) lr=0x%08x bits=0x%llx mode=0x%02x "
+             "pattern 0x%llx -> 0x%llx waiters=%d",
+             op, t ? t->name.c_str() : "?", t ? t->id : 0, lr,
+             static_cast<unsigned long long>(bits), mode,
+             static_cast<unsigned long long>(before),
+             static_cast<unsigned long long>(after), flag_waiters(id));
+}
+
 void flag_consume(uint64_t& pattern, uint64_t bits, uint32_t mode) {
     if (mode & 0x10) pattern &= ~bits;
     else if (mode & 0x20) pattern = 0;
@@ -411,20 +432,57 @@ LV2_SYSCALL(85, sys_event_flag_wait) {
     uint64_t gen = f->cancel_gen;
     f->waiters++;
     const uint64_t timeout = u64arg(ctx, 4);
+    /* The old cap (first 30 waits of the whole run) hid every wait after
+     * startup -- the very ones that matter. Count them all, and report a wait
+     * only when it actually blocks for more than a moment: an immediately
+     * satisfied wait is noise, a blocking one is the answer. */
+    const uint64_t before = f->pattern;
+    if (u32arg(ctx, 0) == FLAG_TRACE_ID && !flag_match(before, bits, mode)) {
+        flag_trace("wait-in", u32arg(ctx, 0), bits, mode,
+                   static_cast<uint32_t>(ctx.lr), before, before);
+        LOG_INFO("flagtrace", "timeout  value=0x%llx (0 means wait forever)",
+                 static_cast<unsigned long long>(u64arg(ctx, 4)));
+        const uint32_t st = 0xce5aa0u + 5u;
+        LOG_INFO("flagtrace", "state    subsystem[5] value=0x%02x",
+                 vm::range_mapped(st, 1) ? vm::ptr(st)[0] : 0xff);
+    }
     static const bool trace_flag = std::getenv("PS3BASE_FLAG_TRACE") != nullptr;
-    static std::atomic<int> tl{0};
-    const bool log_this = trace_flag && tl.fetch_add(1) < 30;
-    if (log_this)
-        LOG_INFO("flag", "wait id=0x%x bits=0x%llx mode=0x%x timeout=%llu pattern=0x%llx",
-                 u32arg(ctx, 0), static_cast<unsigned long long>(bits), mode,
-                 static_cast<unsigned long long>(timeout),
-                 static_cast<unsigned long long>(f->pattern));
+    static std::atomic<uint64_t> tl{0};
+    const uint64_t seq = trace_flag ? tl.fetch_add(1) : 0;
+    const auto t0 = std::chrono::steady_clock::now();
+    const bool pre_ok = flag_match(f->pattern, bits, mode);
+    /* Log at ENTRY, not only at exit: a wait that never returns was invisible,
+     * and the wait that matters -- the chunk thread's -- never returns. */
+    if (trace_flag && !pre_ok) {
+        static std::atomic<uint64_t> n{0};
+        if (n.fetch_add(1) < 200)
+            LOG_INFO("flagin", "#%llu seq=%llu thread=0x%x id=0x%x bits=0x%llx mode=0x%x "
+                     "timeout=%llu pattern=0x%llx -> will block",
+                     static_cast<unsigned long long>(n.load() + 1),
+                     static_cast<unsigned long long>(seq),
+                     static_cast<unsigned>(ctx.gpr[13]), u32arg(ctx, 0),
+                     static_cast<unsigned long long>(bits), mode,
+                     static_cast<unsigned long long>(timeout),
+                     static_cast<unsigned long long>(f->pattern));
+    }
     bool ok = wait_for(lk, f->cv, timeout, [&] { return flag_match(f->pattern, bits, mode) || f->cancel_gen != gen; });
-    if (log_this)
-        LOG_INFO("flag", "wait id=0x%x -> ok=%d timedout=%d canceled=%d pattern=0x%llx",
-                 u32arg(ctx, 0), int(ok), int(!ok && f->cancel_gen == gen),
-                 int(f->cancel_gen != gen), static_cast<unsigned long long>(f->pattern));
+    const auto us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t0).count();
+    if (trace_flag && !pre_ok) {
+        static std::atomic<uint64_t> blocked{0};
+        const uint64_t nb = blocked.fetch_add(1);
+        if (nb < 400)
+            LOG_INFO("flag", "blocked #%llu seq=%llu id=0x%x bits=0x%llx mode=0x%x timeout=%llu "
+                     "pattern=0x%llx -> ok=%d canceled=%d waited=%lldus",
+                     static_cast<unsigned long long>(nb + 1), static_cast<unsigned long long>(seq),
+                     u32arg(ctx, 0), static_cast<unsigned long long>(bits), mode,
+                     static_cast<unsigned long long>(timeout),
+                     static_cast<unsigned long long>(f->pattern), int(ok),
+                     int(f->cancel_gen != gen), static_cast<long long>(us));
+    }
     f->waiters--;
+    if (u32arg(ctx, 0) == FLAG_TRACE_ID)
+        flag_trace(ok ? "wait-ok" : "wait-to", u32arg(ctx, 0), bits, mode,
+                   static_cast<uint32_t>(ctx.lr), before, f->pattern);
     if (result) vm::write64(result, f->pattern);
     if (f->cancel_gen != gen) return CELL_ECANCELED;
     if (!ok) return CELL_ETIMEDOUT;
@@ -444,27 +502,14 @@ LV2_SYSCALL(86, sys_event_flag_trywait) {
     return CELL_OK;
 }
 
+
 int64_t event_flag_set_bits(uint32_t id, uint64_t bits) {
-    {
-        static const bool on = std::getenv("PS3BASE_FLAG_TRACE") != nullptr;
-        static std::atomic<uint64_t> total{0};
-        if (on) {
-            const uint64_t n = total.fetch_add(1);
-            if (id == 0x98046c00u)
-                LOG_INFO("flagset", "CHUNK id=0x%x bits=0x%llx (set #%llu)",
-                         id, static_cast<unsigned long long>(bits),
-                         static_cast<unsigned long long>(n + 1));
-            /* One summary line per 1000 sets proves the path is alive. */
-            if (n % 1000 == 0)
-                LOG_INFO("flagset", "TOTAL %llu sets so far (last id=0x%x bits=0x%llx)",
-                         static_cast<unsigned long long>(n + 1), id,
-                         static_cast<unsigned long long>(bits));
-        }
-    }
     auto f = get<EventFlag>(id);
     if (!f) return CELL_ESRCH;
     std::lock_guard lk(f->m);
+    const uint64_t before = f->pattern;
     f->pattern |= bits;
+    flag_trace("set", id, bits, 0, 0, before, f->pattern);
     f->cv.notify_all();
     return CELL_OK;
 }
@@ -477,7 +522,12 @@ LV2_SYSCALL(118, sys_event_flag_clear) {
     auto f = get<EventFlag>(u32arg(ctx, 0));
     if (!f) return CELL_ESRCH;
     std::lock_guard lk(f->m);
+    const uint64_t before = f->pattern;
+    /* refs/rpcs3/.../sys_event_flag.cpp:470: pattern &= bitptn. bitptn is the
+     * set of bits to KEEP, not the mask to remove. */
     f->pattern &= u64arg(ctx, 1);
+    flag_trace("clear", u32arg(ctx, 0), u64arg(ctx, 1), 0,
+               static_cast<uint32_t>(ctx.lr), before, f->pattern);
     return CELL_OK;
 }
 
@@ -486,6 +536,8 @@ LV2_SYSCALL(132, sys_event_flag_cancel) {
     if (!f) return CELL_ESRCH;
     std::lock_guard lk(f->m);
     if (uint32_t num = u32arg(ctx, 1)) vm::write32(num, f->waiters);
+    flag_trace("cancel", u32arg(ctx, 0), 0, 0, static_cast<uint32_t>(ctx.lr),
+               f->pattern, f->pattern);
     f->cancel_gen++;
     f->cv.notify_all();
     return CELL_OK;
