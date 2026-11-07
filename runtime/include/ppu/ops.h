@@ -1,6 +1,7 @@
 #pragma once
 
 #include "context.h"
+#include "runtime/reservation.h"
 
 #include <atomic>
 #include <bit>
@@ -41,8 +42,11 @@ inline uint8_t ld8(uint8_t* b, uint32_t ea) { return b[ea]; }
 inline uint16_t ld16(uint8_t* b, uint32_t ea) { uint16_t v; std::memcpy(&v, b + ea, 2); return __builtin_bswap16(v); }
 inline uint32_t ld32(uint8_t* b, uint32_t ea) { uint32_t v; std::memcpy(&v, b + ea, 4); return __builtin_bswap32(v); }
 inline uint64_t ld64(uint8_t* b, uint32_t ea) { uint64_t v; std::memcpy(&v, b + ea, 8); return __builtin_bswap64(v); }
-inline void st8(uint8_t* b, uint32_t ea, uint8_t v) { b[ea] = v; }
-inline void st16(uint8_t* b, uint32_t ea, uint16_t v) { v = __builtin_bswap16(v); std::memcpy(b + ea, &v, 2); }
+inline void st8(uint8_t* b, uint32_t ea, uint8_t v) { rsv::store_range(ea, &v, 1); }
+inline void st16(uint8_t* b, uint32_t ea, uint16_t v) {
+    v = __builtin_bswap16(v);
+    rsv::store_range(ea, reinterpret_cast<const uint8_t*>(&v), 2);
+}
 inline void st32(uint8_t* b, uint32_t ea, uint32_t v) {
     static const bool trap = std::getenv("PS3BASE_ST32_TRAP") != nullptr;
     if (trap && ea < 0x10000) {
@@ -50,9 +54,12 @@ inline void st32(uint8_t* b, uint32_t ea, uint32_t v) {
         if (n++ < 20) std::fprintf(stderr, "ST32_TRAP ea=0x%08x v=0x%08x ra=%p\n", ea, v, __builtin_return_address(0));
     }
     v = __builtin_bswap32(v);
-    std::memcpy(b + ea, &v, 4);
+    rsv::store_range(ea, reinterpret_cast<const uint8_t*>(&v), 4);
 }
-inline void st64(uint8_t* b, uint32_t ea, uint64_t v) { v = __builtin_bswap64(v); std::memcpy(b + ea, &v, 8); }
+inline void st64(uint8_t* b, uint32_t ea, uint64_t v) {
+    v = __builtin_bswap64(v);
+    rsv::store_range(ea, reinterpret_cast<const uint8_t*>(&v), 8);
+}
 
 inline double ldf32(uint8_t* b, uint32_t ea) { return static_cast<double>(std::bit_cast<float>(ld32(b, ea))); }
 inline double ldf64(uint8_t* b, uint32_t ea) { return std::bit_cast<double>(ld64(b, ea)); }
@@ -61,7 +68,10 @@ inline void stf64(uint8_t* b, uint32_t ea, double v) { st64(b, ea, std::bit_cast
 
 inline __m128i bswap128(__m128i x) { return _mm_shuffle_epi8(x, _mm_set_epi8(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)); }
 inline v128 ldv(uint8_t* b, uint32_t ea) { v128 r; r.vi = bswap128(_mm_loadu_si128(reinterpret_cast<const __m128i*>(b + (ea & ~15u)))); return r; }
-inline void stv(uint8_t* b, uint32_t ea, const v128& v) { _mm_storeu_si128(reinterpret_cast<__m128i*>(b + (ea & ~15u)), bswap128(v.vi)); }
+inline void stv(uint8_t* b, uint32_t ea, const v128& v) {
+    const __m128i x = bswap128(v.vi);
+    rsv::store_range(ea & ~15u, reinterpret_cast<const uint8_t*>(&x), 16);
+}
 
 inline uint64_t rotl64(uint64_t x, uint32_t n) { return std::rotl(x, static_cast<int>(n & 63)); }
 inline uint64_t dup32(uint64_t x) { uint64_t l = static_cast<uint32_t>(x); return l | (l << 32); }
