@@ -380,18 +380,37 @@ HLE_FUNC(cellSysutil, cellSaveDataUserListAutoLoad) {
  * funcStat, funcFile, container, userdata). This is what "Create New World"
  * reaches: the title writes the world's save once it has generated it. The
  * user id is folded into the directory name, as for UserAutoLoad. */
+/* cellSaveDataUserAutoSave(version, userId, dirName, errDialog, setBuf,
+ * funcStat, funcFile, container, userdata).
+ *
+ * Nine arguments: the ninth is the first stack argument under the PPU ABI, not
+ * r3+9. Reading it as a register was how container (the eighth, 0xffffffff in
+ * the title's call) ended up mistaken for funcFile.
+ * Reference: refs/rpcs3/rpcs3/Emu/Cell/Modules/cellSaveData.cpp:2574. */
 HLE_FUNC(cellSysutil, cellSaveDataUserAutoSave) {
     const uint32_t version = a32(ctx, 0);
     const uint32_t user = a32(ctx, 1);
-    std::string name = gstr(a32(ctx, 2), 64);
-    if (!name.empty()) name = "u" + std::to_string(user) + "_" + name;
-    const std::string dir = save_root() + "/" + name;
-    Op op{ctx, name, dir, a32(ctx, 5), a32(ctx, 6), a32(ctx, 7), a32(ctx, 9), true};
-    LOG_INFO("savedata", "UserAutoSave v 0x%x user %u name 0x%08x '%s' setBuf 0x%08x stat 0x%08x file 0x%08x ud 0x%08x",
-             version, user, a32(ctx, 2), name.c_str(), a32(ctx, 5), a32(ctx, 6), a32(ctx, 7), a32(ctx, 9));
-    if (name.empty() || !op.set_buf || !op.func_stat || !op.func_file) {
+    const uint32_t dir_name_ea = a32(ctx, 2);
+    const uint32_t err_dialog = a32(ctx, 3);
+    const uint32_t set_buf = a32(ctx, 4);
+    const uint32_t func_stat = a32(ctx, 5);
+    const uint32_t func_file = a32(ctx, 6);
+    const uint32_t container = a32(ctx, 7);
+    /* Argument 9 onward lives on the caller's stack, above the frame header. */
+    const uint32_t userdata = vm::read32(static_cast<uint32_t>(ctx.gpr[1]) + 0x60);
+
+    std::string name = gstr(dir_name_ea, 32);
+    LOG_INFO("savedata",
+             "UserAutoSave v 0x%x user %u errDialog 0x%x setBuf 0x%08x stat 0x%08x "
+             "file 0x%08x container 0x%x userdata 0x%08x dirName 0x%08x '%s'",
+             version, user, err_dialog, set_buf, func_stat, func_file, container,
+             userdata, dir_name_ea, name.c_str());
+    if (name.empty() || !set_buf || !func_stat || !func_file) {
         return ret(ctx, static_cast<int32_t>(ERR_PARAM));
     }
+    const std::string folded = "u" + std::to_string(user) + "_" + name;
+    Op op{ctx, folded, save_root() + "/" + folded, set_buf, func_stat, func_file,
+          userdata, true};
     ret(ctx, run_op(op));
 }
 
@@ -407,15 +426,28 @@ HLE_FUNC(cellSysutil, cellSaveDataFixedDelete) { ret(ctx, 0); }
 
 HLE_FUNC(cellSysutil, cellSaveDataUserFixedDelete) { ret(ctx, 0); }
 
+/* Same nine-argument shape as UserAutoSave, loading instead of saving. */
 HLE_FUNC(cellSysutil, cellSaveDataUserAutoLoad) {
-    const uint32_t user = a32(ctx, 0);
-    std::string name = gstr(a32(ctx, 1), 64);
-    if (!name.empty()) name = "u" + std::to_string(user) + "_" + name;
-    const std::string dir = save_root() + "/" + name;
-    Op op{ctx, name, dir, a32(ctx, 3), a32(ctx, 4), a32(ctx, 5), a32(ctx, 7), false};
-    if (name.empty() || !op.set_buf || !op.func_stat || !op.func_file) return ret(ctx, static_cast<int32_t>(ERR_PARAM));
+    const uint32_t version = a32(ctx, 0);
+    const uint32_t user = a32(ctx, 1);
+    const uint32_t dir_name_ea = a32(ctx, 2);
+    const uint32_t err_dialog = a32(ctx, 3);
+    const uint32_t set_buf = a32(ctx, 4);
+    const uint32_t func_stat = a32(ctx, 5);
+    const uint32_t func_file = a32(ctx, 6);
+    const uint32_t container = a32(ctx, 7);
+    const uint32_t userdata = vm::read32(static_cast<uint32_t>(ctx.gpr[1]) + 0x60);
+    (void)version; (void)err_dialog; (void)container;
+
+    std::string name = gstr(dir_name_ea, 32);
+    if (name.empty() || !set_buf || !func_stat || !func_file) {
+        return ret(ctx, static_cast<int32_t>(ERR_PARAM));
+    }
+    const std::string folded = "u" + std::to_string(user) + "_" + name;
+    Op op{ctx, folded, save_root() + "/" + folded, set_buf, func_stat, func_file,
+          userdata, false};
     const int32_t r = run_op(op);
-    LOG_INFO("savedata", "UserAutoLoad user %u '%s' -> %d", user, name.c_str(), r);
+    LOG_INFO("savedata", "UserAutoLoad user %u '%s' -> %d", user, folded.c_str(), r);
     ret(ctx, r);
 }
 

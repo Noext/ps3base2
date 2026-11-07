@@ -376,8 +376,10 @@ LV2_SYSCALL(82, sys_event_flag_create) {
     {
         static const bool on = std::getenv("PS3BASE_FLAG_TRACE") != nullptr;
         static std::atomic<int> n{0};
-        if (on && n.fetch_add(1) < 30) LOG_INFO("flag", "create -> id=0x%x pattern=0x%llx", id,
-                                                static_cast<unsigned long long>(f->pattern));
+        if (on && n.fetch_add(1) < 200) LOG_INFO("flag", "create id=0x%x init=0x%llx (r5=0x%llx r6=0x%llx)",
+                                                id, static_cast<unsigned long long>(f->pattern),
+                                                static_cast<unsigned long long>(ctx.gpr[5]),
+                                                static_cast<unsigned long long>(ctx.gpr[6]));
     }
     vm::write32(out, id);
     return CELL_OK;
@@ -443,6 +445,22 @@ LV2_SYSCALL(86, sys_event_flag_trywait) {
 }
 
 int64_t event_flag_set_bits(uint32_t id, uint64_t bits) {
+    {
+        static const bool on = std::getenv("PS3BASE_FLAG_TRACE") != nullptr;
+        static std::atomic<uint64_t> total{0};
+        if (on) {
+            const uint64_t n = total.fetch_add(1);
+            if (id == 0x98046c00u)
+                LOG_INFO("flagset", "CHUNK id=0x%x bits=0x%llx (set #%llu)",
+                         id, static_cast<unsigned long long>(bits),
+                         static_cast<unsigned long long>(n + 1));
+            /* One summary line per 1000 sets proves the path is alive. */
+            if (n % 1000 == 0)
+                LOG_INFO("flagset", "TOTAL %llu sets so far (last id=0x%x bits=0x%llx)",
+                         static_cast<unsigned long long>(n + 1), id,
+                         static_cast<unsigned long long>(bits));
+        }
+    }
     auto f = get<EventFlag>(id);
     if (!f) return CELL_ESRCH;
     std::lock_guard lk(f->m);

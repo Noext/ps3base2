@@ -230,6 +230,12 @@ void call_import_body(Context& ctx, uint8_t* base, uint32_t index, ImportSlot& s
 }
 
 void call_import_inner(Context& ctx, uint8_t* base, uint32_t index, ImportSlot& slot, int32_t st, const image::ImportEntry& imp) {
+    /* Arguments must be captured BEFORE the handler runs: afterwards r3 holds
+     * the return value, which is how an earlier SPURS probe read 0. */
+    if (imp.name && std::strstr(imp.name, "cellSpursInitialize") && std::getenv("PS3BASE_SPURS_TRACE")) {
+        LOG_INFO("spurs", "Initialize args spurs=0x%08x attr=0x%08x",
+                 static_cast<unsigned>(ctx.gpr[3]), static_cast<unsigned>(ctx.gpr[4]));
+    }
     if (slot.log_args) {
         LOG_INFO("import", "%s::%s(0x%llx, 0x%llx, 0x%llx, 0x%llx) lr 0x%llx", imp.module, imp.name, static_cast<unsigned long long>(ctx.gpr[3]),
                  static_cast<unsigned long long>(ctx.gpr[4]), static_cast<unsigned long long>(ctx.gpr[5]), static_cast<unsigned long long>(ctx.gpr[6]),
@@ -261,13 +267,19 @@ void call_import_inner(Context& ctx, uint8_t* base, uint32_t index, ImportSlot& 
         st64(base, sp + 0x28, ctx.gpr[2]);
         uint32_t code = ld32(base, e.opd);
         ctx.gpr[2] = ld32(base, e.opd + 4);
+        if (std::getenv("PS3BASE_LLE_TRACE") && imp.name && std::strstr(imp.name, "SpursEventFlagSet")) {
+            static std::atomic<int> n{0};
+            if (n.fetch_add(1) < 20)
+                LOG_INFO("lle", "EventFlagSet opd=0x%08x -> code=0x%08x known=%d",
+                         e.opd, code, int(lookup(code) != nullptr));
+        }
         LOG_TRACE("import", "%s::%s -> LLE 0x%08x", imp.module, imp.name, code);
         call_indirect(ctx, base, code);
         ctx.gpr[2] = ld64(base, sp + 0x28);
         if (slot.log_args) LOG_INFO("import", "%s::%s returned 0x%llx", imp.module, imp.name, static_cast<unsigned long long>(ctx.gpr[3]));
     if (imp.name && std::strstr(imp.name, "cellSpurs") && std::getenv("PS3BASE_SPURS_TRACE")) {
         static std::atomic<int> n{0};
-        if (n.fetch_add(1) < 60)
+        if (n.fetch_add(1) < 20000)
             LOG_INFO("spurs", "%s::%s -> 0x%llx (lr 0x%08x)", imp.module, imp.name,
                      static_cast<unsigned long long>(ctx.gpr[3]),
                      static_cast<unsigned int>(ctx.lr));

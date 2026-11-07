@@ -348,6 +348,21 @@ int main(int argc, char** argv) {
             }
         }).detach();
     }
+    if (const char* sp = std::getenv("PS3BASE_SPURS_WATCH")) {
+        const uint32_t base = static_cast<uint32_t>(std::strtoul(sp, nullptr, 0));
+        std::thread([base] {
+            host::set_thread_name("spurs watch");
+            for (int i = 0; i < 400; i++) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                if (!vm::range_mapped(base, 0x100)) continue;
+                const uint32_t s1 = vm::read32(base + 0x70);
+                const uint32_t s2 = vm::read32(base + 0x78);
+                const uint32_t idle = vm::ptr(base)[0x73];
+                LOG_INFO("spurswatch", "t~%dms wklSignal1=0x%08x wklSignal2=0x%08x spuIdling=0x%02x",
+                         i * 500, s1, s2, idle);
+            }
+        }).detach();
+    }
     host::set_thread_name("Host main");
     placement::apply("host");
     static const int census = std::getenv("GOWA_THREAD_CPU") ? std::atoi(std::getenv("GOWA_THREAD_CPU")) : 0;
