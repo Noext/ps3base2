@@ -44,7 +44,7 @@ progressed past spawn area into post-processing.
 **Time to reach this point: ~519 s of emulated time** for spawn-area generation.
 Speed of the SPU work is a separate concern, to be addressed later.
 
-## Experiment: forcing the chunk-update flag (forcing #2, NOT committed as a solution)
+## Experiment: forcing the chunk-update flag (forcing #2, NOT a solution)
 
 Rule: `e98046c00:1:5000` -- call sys_event_flag_set(0x98046c00, 0x1) once, 5 s
 after the first UserAutoSave completes.
@@ -59,13 +59,27 @@ Result, measured:
 354.726  flagtrace: set  from=(4J) Chunk update lr=0x0014fbe4 bits=0x2 0x1 -> 0x3
 ```
 
-**(4J) Chunk update wakes up.** It runs the code path that was unreachable
-before (the index-0 set at 0x14f994 and the index-1 set at 0x14fbe4 both
-execute), completes its work, and then **blocks again** on the same flag.
+**(4J) Chunk update wakes up.** The path that was unreachable before now runs:
+both the index-0 set at 0x14f994 and the index-1 set at 0x14fbe4 execute. The
+thread finishes one round of work and **blocks again** on the same flag.
 
-**The screen does NOT close.** "Preparing to Save Level" stays, and the title
-does not render the world.
+**The screen does not close** and the world is not rendered.
 
-So the flag is necessary but not sufficient: waking that thread once lets it do
-one round of work and it goes back to waiting. The flag is not being *set*
-periodically by whatever should set it, and forcing it once only buys one cycle.
+### Correction: there is no MSSTimer producer
+
+An earlier reading of the same log attributed the first `set bits=0x1` to
+`MSSTimer`. That is wrong. `force::tick()` runs from inside `call_indirect`,
+so it fires on whatever thread happens to call an import at that instant, and
+`(4J) Chunk update` was already waiting, which is why the guest thread named in
+that line is `MSSTimer`. The line 180 us later is the force rule reporting
+itself.
+
+**Measured**: in runs without the flag rule (`world3.log`, `world4.log`) the
+flag is set exactly **once** in the whole run, at startup, and never again. There
+is no periodic producer to fix. The flag is simply never set by the guest after
+the save.
+
+So forcing it once buys exactly one cycle of work, and the screen stays. The
+remaining problem is not a missing periodic setter: it is that the title expects
+the chunk thread to have completed its work and never re-arm it. That needs the
+call chain above the flag, not another forcing.
