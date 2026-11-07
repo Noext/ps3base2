@@ -273,10 +273,31 @@ void call_import_inner(Context& ctx, uint8_t* base, uint32_t index, ImportSlot& 
                 LOG_INFO("lle", "EventFlagSet opd=0x%08x -> code=0x%08x known=%d",
                          e.opd, code, int(lookup(code) != nullptr));
         }
+        int wait_seq = -1;
+        uint32_t wait_mask_ptr = 0;
+        uint64_t wait_mask_in = 0;
+        if (std::getenv("PS3BASE_LLE_TRACE") && imp.name && std::strstr(imp.name, "SpursEventFlagWait")) {
+            static std::atomic<int> n{0};
+            wait_seq = n.fetch_add(1) + 1;
+            wait_mask_ptr = static_cast<uint32_t>(ctx.gpr[4]);
+            wait_mask_in = wait_mask_ptr ? ld16(base, wait_mask_ptr) : 0;
+            LOG_INFO("lle", "wait-in  #%d t=%.6f ef=0x%08x mask_ptr=0x%08x mask_in=0x%llx "
+                     "wait_mode=0x%x lr=0x%08x",
+                     wait_seq, ppu::timebase() / 79.8e6,
+                     static_cast<unsigned>(ctx.gpr[3]), wait_mask_ptr,
+                     static_cast<unsigned long long>(wait_mask_in),
+                     static_cast<unsigned>(ctx.gpr[5]), static_cast<unsigned>(ctx.lr));
+        }
         LOG_TRACE("import", "%s::%s -> LLE 0x%08x", imp.module, imp.name, code);
         call_indirect(ctx, base, code);
         ctx.gpr[2] = ld64(base, sp + 0x28);
         if (slot.log_args) LOG_INFO("import", "%s::%s returned 0x%llx", imp.module, imp.name, static_cast<unsigned long long>(ctx.gpr[3]));
+        if (wait_seq > 0) {
+            LOG_INFO("lle", "wait-out #%d t=%.6f ret=0x%llx mask_out=0x%llx",
+                     wait_seq, ppu::timebase() / 79.8e6,
+                     static_cast<unsigned long long>(ctx.gpr[3]),
+                     static_cast<unsigned long long>(wait_mask_ptr ? ld16(base, wait_mask_ptr) : 0));
+        }
     if (imp.name && std::strstr(imp.name, "cellSpurs") && std::getenv("PS3BASE_SPURS_TRACE")) {
         static std::atomic<int> n{0};
         if (n.fetch_add(1) < 20000)
