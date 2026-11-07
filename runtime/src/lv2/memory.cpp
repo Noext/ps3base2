@@ -82,8 +82,23 @@ LV2_SYSCALL(302, sys_vm_append_memory) {
              static_cast<unsigned long long>(size));
     if (!size || size % 0x100000) return CELL_EINVAL;
     {
+        /* The mapping's virtual size caps how much physical can be attached;
+         * refs/rpcs3/.../sys_vm.cpp:190 takes the pages from the container and
+         * accumulates psize. An unbounded accept let a 0xfc200000 request
+         * through against a 64 MiB mapping. */
         std::lock_guard lk(g_lock);
-        if (g_allocs.find(addr) == g_allocs.end()) return CELL_EINVAL;
+        auto it = g_allocs.find(addr);
+        if (it == g_allocs.end()) return CELL_EINVAL;
+        const uint64_t vsize = it->second;
+        auto& mapped = g_vm_psize[addr];
+        if (size > vsize || mapped + size > vsize) {
+            LOG_WARN("vm", "append_memory 0x%llx exceeds vsize 0x%llx (mapped 0x%x)",
+                     static_cast<unsigned long long>(size), static_cast<unsigned long long>(vsize), mapped);
+            return CELL_EINVAL;
+        }
+        if (g_used + size > kUserMemory) return CELL_ENOMEM;
+        g_used += static_cast<uint32_t>(size);
+        mapped += static_cast<uint32_t>(size);
     }
     /* Commit outside g_lock: vm::commit takes the runtime's memory lock itself,
      * and holding ours across the call deadlocks the first append. */

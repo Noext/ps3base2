@@ -1,5 +1,7 @@
 #include "common.h"
 #include <cstdio>
+#include <deque>
+#include <vector>
 
 #include <chrono>
 #include <cstdlib>
@@ -90,6 +92,57 @@ void load_script() {
 /* Read one pending command from the control file, if any. Format: a button
  * name, optionally followed by a repeat count or a hold in seconds. The file is
  * truncated on read so a command fires once. */
+struct Queued {
+    uint32_t offset = 0;
+    uint16_t mask = 0;
+    uint32_t pressure = 0;
+    uint32_t hold = 0, gap = 0;
+};
+std::deque<Queued>& cmd_queue() { static std::deque<Queued> q; return q; }
+uint32_t& cmd_cooldown() { static uint32_t c = 0; return c; }
+bool& cmd_loaded() { static bool l = false; return l; }
+
+void load_command_queue() {
+    cmd_loaded() = true;
+    static const char* path = std::getenv("PS3BASE_INPUT_CMD");
+    if (!path) return;
+    FILE* f = std::fopen(path, "r");
+    if (!f) return;
+    char buf[4096] = {};
+    const size_t got = std::fread(buf, 1, sizeof buf - 1, f);
+    std::fclose(f);
+    /* Consume the file so a later run of the same shell does not replay it. */
+    if (FILE* t = std::fopen(path, "w")) std::fclose(t);
+    std::string text(buf, got);
+    size_t pos = 0;
+    while (pos < text.size()) {
+        size_t end = text.find('\n', pos);
+        if (end == std::string::npos) end = text.size();
+        std::string line = text.substr(pos, end - pos);
+        pos = end + 1;
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t')) line.pop_back();
+        while (!line.empty() && (line.front() == ' ' || line.front() == '\t')) line.erase(line.begin());
+        if (line.empty() || line[0] == '#') continue;
+        /* "name [hold_ms] [gap_ms]" */
+        std::vector<std::string> parts;
+        size_t p = 0;
+        while (p < line.size()) {
+            size_t e = line.find(' ', p);
+            if (e == std::string::npos) e = line.size();
+            if (e > p) parts.push_back(line.substr(p, e - p));
+            p = e + 1;
+        }
+        if (parts.empty()) continue;
+        Queued q;
+        if (!button_of(parts[0], q.offset, q.mask, q.pressure)) continue;
+        q.hold = parts.size() > 1 ? static_cast<uint32_t>(std::atof(parts[1].c_str()) * 60 / 1000) : 4;
+        q.gap  = parts.size() > 2 ? static_cast<uint32_t>(std::atof(parts[2].c_str()) * 60 / 1000) : 60;
+        if (!q.hold) q.hold = 1;
+        cmd_queue().push_back(q);
+    }
+    LOG_INFO("pad", "queued %zu command(s)", cmd_queue().size());
+}
+
 bool take_command_file(Press& out, uint32_t& repeat) {
     static const char* path = std::getenv("PS3BASE_INPUT_CMD");
     if (!path) return false;
@@ -133,23 +186,38 @@ void fill(uint32_t out) {
     b[20] = b[21] = b[22] = 0x200;
     b[23] = 0x200;
     host::poll_pad(b);
-    /* Command file: one press per write, held for a few frames. This is what
-     * lets navigation be driven from outside without timing assumptions. */
+    /* Queued commands: the whole menu sequence is written at once and played
+     * back with fixed gaps, so external latency cannot shift a press onto the
+     * wrong screen. */
     {
-        static Press pending{};
-        static uint32_t frames_left = 0;
-        if (!frames_left) {
-            Press p{};
-            uint32_t repeat = 1;
-            if (take_command_file(p, repeat)) {
-                pending = p;
-                frames_left = repeat;
+        if (cmd_queue().empty() && !cmd_cooldown()) {
+            /* Re-read on demand: appending to the file queues more, so a
+             * sequence can be extended while the title is already running. */
+            static const char* reload_path = std::getenv("PS3BASE_INPUT_CMD");
+            if (reload_path) {
+                FILE* probe = std::fopen(reload_path, "r");
+                if (probe) {
+                    char first = 0;
+                    const size_t got = std::fread(&first, 1, 1, probe);
+                    std::fclose(probe);
+                    if (got) load_command_queue();
+                }
             }
         }
-        if (frames_left) {
-            b[pending.offset] |= pending.mask;
-            if (pending.pressure) b[pending.pressure] = 0xFF;
-            frames_left--;
+        static uint32_t held_left = 0;
+        if (held_left) {
+            const Queued& q = cmd_queue().front();
+            b[q.offset] |= q.mask;
+            if (q.pressure) b[q.pressure] = 0xFF;
+            held_left--;
+            if (!held_left) {
+                cmd_cooldown() = q.gap;
+                cmd_queue().pop_front();
+            }
+        } else if (cmd_cooldown()) {
+            cmd_cooldown()--;
+        } else if (!cmd_queue().empty()) {
+            held_left = cmd_queue().front().hold;
         }
     }
     /* Apply the injection LAST: poll_pad rebuilds b from the host device and
