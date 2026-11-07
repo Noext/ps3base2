@@ -1,4 +1,7 @@
 #include "object.h"
+
+#include <atomic>
+#include <cstdlib>
 #include "sync.h"
 
 #include <algorithm>
@@ -369,7 +372,14 @@ LV2_SYSCALL(82, sys_event_flag_create) {
         f->type = static_cast<int32_t>(vm::read32(attr + 20));
         f->name = name8(attr + 24);
     }
-    vm::write32(out, add_object(0x98000000, f));
+    const uint32_t id = add_object(0x98000000, f);
+    {
+        static const bool on = std::getenv("PS3BASE_FLAG_TRACE") != nullptr;
+        static std::atomic<int> n{0};
+        if (on && n.fetch_add(1) < 30) LOG_INFO("flag", "create -> id=0x%x pattern=0x%llx", id,
+                                                static_cast<unsigned long long>(f->pattern));
+    }
+    vm::write32(out, id);
     return CELL_OK;
 }
 
@@ -377,6 +387,12 @@ LV2_SYSCALL(83, sys_event_flag_destroy) {
     auto f = get<EventFlag>(u32arg(ctx, 0));
     if (!f) return CELL_ESRCH;
     std::lock_guard lk(f->m);
+    {
+        static const bool on = std::getenv("PS3BASE_FLAG_TRACE") != nullptr;
+        static std::atomic<int> n{0};
+        if (on && n.fetch_add(1) < 30)
+            LOG_INFO("flag", "destroy id=0x%x waiters=%u", u32arg(ctx, 0), f->waiters);
+    }
     if (f->waiters) return CELL_EBUSY;
     remove_object(u32arg(ctx, 0));
     return CELL_OK;
@@ -392,7 +408,20 @@ LV2_SYSCALL(85, sys_event_flag_wait) {
     if (f->type == 1 && f->waiters) return CELL_EPERM;
     uint64_t gen = f->cancel_gen;
     f->waiters++;
-    bool ok = wait_for(lk, f->cv, u64arg(ctx, 4), [&] { return flag_match(f->pattern, bits, mode) || f->cancel_gen != gen; });
+    const uint64_t timeout = u64arg(ctx, 4);
+    static const bool trace_flag = std::getenv("PS3BASE_FLAG_TRACE") != nullptr;
+    static std::atomic<int> tl{0};
+    const bool log_this = trace_flag && tl.fetch_add(1) < 30;
+    if (log_this)
+        LOG_INFO("flag", "wait id=0x%x bits=0x%llx mode=0x%x timeout=%llu pattern=0x%llx",
+                 u32arg(ctx, 0), static_cast<unsigned long long>(bits), mode,
+                 static_cast<unsigned long long>(timeout),
+                 static_cast<unsigned long long>(f->pattern));
+    bool ok = wait_for(lk, f->cv, timeout, [&] { return flag_match(f->pattern, bits, mode) || f->cancel_gen != gen; });
+    if (log_this)
+        LOG_INFO("flag", "wait id=0x%x -> ok=%d timedout=%d canceled=%d pattern=0x%llx",
+                 u32arg(ctx, 0), int(ok), int(!ok && f->cancel_gen == gen),
+                 int(f->cancel_gen != gen), static_cast<unsigned long long>(f->pattern));
     f->waiters--;
     if (result) vm::write64(result, f->pattern);
     if (f->cancel_gen != gen) return CELL_ECANCELED;

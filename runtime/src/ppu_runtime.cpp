@@ -238,22 +238,21 @@ void call_import_inner(Context& ctx, uint8_t* base, uint32_t index, ImportSlot& 
     /* A pointer argument below the guest's first mapped page is never valid.
      * Naming the caller and the import is what turns "fault at 0x38" into a
      * writer. */
-    if (ctx.gpr[3] && ctx.gpr[3] < 0x10000 && std::getenv("PS3BASE_BADPTR_LOG")) {
-        /* The return address alone names only the thunk. Walk the guest stack:
-         * each frame holds the saved LR at r1+16 for this compiler's prologue. */
-        LOG_WARN("import", "low-pointer arg r3=0x%llx to %s::%s lr=0x%llx r4=0x%llx r5=0x%llx",
-                 static_cast<unsigned long long>(ctx.gpr[3]), imp.module, *imp.name ? imp.name : "?",
-                 static_cast<unsigned long long>(ctx.lr),
-                 static_cast<unsigned long long>(ctx.gpr[4]),
-                 static_cast<unsigned long long>(ctx.gpr[5]));
-        uint32_t sp = static_cast<uint32_t>(ctx.gpr[1]);
-        LOG_WARN("import", "  guest stack chain from r1=0x%08x:", sp);
-        for (int d = 0; d < 12 && sp && vm::is_mapped(sp + 0x40); d++) {
-            const uint32_t back = vm::read32(sp);
-            const uint32_t saved_lr = vm::read32(sp + 16);
-            LOG_WARN("import", "   #%d sp=0x%08x back=0x%08x lr=0x%08x", d, sp, back, saved_lr);
-            if (back <= sp || back - sp > 0x10000) break;
-            sp = back;
+    const bool ptr_taking = imp.name &&
+        (std::strstr(imp.name, "lwmutex") || std::strstr(imp.name, "lwcond") ||
+         std::strstr(imp.name, "event")   || std::strstr(imp.name, "semaphore"));
+    if (ptr_taking && ctx.gpr[3] && ctx.gpr[3] < 0x10000 && std::getenv("PS3BASE_BADPTR_LOG")) {
+        /* Capped: an uncapped log here produced a million lines and starved the
+         * run to 224 flips in five minutes, which measures nothing. The guest
+         * stack walker is deliberately absent until its frame layout is
+         * validated against a known frame. */
+        static std::atomic<int> budget{200};
+        if (budget.fetch_sub(1) > 0) {
+            LOG_WARN("import", "low-pointer arg r3=0x%llx to %s::%s lr=0x%llx r4=0x%llx r5=0x%llx",
+                     static_cast<unsigned long long>(ctx.gpr[3]), imp.module, *imp.name ? imp.name : "?",
+                     static_cast<unsigned long long>(ctx.lr),
+                     static_cast<unsigned long long>(ctx.gpr[4]),
+                     static_cast<unsigned long long>(ctx.gpr[5]));
         }
     }
     if (st >= 0) {
@@ -266,6 +265,13 @@ void call_import_inner(Context& ctx, uint8_t* base, uint32_t index, ImportSlot& 
         call_indirect(ctx, base, code);
         ctx.gpr[2] = ld64(base, sp + 0x28);
         if (slot.log_args) LOG_INFO("import", "%s::%s returned 0x%llx", imp.module, imp.name, static_cast<unsigned long long>(ctx.gpr[3]));
+    if (imp.name && std::strstr(imp.name, "cellSpurs") && std::getenv("PS3BASE_SPURS_TRACE")) {
+        static std::atomic<int> n{0};
+        if (n.fetch_add(1) < 60)
+            LOG_INFO("spurs", "%s::%s -> 0x%llx (lr 0x%08x)", imp.module, imp.name,
+                     static_cast<unsigned long long>(ctx.gpr[3]),
+                     static_cast<unsigned int>(ctx.lr));
+    }
         return;
     }
     if (st == kHle) {
@@ -292,7 +298,16 @@ void syscall(Context& ctx, uint8_t* base) {
                                       ? std::atol(std::getenv("PS3BASE_SYSCALL_LOG"))
                                       : 0;
         static long seen = 0;
-        if (limit && seen < limit) {
+        static const double after_s = std::getenv("PS3BASE_SYSCALL_AFTER")
+                                          ? std::atof(std::getenv("PS3BASE_SYSCALL_AFTER"))
+                                          : 0.0;
+        static const double t0 = double(ppu::timebase()) / 80000000.0;
+        const bool late = (double(ppu::timebase()) / 80000000.0 - t0) >= after_s;
+        static const uint32_t only = std::getenv("PS3BASE_SYSCALL_THREAD")
+                                          ? static_cast<uint32_t>(std::strtoul(std::getenv("PS3BASE_SYSCALL_THREAD"), nullptr, 0))
+                                          : 0;
+        if (!late || (only && ctx.thread_id != only)) { /* filtered out */ }
+        else if (limit && seen < limit) {
             seen++;
             const char* spec = lv2::spec_name(n);
             LOG_INFO("sys", "%u %s lr=0x%08x r3=0x%llx r4=0x%llx", n,

@@ -1,4 +1,6 @@
 #include "common.h"
+
+#include <atomic>
 #include <cstdlib>
 #include "runtime/sysutil_events.h"
 
@@ -10,6 +12,7 @@ namespace {
 
 constexpr int32_t SCE_NP_MANAGER_STATUS_OFFLINE = -1;
 constexpr int32_t CELL_NET_CTL_STATE_Disconnected = 0;
+constexpr int32_t CELL_NET_CTL_STATE_IPObtained = 4;
 constexpr int64_t SCE_NP_ERROR_NOT_INITIALIZED = static_cast<int32_t>(0x8002aa01);
 constexpr int64_t CELL_NET_CTL_ERROR_NOT_CONNECTED = static_cast<int32_t>(0x80130106);
 
@@ -86,8 +89,15 @@ HLE_FUNC(cellNetCtl, cellNetCtlAddHandler) {
 }
 HLE_FUNC(cellNetCtl, cellNetCtlDelHandler) { ret(ctx, 0); }
 HLE_FUNC(cellNetCtl, cellNetCtlGetState) {
-    LOG_INFO("cellNetCtl", "GetState called");
-    if (uint32_t p = a32(ctx, 0)) vm::write32(p, CELL_NET_CTL_STATE_Disconnected);
+    /* Report the caller a handful of times; 17k identical lines tell nothing. */
+    static std::atomic<int> seen{0};
+    const int n = seen.fetch_add(1);
+    if (n < 6 || (n % 20000) == 0)
+        LOG_INFO("cellNetCtl", "GetState called #%d lr=0x%08x thread=0x%x", n,
+                 static_cast<uint32_t>(ctx.cia), ctx.thread_id);
+    const int32_t state = std::getenv("PS3BASE_NET_CONNECTED") ? CELL_NET_CTL_STATE_IPObtained
+                                                                : CELL_NET_CTL_STATE_Disconnected;
+    if (uint32_t p = a32(ctx, 0)) vm::write32(p, state);
     ret(ctx, 0);
 }
 HLE_FUNC(cellNetCtl, cellNetCtlGetInfo) { ret(ctx, CELL_NET_CTL_ERROR_NOT_CONNECTED); }
@@ -121,7 +131,13 @@ HLE_FUNC(cellNetCtl, cellNetCtlNetStartDialogUnloadAsync) {
      * dialog was cancelled, which is the title's "play offline" path. */
     if (result) {
         vm::write32(result + 0, 8);
-        vm::write32(result + 4, static_cast<uint32_t>(CELL_NET_CTL_ERROR_DIALOG_CANCELED));
+        /* PS3BASE_NET_CONNECTED reports the dialog as succeeded so the title
+         * takes its online path instead of "continue offline"; every other
+         * handler already agrees with that state. */
+        const int64_t code = std::getenv("PS3BASE_NET_CONNECTED")
+                                 ? 0
+                                 : static_cast<uint32_t>(CELL_NET_CTL_ERROR_DIALOG_CANCELED);
+        vm::write32(result + 4, static_cast<uint32_t>(code));
     }
     sysutil_send(CELL_SYSUTIL_NET_CTL_NETSTART_UNLOADED);
     LOG_INFO("cellNetCtl", "NetStartDialogUnloadAsync -> CANCELED + UNLOADED");

@@ -3,6 +3,8 @@
 #include "runtime/image.h"
 #include "runtime/loader.h"
 #include "runtime/log.h"
+#include "runtime/sysutil_events.h"
+#include "hle/common.h"
 #include "runtime/trace.h"
 #include "runtime/critpath.h"
 #include "runtime/hooks.h"
@@ -313,6 +315,36 @@ int main(int argc, char** argv) {
                 guest::status_dump();
                 spu::stack_dump();
                 lv2::rsx_status();
+            }
+        }).detach();
+    }
+    /* PS3BASE_SYSUTIL_EVENTS: deliver the per-frame system events a real PS3
+     * pushes to every registered sysutil callback (DRAWING_BEGIN/END and the
+     * periodic system-command notification). The title registers three slots and
+     * never calls CheckCallback itself in our environment, so without a producer
+     * its callback queue stays empty forever. Field order matches the guest
+     * handler: cb(status, param, userdata). */
+    if (std::getenv("PS3BASE_SYSUTIL_EVENTS")) {
+        std::thread([] {
+            host::set_thread_name("sysutil events");
+            uint64_t last = 0;
+            for (;;) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(16));
+                const uint64_t now = lv2::rsx_flip_count();
+                if (now == last) continue;
+                last = now;
+                hle::sysutil_post([](ppu::Context& c) {
+                    for (int slot = 0; slot < 4; slot++) {
+                        const uint32_t fn = hle::callback_function(slot);
+                        if (fn) hle::call_guest(c, fn, hle::callback_arg(slot), 0x00000002ull, 0);
+                    }
+                });
+                hle::sysutil_post([](ppu::Context& c) {
+                    for (int slot = 0; slot < 4; slot++) {
+                        const uint32_t fn = hle::callback_function(slot);
+                        if (fn) hle::call_guest(c, fn, hle::callback_arg(slot), 0x00000003ull, 0);
+                    }
+                });
             }
         }).detach();
     }
