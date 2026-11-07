@@ -244,6 +244,14 @@ target_include_directories(memory_map PRIVATE runtime/include)
 target_compile_options(memory_map PRIVATE ${PS3BASE_ARCH_FLAGS})
 target_link_libraries(memory_map PRIVATE ${CMAKE_DL_LIBS} pthread)
 add_test(NAME memory_map COMMAND memory_map)
+# Cross-processor reservation invalidation: an SPU write must invalidate an
+# active PPU reservation on the same line, or stcx. commits unseen data.
+add_executable(reservation_xproc tests/reservation_xproc.cpp runtime/src/memory.cpp runtime/src/reservation.cpp runtime/src/host.cpp runtime/src/log.cpp)
+target_include_directories(reservation_xproc PRIVATE runtime/include)
+target_compile_options(reservation_xproc PRIVATE ${PS3BASE_ARCH_FLAGS})
+target_link_libraries(reservation_xproc PRIVATE ${CMAKE_DL_LIBS} pthread)
+add_test(NAME reservation_xproc COMMAND reservation_xproc)
+
 
 if(EXISTS "${CMAKE_SOURCE_DIR}/out/conformance/tests.cpp")
     add_executable(ppu_conformance tests/ppu_conformance/harness.cpp "${CMAKE_SOURCE_DIR}/out/conformance/tests.cpp")

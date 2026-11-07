@@ -8,6 +8,7 @@
 #include <chrono>
 #include <immintrin.h>
 #include <cstdio>
+#include <cstdarg>
 #include <cstdlib>
 #include <string>
 #include <vector>
@@ -125,6 +126,26 @@ const bool g_logged = std::getenv("GOWA_RSV_LOG") != nullptr;
 
 }
 
+
+namespace {
+uint32_t trace_line() {
+    static const uint32_t v = [] {
+        const char* e = std::getenv("PS3BASE_RSV_LINE");
+        return e ? static_cast<uint32_t>(std::strtoul(e, nullptr, 0)) : 0xFFFFFFFFu;
+    }();
+    return v;
+}
+void rlog(const char* op, uint32_t line, const char* fmt, ...) {
+    if (trace_line() != line) return;
+    char buf[192];
+    va_list ap;
+    va_start(ap, fmt);
+    std::vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    LOG_INFO("rsvline", "%-9s line=0x%08x %s", op, line, buf);
+}
+}  // namespace
+
 std::atomic<uint64_t>& version(uint32_t addr) { return entry(addr).ver; }
 
 std::atomic<uint64_t> g_hard_waits{0};
@@ -182,16 +203,24 @@ void log_change(uint32_t line, uint32_t offset, const uint8_t* data, uint32_t si
 bool commit_if(uint32_t line, uint64_t rtime, const uint8_t* expected, const uint8_t* data, uint32_t offset, uint32_t size, bool data_only) {
     Entry& e = entry(line);
     static const bool strict = std::getenv("GOWA_RSV_STRICT") != nullptr;
-    if ((strict || !data_only) && e.ver.load(std::memory_order_acquire) != rtime) return false;
+    if ((strict || !data_only) && e.ver.load(std::memory_order_acquire) != rtime) {
+        rlog("commit_stale", line, "rtime=%llu ver=%llu",
+             static_cast<unsigned long long>(rtime),
+             static_cast<unsigned long long>(e.ver.load()));
+        return false;
+    }
     uint64_t v0 = lock_line(e);
     if ((strict || !data_only) && v0 != rtime) {
         unlock_line(e, v0, false);
         return false;
     }
     if (std::memcmp(vm::ptr(line + offset), expected, size) != 0) {
+        rlog("commit_badsnap", line, "offset=%u size=%u", offset, size);
         unlock_line(e, v0, false);
         return false;
     }
+    rlog("commit_ok", line, "offset=%u size=%u rtime=%llu", offset, size,
+         static_cast<unsigned long long>(rtime));
     if (g_logged) log_change(line, offset, data, size, size == 128 ? "putllc" : "stcx");
     uint8_t* dst = vm::ptr(line + offset);
     for (uint32_t i = 0; i < size; i += 8) {
@@ -212,6 +241,7 @@ bool commit_if(uint32_t line, uint64_t rtime, const uint8_t* expected, const uin
 void store_unconditional(uint32_t line, const uint8_t* data) {
     Entry& e = entry(line);
     uint64_t v0 = lock_line(e);
+    rlog("putlluc", line, "ver=%llu", static_cast<unsigned long long>(v0));
     if (g_logged) log_change(line, 0, data, 128, "putlluc");
     std::memcpy(vm::ptr(line), data, 128);
     unlock_line(e, v0, true);
