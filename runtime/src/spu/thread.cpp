@@ -1102,6 +1102,13 @@ void SpuThread::process_mfc(uint32_t cmd) {
             set_events(EV_LR);
         }
         if (job_stats) (ok ? g_putllc_ok : g_putllc_fail).fetch_add(1, std::memory_order_relaxed);
+        if (!ok && std::getenv("GOWA_PUTLLC_TRACE")) {
+            static std::atomic<int> n{0};
+            if (n.fetch_add(1) < 40)
+                LOG_INFO("putllc", "FAIL line=0x%08x raddr=0x%08x rtime=%llu ver=%llu",
+                         line, raddr, static_cast<unsigned long long>(rtime),
+                         static_cast<unsigned long long>(rsv::version(line).load()));
+        }
         if (ok) critpath::spu_stored(cp, slot, line, 128);
         raddr = 0;
         atomic_stat = ok ? 0 : 1;
