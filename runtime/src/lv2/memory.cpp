@@ -124,15 +124,17 @@ LV2_SYSCALL(312, sys_vm_get_statistics) {
     auto it = g_allocs.find(addr);
     if (it == g_allocs.end()) return CELL_EINVAL;
     if (stat && vm::range_mapped(stat, 48)) {
-        /* sys_vm_statistics_t is SIX u64 counters -- 48 bytes, not 64. Writing
-         * eight clobbered the caller's saved r30/r31: the guest passes r1+112 as
-         * the output buffer and keeps those registers at r1+160/r1+168, so the
-         * two extra words overwrote them with zero. That is what made the pool
-         * pointer null four milliseconds later.
-         * refs/rpcs3/rpcs3/Emu/Cell/lv2/sys_vm.cpp:436 sets exactly six fields. */
+        /* Layout from refs/rpcs3/rpcs3/Emu/Cell/lv2/sys_vm.h:18 --
+         *   u64 page_fault_ppu  @0    u64 page_in        @16
+         *   u64 page_fault_spu  @8    u64 page_out       @24
+         *   u32 pmem_total      @32   u32 pmem_used      @36
+         *   u64 timestamp       @40                       => 48 bytes
+         * The two physical counters are u32, not u64. Writing them as u64 made
+         * the buffer 56 bytes and stepped past its end. */
         for (int i = 0; i < 6; i++) vm::write64(stat + i * 8, 0);
-        vm::write64(stat + 32, it->second);   /* pmem_total */
-        vm::write64(stat + 40, 0);            /* pmem_used  */
+        vm::write32(stat + 32, it->second);          /* pmem_total */
+        vm::write32(stat + 36, 0);                   /* pmem_used  */
+        vm::write64(stat + 40, lv2::system_time_us()); /* timestamp */
     }
     return CELL_OK;
 }
