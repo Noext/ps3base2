@@ -185,6 +185,7 @@ int32_t resolve(uint32_t index, ImportSlot& slot) {
 bool has_code_at(uint32_t addr) { return lookup(addr) != nullptr; }
 
 void call_indirect(Context& ctx, uint8_t* base, uint32_t addr) {
+    force::tick();
     /* Log the vtable target and its owners just before dispatch from
      * f_0006ee9c (lr 0x6eec4): the target is what returns the decisive 0. */
     if (std::getenv("PS3BASE_VTARGET")) {

@@ -43,3 +43,29 @@ progressed past spawn area into post-processing.
 
 **Time to reach this point: ~519 s of emulated time** for spawn-area generation.
 Speed of the SPU work is a separate concern, to be addressed later.
+
+## Experiment: forcing the chunk-update flag (forcing #2, NOT committed as a solution)
+
+Rule: `e98046c00:1:5000` -- call sys_event_flag_set(0x98046c00, 0x1) once, 5 s
+after the first UserAutoSave completes.
+
+Result, measured:
+
+```
+349.721  force: save completed; flag rule armed
+354.721  force: APPLIED flag 0x98046c00 bits=0x1 -> 0x0 (5000 ms after save)
+354.721  flagtrace: wait-ok (4J) Chunk update lr=0x0014f974 bits=0x3
+354.721  flagtrace: set  from=(4J) Chunk update lr=0x0014f994 bits=0x1 0x0 -> 0x1
+354.726  flagtrace: set  from=(4J) Chunk update lr=0x0014fbe4 bits=0x2 0x1 -> 0x3
+```
+
+**(4J) Chunk update wakes up.** It runs the code path that was unreachable
+before (the index-0 set at 0x14f994 and the index-1 set at 0x14fbe4 both
+execute), completes its work, and then **blocks again** on the same flag.
+
+**The screen does NOT close.** "Preparing to Save Level" stays, and the title
+does not render the world.
+
+So the flag is necessary but not sufficient: waking that thread once lets it do
+one round of work and it goes back to waiting. The flag is not being *set*
+periodically by whatever should set it, and forcing it once only buys one cycle.

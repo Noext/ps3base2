@@ -12,11 +12,14 @@
  */
 #include "runtime/force.h"
 
+#include "lv2/sync.h"
 #include "runtime/log.h"
 #include "runtime/memory.h"
 
 #include <cstdlib>
 #include <cstring>
+#include <chrono>
+#include <atomic>
 #include <map>
 #include <mutex>
 #include <string>
@@ -26,7 +29,7 @@ namespace force {
 namespace {
 
 struct Rule {
-    enum Kind { Func, Write, Lr } kind = Func;
+    enum Kind { Func, Write, Lr, Flag } kind = Func;
     uint32_t addr = 0;
     uint32_t size = 4;
     uint64_t value = 0;
@@ -36,6 +39,9 @@ struct Rule {
 std::vector<Rule> g_rules;
 bool g_loaded = false;
 std::mutex g_lock;
+int g_flag_delay_ms = 5000;
+std::atomic<bool> g_save_done{false};
+std::chrono::steady_clock::time_point g_save_at;
 
 void load() {
     if (g_loaded) return;
@@ -51,15 +57,26 @@ void load() {
         pos = end + 1;
         if (item.empty()) continue;
         const size_t eq = item.find('=');
-        if (eq == std::string::npos) {
+        const bool is_flag = item.size() > 1 && item[0] == 'e';
+        if (eq == std::string::npos && !is_flag) {
             LOG_WARN("force", "rule '%s' has no '='", item.c_str());
             continue;
         }
-        const std::string lhs = item.substr(0, eq);
-        const uint64_t value = std::strtoull(item.c_str() + eq + 1, nullptr, 0);
+        const std::string lhs = is_flag ? item : item.substr(0, eq);
+        const uint64_t value = is_flag ? 0 : std::strtoull(item.c_str() + eq + 1, nullptr, 0);
         Rule r;
         r.value = value;
-        if (lhs.size() > 2 && lhs[0] == 'l' && lhs[1] == 'r') {
+        if (is_flag) {
+            /* e<id>:<bits>:<delay_ms> -- set an event flag once, delay_ms after
+             * the first UserAutoSave completes. */
+            r.kind = Rule::Flag;
+            std::string a = lhs.substr(1);
+            size_t c1 = a.find(':');
+            size_t c2 = c1 == std::string::npos ? std::string::npos : a.find(':', c1 + 1);
+            r.addr = static_cast<uint32_t>(std::strtoul(a.substr(0, c1).c_str(), nullptr, 16));
+            r.size = static_cast<uint32_t>(std::strtoul(a.substr(c1 + 1, c2 - c1 - 1).c_str(), nullptr, 16));
+            g_flag_delay_ms = c2 == std::string::npos ? 5000 : std::atoi(a.c_str() + c2 + 1);
+        } else if (lhs.size() > 2 && lhs[0] == 'l' && lhs[1] == 'r') {
             r.kind = Rule::Lr;
             r.addr = static_cast<uint32_t>(std::strtoul(lhs.c_str() + 2, nullptr, 16));
         } else if (lhs.size() > 1 && lhs[0] == 'w') {
@@ -79,7 +96,7 @@ void load() {
     }
     for (const Rule& r : g_rules)
         LOG_INFO("force", "rule %s 0x%08x = 0x%llx", r.kind == Rule::Func ? "func" :
-                 r.kind == Rule::Lr ? "lr" : "write", r.addr,
+                 r.kind == Rule::Lr ? "lr" : r.kind == Rule::Flag ? "flag" : "write", r.addr,
                  static_cast<unsigned long long>(r.value));
 }
 
@@ -120,6 +137,32 @@ void on_return(uint32_t fn_addr, uint32_t lr_addr, uint64_t& r3) {
                      static_cast<unsigned long long>(r.value));
         }
         return;
+    }
+}
+
+void notify_save_done() {
+    if (g_save_done.exchange(true)) return;
+    g_save_at = std::chrono::steady_clock::now();
+    LOG_INFO("force", "save completed; flag rule armed");
+}
+
+void tick() {
+    load();
+    if (!g_save_done.load(std::memory_order_relaxed)) return;
+    static std::atomic<bool> fired{false};
+    if (fired.load(std::memory_order_relaxed)) return;
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - g_save_at).count();
+    if (elapsed < g_flag_delay_ms) return;
+    if (fired.exchange(true)) return;
+    std::lock_guard lk(g_lock);
+    for (Rule& r : g_rules) {
+        if (r.kind != Rule::Flag || r.logged) continue;
+        const int64_t rc = lv2::event_flag_set_bits(r.addr, r.size);
+        r.logged = true;
+        LOG_INFO("force", "APPLIED flag 0x%08x bits=0x%x -> 0x%llx (%lld ms after save)",
+                 r.addr, r.size, static_cast<unsigned long long>(rc),
+                 static_cast<long long>(elapsed));
     }
 }
 

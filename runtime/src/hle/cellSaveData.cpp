@@ -1,4 +1,5 @@
 #include "common.h"
+#include "runtime/force.h"
 #include "runtime/vfs.h"
 #include "runtime/compat.h"
 
@@ -411,7 +412,11 @@ HLE_FUNC(cellSysutil, cellSaveDataUserAutoSave) {
     const std::string folded = "u" + std::to_string(user) + "_" + name;
     Op op{ctx, folded, save_root() + "/" + folded, set_buf, func_stat, func_file,
           userdata, true};
-    ret(ctx, run_op(op));
+    {
+        const int32_t rc = run_op(op);
+        force::notify_save_done();
+        ret(ctx, rc);
+    }
 }
 
 /* cellSaveDataEnableOverlay(enable): the autosave indicator. Nothing to draw. */
