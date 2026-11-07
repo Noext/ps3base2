@@ -147,7 +147,12 @@ LV2_SYSCALL(312, sys_vm_get_statistics) {
          * The two physical counters are u32, not u64. Writing them as u64 made
          * the buffer 56 bytes and stepped past its end. */
         for (int i = 0; i < 6; i++) vm::write64(stat + i * 8, 0);
-        vm::write32(stat + 32, it->second);          /* pmem_total */
+        /* pmem_total is the PHYSICAL size attached to this mapping, not its
+         * virtual size. The caller computes its next append_memory request as
+         * pmem_total minus what it already mapped; writing vsize made it ask
+         * for 0x4000000-0x100000 = 0x3f00000 and then 0xfc200000 once that
+         * subtraction underflowed. */
+        vm::write32(stat + 32, g_vm_psize.count(addr) ? g_vm_psize[addr] : 0);
         vm::write32(stat + 36, 0);                   /* pmem_used  */
         vm::write64(stat + 40, lv2::system_time_us()); /* timestamp */
     }
