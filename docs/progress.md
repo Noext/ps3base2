@@ -132,3 +132,48 @@ an allocation's size is unmapped, but the allocator legitimately places the
 next allocation there. The check now uses an address far from anything,
 because a test that encodes a layout it does not control is a test that will
 lie later.
+
+
+## World creation: the wall at "Finalizing..." (rounds 18-85)
+
+The crash that blocked world creation is **fixed**: `sys_vm_get_statistics` wrote
+64 bytes into a 48-byte structure and clobbered the caller's saved registers.
+Eight further defects were found and fixed on the same path:
+
+| commit | defect |
+|---|---|
+| `0663ea9` | `sys_vm_memory_map` (300) missing -> null pool pointer -> crash |
+| `d5f3ea5` | `sys_vm_get_statistics` 64 bytes instead of 48 |
+| `611b678` | `sys_vm_return_memory` OK instead of `CELL_EBUSY` |
+| `e9d4a54` | `sys_vm_append_memory` accepted 4 GiB behind a 64 MiB mapping |
+| `28af660` | `pmem_total`/`pmem_used` are u32, not u64 |
+| `f23af51` | `cellRtc` entirely absent (four functions) |
+| `4857bd2` | `cellAudioOutSetCopyControl` missing |
+| `ae01b76` | `pmem_total` reported vsize, so the title computed a bogus append |
+
+The title now creates its world (`sys_vm_memory_map -> 0x100c0000`), the server
+thread runs and exits cleanly, and no run of any length crashes.
+
+**What remains**: the screen stays on "Finalizing..." with the bar full, and no
+workload generating terrain ever reaches the SPUs. Measured, in order:
+
+- the progress bar reaches 10140 green pixels and does not change over 15 samples;
+- `cellSpurs` is fully initialised (60 calls, every one returning 0) and
+  `cellSpursEventFlagSet` alone runs ~19922 times per run;
+- SPUs are not dead: `spuIdling` cycles through `0x1f 0x0f 0x1e 0x17 0x1b 0x1d`,
+  so at least one SPU is busy in about 31 % of samples, and the kernels execute
+  tens of millions of instructions;
+- the thread `(4J) Chunk update` waits on LV2 event flag `0x98046c00` for bits
+  `0x3` while the single set on that flag carries `0x2`; bit 0 is never set by
+  anything we execute, and `flag_match` matches RPCS3 exactly;
+- no `UserAutoSave`, no world directory, no world textures and no chunk geometry
+  are ever requested.
+
+### A trap worth remembering
+
+Three conclusions in this stretch were wrong **because the log was capped**:
+`sys_fs_read` looked like a hang, `cellSpursEventFlagSet` looked like it was
+never called, and the SPURS loop looked like it stopped at t=1.3 s. Each cap
+(`n < 60`, `n < 30`) truncated the very evidence that contradicted the guess.
+Sample a counter in time, and never read "the log ends here" as "the title
+stopped".
