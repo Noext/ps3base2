@@ -11,6 +11,7 @@ constexpr uint32_t kUserMemory = 0x0D500000;
 std::mutex g_lock;
 uint32_t g_used = 0;
 std::map<uint32_t, uint32_t> g_allocs;
+std::map<uint32_t, uint32_t> g_vm_psize;   /* virtual map -> mapped physical */
 
 struct Container : Object {
     uint32_t size = 0;
@@ -62,6 +63,7 @@ LV2_SYSCALL(300, sys_vm_memory_map) {
     if (!addr) return CELL_ENOMEM;
     g_used += static_cast<uint32_t>(psize);
     g_allocs[addr] = static_cast<uint32_t>(vsize);
+    g_vm_psize[addr] = static_cast<uint32_t>(psize);
     vm::write32(out, addr);
     LOG_INFO("vm", "sys_vm_memory_map -> 0x%08x (used 0x%x / 0x%x)", addr, g_used, kUserMemory);
     return CELL_OK;
@@ -100,6 +102,14 @@ LV2_SYSCALL(303, sys_vm_return_memory) {
     LOG_INFO("vm", "sys_vm_return_memory addr 0x%x size 0x%llx", addr,
              static_cast<unsigned long long>(size));
     if (!size || size % 0x100000) return CELL_EINVAL;
+    std::lock_guard lk(g_lock);
+    auto it = g_vm_psize.find(addr);
+    if (it == g_vm_psize.end()) return CELL_EINVAL;
+    /* refs/rpcs3/.../sys_vm.cpp:238 -- a return that would leave less than one
+     * page mapped is EBUSY, not OK. Saying OK here made the title believe it had
+     * released the pool and it tore the world server down immediately. */
+    if (static_cast<uint64_t>(it->second) <= size) return CELL_EBUSY;
+    it->second -= static_cast<uint32_t>(size);
     return CELL_OK;
 }
 
