@@ -260,6 +260,33 @@ target_compile_options(lock_counter PRIVATE ${PS3BASE_ARCH_FLAGS})
 target_link_libraries(lock_counter PRIVATE ${CMAKE_DL_LIBS} pthread)
 add_test(NAME lock_counter COMMAND lock_counter)
 
+# The title's OWN spinlock (lwarx/stwcx in lifted code), through the same
+# ppu::lwarx / ppu::stwcx entry points the guest calls. A lost update here is
+# two threads inside one critical section -- the shape of the 0x64c044 crash.
+add_executable(guest_spinlock tests/guest_spinlock.cpp runtime/src/ppu_ops.cpp runtime/src/memory.cpp runtime/src/reservation.cpp runtime/src/host.cpp runtime/src/log.cpp)
+target_include_directories(guest_spinlock PRIVATE runtime/include "${CMAKE_SOURCE_DIR}/runtime/src")
+target_compile_options(guest_spinlock PRIVATE ${PS3BASE_ARCH_FLAGS})
+target_link_libraries(guest_spinlock PRIVATE ${CMAKE_DL_LIBS} pthread)
+add_test(NAME guest_spinlock COMMAND guest_spinlock)
+
+add_executable(reservation_increment tests/reservation_increment.cpp runtime/src/ppu_ops.cpp runtime/src/memory.cpp runtime/src/reservation.cpp runtime/src/host.cpp runtime/src/log.cpp)
+target_include_directories(reservation_increment PRIVATE runtime/include "${CMAKE_SOURCE_DIR}/runtime/src")
+target_compile_options(reservation_increment PRIVATE ${PS3BASE_ARCH_FLAGS})
+target_link_libraries(reservation_increment PRIVATE ${CMAKE_DL_LIBS} pthread)
+add_test(NAME reservation_increment COMMAND reservation_increment)
+
+add_executable(lwmutex_contention tests/lwmutex_contention.cpp runtime/src/lv2/lwmutex.cpp runtime/src/lv2/object.cpp runtime/src/ppu_ops.cpp runtime/src/memory.cpp runtime/src/reservation.cpp runtime/src/host.cpp runtime/src/log.cpp)
+target_include_directories(lwmutex_contention PRIVATE runtime/include "${CMAKE_SOURCE_DIR}/runtime/src")
+target_compile_options(lwmutex_contention PRIVATE ${PS3BASE_ARCH_FLAGS})
+target_link_libraries(lwmutex_contention PRIVATE ${CMAKE_DL_LIBS} pthread)
+add_test(NAME lwmutex_contention COMMAND lwmutex_contention)
+
+add_executable(lwmutex_hle tests/lwmutex_hle.cpp runtime/src/memory.cpp runtime/src/reservation.cpp runtime/src/host.cpp runtime/src/log.cpp)
+target_include_directories(lwmutex_hle PRIVATE runtime/include "${CMAKE_SOURCE_DIR}/runtime/src" "${CMAKE_SOURCE_DIR}/runtime/src/hle")
+target_compile_options(lwmutex_hle PRIVATE ${PS3BASE_ARCH_FLAGS})
+target_link_libraries(lwmutex_hle PRIVATE ${CMAKE_DL_LIBS} pthread)
+add_test(NAME lwmutex_hle COMMAND lwmutex_hle)
+
 
 
 if(EXISTS "${CMAKE_SOURCE_DIR}/out/conformance/tests.cpp")
