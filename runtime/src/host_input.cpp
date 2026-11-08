@@ -1,6 +1,8 @@
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <mutex>
 
 #ifdef _WIN32
@@ -138,6 +140,14 @@ void poll_pad(uint16_t* b) {
 
 namespace {
 
+/* Event-edge latch. "xdotool key" emits press and release in the same
+ * millisecond, so a 60 Hz poll of SDL_GetKeyboardState never observes it and
+ * the press is silently dropped -- which is why the menus appeared to eat
+ * random presses. Every key event the window thread sees is latched here for a
+ * minimum number of poll frames, so an instantaneous tap still reads as held. */
+constexpr int kLatchFrames = 5;
+std::atomic<int> g_latch[SDL_SCANCODE_COUNT];
+
 const bool* keys() {
     int n = 0;
     return SDL_GetKeyboardState(&n);
@@ -145,7 +155,11 @@ const bool* keys() {
 
 bool key(SDL_Scancode sc) {
     const bool* k = keys();
-    return k && k[sc];
+    if (k && k[sc]) return true;
+    const int latched = g_latch[sc].load(std::memory_order_relaxed);
+    if (latched <= 0) return false;
+    g_latch[sc].store(latched - 1, std::memory_order_relaxed);
+    return true;
 }
 
 SDL_Gamepad* pad() {
@@ -166,6 +180,20 @@ void* native_window();
 }
 
 namespace host {
+
+void note_key(int scancode, bool down) {
+    if (scancode < 0 || scancode >= SDL_SCANCODE_COUNT) return;
+    if (!down) return;   /* a release never extends the latch */
+    g_latch[scancode].store(kLatchFrames, std::memory_order_relaxed);
+}
+
+bool allow_unfocused() {
+    static const bool on = [] {
+        const char* e = std::getenv("PS3BASE_ALLOW_UNFOCUSED_INPUT");
+        return e && e[0] == '1';
+    }();
+    return on;
+}
 
 void poll_pad(uint16_t* b) {
     void* w = gpu::native_window();
@@ -199,7 +227,11 @@ void poll_pad(uint16_t* b) {
         stick(axis(SDL_GAMEPAD_AXIS_RIGHTX), -axis(SDL_GAMEPAD_AXIS_RIGHTY), 8689, b[4], b[5]);
         stick(axis(SDL_GAMEPAD_AXIS_LEFTX), -axis(SDL_GAMEPAD_AXIS_LEFTY), 7849, b[6], b[7]);
     }
-    if (SDL_GetKeyboardFocus() != static_cast<SDL_Window*>(w)) return;
+    /* Without a window manager the X input focus is PointerRoot, so it moves with
+     * the pointer and any second instance on the same display steals it. The
+     * escape hatch makes the keyboard path usable on a bare server; on a real
+     * desktop it stays off so background windows do not drive the game. */
+    if (!allow_unfocused() && SDL_GetKeyboardFocus() != static_cast<SDL_Window*>(w)) return;
     if (key(SDL_SCANCODE_BACKSPACE)) press(b, 2, 0x01, 0);
     if (key(SDL_SCANCODE_RETURN)) press(b, 2, 0x08, 0);
     if (key(SDL_SCANCODE_UP)) press(b, 2, 0x10, 10);
@@ -218,6 +250,12 @@ void poll_pad(uint16_t* b) {
     if (key(SDL_SCANCODE_L)) b[6] = 255;
     if (key(SDL_SCANCODE_I)) b[7] = 0;
     if (key(SDL_SCANCODE_K)) b[7] = 255;
+    /* Right stick: the in-game look control had no keyboard binding at all, so
+     * the camera could not be aimed and break/place had no target. */
+    if (key(SDL_SCANCODE_R)) b[4] = 255;
+    if (key(SDL_SCANCODE_F)) b[4] = 0;
+    if (key(SDL_SCANCODE_T)) b[5] = 0;
+    if (key(SDL_SCANCODE_G)) b[5] = 255;
 }
 
 #endif
