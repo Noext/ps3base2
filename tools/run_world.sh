@@ -220,7 +220,11 @@ launch_game() {
     [ -n "$FORCE_SPEC" ] && env_args+=("PS3BASE_FORCE=$FORCE_SPEC")
     local e
     for e in ${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"}; do env_args+=("$e"); done
-    ( cd "$TREE" && env "${env_args[@]}" timeout "$SECONDS_BUDGET" "$BIN" --no-launcher > "$LOG" 2>&1 ) &
+    # No subshell: \`cd ... && cmd &\` would put the subshell's pid in $!, and a
+    # pid that is not the game's makes the window lookup below match nothing --
+    # capture then falls back to any Minecraft window and can photograph a
+    # neighbour's instance when two agents share DISPLAY=:0.
+    env --chdir="$TREE" "${env_args[@]}" timeout "$SECONDS_BUDGET" "$BIN" --no-launcher > "$LOG" 2>&1 &
     GAME_PID=$!
 }
 
