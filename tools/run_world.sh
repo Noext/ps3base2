@@ -100,6 +100,18 @@ prep_vfs() {
     fi
 }
 
+prep_generated() {
+    # The recompiled PPU/SPU sources are produced from the disc and never
+    # tracked (40 MB, 243 files). A fresh worktree has none, so CMake refuses to
+    # configure. Copy them from the main checkout once.
+    if [ ! -d "$TREE/out/ppu" ]; then
+        [ -d "$MAIN_TREE/out/ppu" ] || die "no out/ppu here and none in $MAIN_TREE"
+        echo "run_world: copying generated sources from $MAIN_TREE/out"
+        mkdir -p "$TREE/out"
+        cp -a "$MAIN_TREE/out/." "$TREE/out/"
+    fi
+}
+
 prep_build() {
     [ "$DO_BUILD" = 1 ] || { [ -x "$BIN" ] || die "no binary at $BIN and --no-build given"; return; }
     local cc
@@ -185,6 +197,7 @@ capture_loop() {
 # --------------------------------------------------------------------- run --
 prep_disc
 prep_links
+prep_generated
 prep_vfs
 prep_build
 ensure_xvfb
