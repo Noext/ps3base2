@@ -163,6 +163,59 @@ Le titre, ayant obtenu "pas de restriction", tente la session **en ligne** et
 echoue sur les imports `sceNpCommerce2` non implementes. L'etat 5 de
 f_002eee64 n'est toujours pas atteint (`ADVANCE=0` sur tout le run).
 
+## Deuxieme correctif de feuille : sceNpCommerce2 n'existait pas du tout
+
+Le log montrait trois imports sans implementation :
+`sceNpCommerce2Init`, `sceNpCommerce2CreateCtx`,
+`sceNpCommerce2CreateSessionStart`. Un import non implemente ne renvoie rien
+de defini : le titre voyait une session de magasin echouee et abandonnait le
+chargement.
+
+Implementes dans `runtime/src/hle/np.cpp` d'apres la semantique **hors ligne**
+de RPCS3 (refs/rpcs3/.../sceNpCommerce2.cpp:129 Init, :157 CreateCtx,
+:262 CreateSessionStart, :306 CreateSessionFinish) : Init pose un drapeau,
+CreateCtx alloue un identifiant local, CreateSessionStart poste l'evenement
+`CREATE_SESSION_DONE` par la file sysutil -- **aucune socket, aucun reseau**.
+Les codes de retour sont ceux de RPCS3 (ALREADY_INITIALIZED au second Init,
+NOT_INITIALIZED avant le premier).
+
+Mesure : `Commerce2Init`, `Commerce2CreateCtx version=2`,
+`Commerce2CreateSessionStart ctx=1` s'executent, et Load lit alors la
+sauvegarde **entierement** :
+
+```
+savedata: load 'BLES01976--261107165037' (existing)
+savedata: read BLES01976--261107165037/GAMEDATA type 1 offset 0x0 size 0x39fe95 -> 0x39fe95
+vm: sys_vm_memory_map -> 0x100c0000 (used 0x5da0000 / 0xd500000)
+```
+
+## Le troisieme verrou, et la preuve du chargement
+
+Il restait une incoherence de notre runtime, nommee et mesuree :
+
+- `cellNetCtlGetState` repond **Disconnected** (aucun `PS3BASE_NET_CONNECTED`),
+- `sceNpManagerGetStatus` repond **ONLINE** (sign-in simule du SDK).
+
+Le titre croyait donc etre en ligne sans reseau -- ce qui est exactement
+"Connection to the server was lost". En rendant les deux coherents
+(`PS3BASE_NP_OFFLINE=1`, un mode deja present dans le runtime et non un
+patch : refs/rpcs3 np_handler::get_psn_status OFFLINE), **le monde se charge** :
+
+```
+Initializing server
+Loading spawn area          [progress bar advancing]
+```
+
+et le log montre la lecture complete de la sauvegarde puis
+`sys_vm_memory_map`. C'est la premiere fois que le chargement d'un monde
+existant va au-dela du panneau de detail dans cette campagne.
+
+**Ce qui manque encore pour la capture finale :** le run a ete tue
+exterieurement (exit 137, `Killed`) a 643 s alors que la barre progressait --
+pas un crash du jeu (`crashes: 0`, 478 flips, dernier flip a 641 s). Il faut
+laisser la generation de spawn aller au bout. C'est une question de budget de
+run, pas de code.
+
 ## Ce que j'ai etabli, et ce qui reste
 
 **Etabli par mesure :**
@@ -200,6 +253,14 @@ ports voisins. Les autres variables ajoutees sont de la journalisation
 ![More Options : la case "Online Game" cochee, celle que le titre demandait de decocher](/root/Dev/ps3base2-wt43/docs/loading-43/04-more-options-online-game.png)
 
 ![Liste des 6 sauvegardes existantes](/root/Dev/ps3base2-wt43/docs/loading-43/05-world-list.png)
+
+![PREUVE DU CHARGEMENT : "Initializing server / Loading spawn area" avec barre de progression, apres lecture complete du GAMEDATA](/root/Dev/ps3base2-wt43/docs/loading-43/07-loading-spawn-area.png)
+
+![La barre progresse : la generation du spawn demarre (le run a ete tue a 643 s avant la fin)](/root/Dev/ps3base2-wt43/docs/loading-43/08-loading-progress-bar.png)
+
+![Panneau de detail en mode NP coherent hors-ligne](/root/Dev/ps3base2-wt43/docs/loading-43/09-detail-offline-np.png)
+
+!["Online Game" decoche : le titre accepte la voie hors-ligne](/root/Dev/ps3base2-wt43/docs/loading-43/10-online-game-unchecked.png)
 
 ## Fichiers modifies
 
