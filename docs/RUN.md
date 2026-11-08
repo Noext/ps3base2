@@ -427,3 +427,28 @@ Screenshot between presses and count by twos rather than trusting a fixed
 number. This is the same family of mistake as the recurring autosave dialog: a
 blind fixed sequence desynchronises, and the screen then looks frozen when it is
 only waiting on a different row.
+
+## The new-world form: the Seed field swallows navigation
+
+Measured repeatedly while driving a final validation run: after entering the
+form, `Down` presses stop moving the selection and the cursor jumps back to the
+**Seed** text field. The field takes keyboard focus and consumes the navigation
+keys, so a press count that worked on one run does not work on the next.
+
+What did work reliably in the same session, in order:
+
+1. `z` four times to leave the front end.
+2. On the form, `Down` five times, then **screenshot**: the cursor lands on
+   `Difficulty`, not on `Create New World`.
+3. `Down` twice more, then screenshot again -- if the cursor is back on `Seed`,
+   the field has taken focus and the count must be restarted.
+
+The robust approach is the one the autosave track ended up building:
+`tools/drive_world.py <display> <game.log> [timeout] [shots-dir]`, which drives
+by reading the screen rather than by counting presses, and reports
+`WORLD-MAPPED` only when the log shows a world. Use it instead of hand-driving
+when a run must reach the world reliably.
+
+**Do not count presses as a contract.** Three separate tracks lost runs to
+fixed press counts on this form (Down x6, Down x2, Down x5); the field focus and
+the wrapping list make any fixed count unreliable.
