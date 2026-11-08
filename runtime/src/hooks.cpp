@@ -736,6 +736,41 @@ static void morton_trace(ppu::Context& ctx)
              obj ? vm::read32(obj + 0) : 0);
 }
 
+/* PS3BASE_LIST_GUARD=1: before f_0064c044 passes a node to f_004e2ac0, check
+ * that the node is mapped and that its +28/+32 fields are not pointers into the
+ * title's own text. When one of them IS, the walk has left the structure: the
+ * crash that follows is a SIGSEGV two levels down inside ppu::ld32, in the
+ * wrong thread's frames, readable only from a memory dump taken afterwards.
+ * This names the node and both values at the moment it happens. Off by default.
+ *
+ * The title's text runs 0x10000..0xba3688 (bin/mc/mc.elf, first LOAD). A data
+ * pointer never lands there; an instruction word copied into a pointer field
+ * always does. That is exactly what the two dumps show: +28 held 0x00721f30
+ * ('stw r3,0(r26)') in one and 0x00730100 in the other. */
+static bool list_guard(ppu::Context& ctx) {
+    static const bool on = std::getenv("PS3BASE_LIST_GUARD") != nullptr;
+    if (!on) return false;
+    const uint32_t node = static_cast<uint32_t>(ctx.gpr[30]);
+    if (!node) return false;
+    if (!vm::range_mapped(node, 36)) {
+        LOG_ERROR("listguard", "node 0x%08x is not mapped (obj r29=0x%08x lr=0x%08x)",
+                  node, static_cast<uint32_t>(ctx.gpr[29]), static_cast<uint32_t>(ctx.lr));
+        return false;
+    }
+    const uint32_t f28 = vm::read32(node + 28);
+    const uint32_t f32 = vm::read32(node + 32);
+    auto is_code = [](uint32_t v) { return v >= 0x00010000u && v < 0x00ba3688u && (v & 3) == 0; };
+    if (is_code(f28)) {
+        LOG_ERROR("listguard", "node 0x%08x [28]=0x%08x is a TEXT address, not an object (obj=0x%08x next=0x%08x)",
+                  node, f28, static_cast<uint32_t>(ctx.gpr[29]), f32);
+    }
+    if (f32 && is_code(f32) && f32 > 0x100) {
+        LOG_ERROR("listguard", "node 0x%08x [32]=0x%08x is a TEXT address, not a next pointer (obj=0x%08x obj28=0x%08x)",
+                  node, f32, static_cast<uint32_t>(ctx.gpr[29]), f28);
+    }
+    return false;   /* observe only: this must never change what the guest sees */
+}
+
 void init() {
     /* Everything below is title-specific: patches by guest address, job
      * intercepts, the jobsys edge, the critical-path hooks. A profile with
@@ -761,6 +796,14 @@ void init() {
         ppu::hook_impl = impl;
     }
     if (!g_hooks.empty() && !ppu::hook_impl) ppu::hook_impl = impl;
+    /* The list guard is generic: it observes the node pointer a walk is about to
+     * pass, and needs no title-specific address beyond the text range it tests
+     * against. Installed before the early return below so it also works on a run
+     * that does not enable the title's other hooks. */
+    if (std::getenv("PS3BASE_LIST_GUARD")) {
+        add_guard(0x64c044, list_guard);
+        LOG_INFO("listguard", "guard installed on f_0064c044: node +28/+32 are checked against the text range 0x00010000..0x00ba3688");
+    }
     if (std::getenv("PS3BASE_GAME_HOOKS") == nullptr) return;
     if (std::getenv("GOWA_BATCH_DIAG")) std::thread(batch_diag_thread).detach();
     if (const char* h = std::getenv("GOWA_TEST_HOG")) start_hogs(h);

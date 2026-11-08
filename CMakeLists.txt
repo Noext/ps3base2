@@ -287,6 +287,12 @@ target_compile_options(lwmutex_hle PRIVATE ${PS3BASE_ARCH_FLAGS})
 target_link_libraries(lwmutex_hle PRIVATE ${CMAKE_DL_LIBS} pthread)
 add_test(NAME lwmutex_hle COMMAND lwmutex_hle)
 
+add_executable(list_walk_guard tests/list_walk_guard.cpp runtime/src/memory.cpp runtime/src/reservation.cpp runtime/src/host.cpp runtime/src/log.cpp)
+target_include_directories(list_walk_guard PRIVATE runtime/include "${CMAKE_SOURCE_DIR}/runtime/src")
+target_compile_options(list_walk_guard PRIVATE ${PS3BASE_ARCH_FLAGS})
+target_link_libraries(list_walk_guard PRIVATE ${CMAKE_DL_LIBS} pthread)
+add_test(NAME list_walk_guard COMMAND list_walk_guard)
+
 
 
 if(EXISTS "${CMAKE_SOURCE_DIR}/out/conformance/tests.cpp")
