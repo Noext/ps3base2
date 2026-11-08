@@ -216,6 +216,7 @@ launch_game() {
         "PS3BASE_DISC_DIR=$DISC_DIR"
         "PS3BASE_LOG=${PS3BASE_LOG:-info}"
         "PS3BASE_INPUT_CMD=$ICMD"
+        "PS3BASE_VFS_DIR=$VFS"
     )
     [ -n "$FORCE_SPEC" ] && env_args+=("PS3BASE_FORCE=$FORCE_SPEC")
     local e
