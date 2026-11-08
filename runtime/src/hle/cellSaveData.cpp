@@ -496,7 +496,7 @@ HLE_FUNC(cellSysutil, cellSaveDataUserAutoSave) {
     if (name.empty() || !set_buf || !func_stat || !func_file) {
         return ret(ctx, static_cast<int32_t>(ERR_PARAM));
     }
-    const std::string folded = "u" + std::to_string(user) + "_" + name;
+    const std::string folded = name;  /* verbatim: RPCS3 path is savedata/<dirName> */
     Op op{ctx, folded, save_root() + "/" + folded, set_buf, func_stat, func_file,
           userdata, true};
     {
@@ -535,7 +535,7 @@ HLE_FUNC(cellSysutil, cellSaveDataUserAutoLoad) {
     if (name.empty() || !set_buf || !func_stat || !func_file) {
         return ret(ctx, static_cast<int32_t>(ERR_PARAM));
     }
-    const std::string folded = "u" + std::to_string(user) + "_" + name;
+    const std::string folded = name;  /* verbatim: RPCS3 path is savedata/<dirName> */
     Op op{ctx, folded, save_root() + "/" + folded, set_buf, func_stat, func_file,
           userdata, false};
     const int32_t r = run_op(op);
