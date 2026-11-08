@@ -83,3 +83,29 @@ So forcing it once buys exactly one cycle of work, and the screen stays. The
 remaining problem is not a missing periodic setter: it is that the title expects
 the chunk thread to have completed its work and never re-arm it. That needs the
 call chain above the flag, not another forcing.
+
+## Fixed (not a forcing): the world list now enumerates the disk
+
+Two real defects, both fixed on main (commits ece42c8 + 70775dc):
+
+1. `cellSaveDataUserListAutoLoad` never read the filesystem -- it fabricated a
+   zeroed `CellSaveDataListGet` and always returned `ERR_NODATA`. It now walks
+   `save_root()`, filters on `dirNamePrefix`, respects `dirListMax`/`bufSize`,
+   fills `CellSaveDataDirList` (0x30 bytes per entry, `SAVEDATA_LIST_PARAM`
+   from each PARAM.SFO) and reports the real counts.
+2. Our save directories carried a `u0_` prefix we invented. RPCS3 stores the
+   title's `dirName` verbatim under `/dev_hdd0/home/<uid>/savedata/`
+   (`refs/rpcs3/.../cellSaveData.cpp:802`), which is what a title asking for
+   the prefix `BLES01976--` expects. Saves are now stored and listed under the
+   name the title gives.
+
+**Verified**: `UserListAutoLoad: 4 savedata match prefix 'BLES01976--',
+listing 4`, and the Start Game panel grows from 2 rows to 6. Loading a world
+now reaches "Initializing server / Generating spawn area" and a second autosave
+dialog, instead of "No Games Found".
+
+### Two autosave dialogs
+
+After the first autosave dialog is acknowledged, a **second identical dialog**
+appears and needs its own press. A fixed input sequence that does not expect it
+sits there forever. Always screenshot after an OK.
