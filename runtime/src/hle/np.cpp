@@ -602,7 +602,11 @@ HLE_FUNC(sceNp, sceNpBasicSetPresenceDetails2) {
 }
 
 HLE_FUNC(sceNp, sceNpManagerGetChatRestrictionFlag) {
-    if (uint32_t p = a32(ctx, 0)) vm::write32(p, 1);
+    /* RPCS3 writes 0 here (sceNp.cpp:4282, with a TODO that parental control is
+     * not read), and jdc-ps3recomp and dod3-recomp agree. Reporting 1 made the
+     * title believe chat was restricted and refuse the world load with
+     * "Online is disabled due to chat restrictions". */
+    if (uint32_t p = a32(ctx, 0)) vm::write32(p, 0);
     ret(ctx, 0);
 }
 HLE_FUNC(sceNp, sceNpManagerGetContentRatingFlag) {
