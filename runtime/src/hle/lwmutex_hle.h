@@ -31,6 +31,7 @@
 
 #include "runtime/log.h"
 #include "runtime/memory.h"
+#include "runtime/syncwatch.h"
 
 #include <cstdint>
 #include <cstdlib>
@@ -143,6 +144,7 @@ inline int64_t lock(uint32_t ea) {
         if (e->owner && e->owner == me() && e->recursive) {
             e->depth++;
             mark_held(ea);
+            syncwatch::push(syncwatch::K_LWMUTEX, ea);
             return 0;
         }
     }
@@ -156,6 +158,7 @@ inline int64_t lock(uint32_t ea) {
         e->depth = 1;
         e->dead = false;
         mark_held(ea);
+        syncwatch::push(syncwatch::K_LWMUTEX, ea);
         trace("lock-fast", ea, 0, e->owner, caller_lr());
         return 0;
     }
@@ -170,6 +173,7 @@ inline int64_t lock(uint32_t ea) {
         e->dead = false;
     }
     mark_held(ea);
+    syncwatch::push(syncwatch::K_LWMUTEX, ea);
     trace("lock-slow", ea, 0, me(), caller_lr());
     return 0;
 }
@@ -193,6 +197,7 @@ inline int64_t trylock(uint32_t ea) {
         e->dead = false;
     }
     mark_held(ea);
+    syncwatch::push(syncwatch::K_LWMUTEX, ea);
     return 0;
 }
 
@@ -217,12 +222,14 @@ inline int64_t unlock(uint32_t ea) {
         if (e->depth > 1) {
             e->depth--;
             mark_free(ea);
+            syncwatch::pop(syncwatch::K_LWMUTEX, ea);
             return 0;
         }
         e->owner = 0;
         e->depth = 0;
     }
     mark_free(ea);
+    syncwatch::pop(syncwatch::K_LWMUTEX, ea);
     e->m.unlock();
     trace("unlock", ea, 0, 0, caller_lr());
     reap_if_dead(ea, e);

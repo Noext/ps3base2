@@ -3,6 +3,7 @@
 #include "runtime/host.h"
 #include "runtime/log.h"
 #include "runtime/memory.h"
+#include "runtime/syncwatch.h"
 
 #include <atomic>
 #include <cstdio>
@@ -204,8 +205,9 @@ void note_hit(uint32_t addr, uint32_t size, const char* how, uint32_t value) {
      * "was a heap pointer, is now a code word"; a legal function pointer
      * replacing a zero is ordinary, and prev is what separates the two. */
     const uint32_t prev = vm::range_mapped(addr, 4) ? vm::read32(addr) : 0;
-    LOG_INFO("codewatch", "line-write 0x%08x+%u prev 0x%08x -> 0x%08x by %s (guest lr 0x%08x) thread %s",
-             addr, size, prev, value, how, c.lr, c.thread ? c.thread : host::thread_name().c_str());
+    LOG_INFO("codewatch", "line-write 0x%08x+%u prev 0x%08x -> 0x%08x by %s (guest lr 0x%08x) thread %s held %s",
+             addr, size, prev, value, how, c.lr, c.thread ? c.thread : host::thread_name().c_str(),
+             syncwatch::list().c_str());
 }
 
 void init() {
