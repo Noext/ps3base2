@@ -346,16 +346,44 @@ HLE_FUNC(cellSysutil, cellSaveDataUserListAutoLoad) {
     const uint32_t set_buf = a32(ctx, 4);
     const uint32_t func_fixed = a32(ctx, 5);
     const uint32_t func_stat = a32(ctx, 6);
-    (void)func_stat;
+    const uint32_t func_file = a32(ctx, 7);
+    const uint32_t container = a32(ctx, 8);
+    (void)version;
+    (void)err_dialog;
+    (void)container;
+    /* The ninth and tenth arguments are stack arguments under the PPU ABI, not
+     * registers: container is at sp+0x60 and userdata at sp+0x64. Reading
+     * a32(ctx, 8) picked up r11, which is not an argument at all. */
+    const uint32_t stack_userdata = vm::read32(static_cast<uint32_t>(ctx.gpr[1]) + 0x64);
+
     LOG_INFO("savedata",
              "UserListAutoLoad version 0x%x user %u errDialog 0x%x setList 0x%08x setBuf 0x%08x "
-             "funcFixed 0x%08x container 0x%x",
-             version, user, err_dialog, set_list, set_buf, func_fixed, a32(ctx, 8));
+             "funcFixed 0x%08x funcStat 0x%08x funcFile 0x%08x",
+             version, user, err_dialog, set_list, set_buf, func_fixed, func_stat, func_file);
     if (!set_list || !set_buf || !func_fixed) return ret(ctx, static_cast<int32_t>(ERR_PARAM));
 
-    /* The fixed callback decides the flow. Give it a well-formed empty list:
-     * CellSaveDataListGet { u32 dirNum, u32 listNum, ptr dirList, reserved[64] },
-     * and a CellSaveDataCBResult it writes its verdict into. */
+    /* cellSaveDataUserListAutoLoad: enumerate the account's savedata and hand
+     * the title the real list.
+     *
+     * The previous implementation always reported an empty list and returned
+     * ERR_NODATA. That is not a harmless simplification: this title has four
+     * complete world saves on disk (GAMEDATA + PARAM.SFO + ICON0 + THUMB) and
+     * its Start Game panel still said "No Games Found", so every path that
+     * loads an existing world was unreachable no matter what else worked.
+     *
+     * Layout (refs/rpcs3/.../cellSaveData.h):
+     *   CellSaveDataListGet { u32 dirNum; u32 dirListNum; ptr dirList; char reserved[64]; }
+     *   CellSaveDataDirList { char dirName[32]; char listParam[8]; char reserved[8]; }
+     *   CellSaveDataSetBuf { u32 dirListMax; u32 fileListMax; u32 reserved[6];
+     *                        u32 bufSize; ptr buf; }
+     *   CellSaveDataSetList { u32 sortType; u32 sortOrder; ptr dirNamePrefix; ptr reserved; }
+     */
+    const uint32_t dir_list_max = vm::read32(set_buf + 0x0);
+    const uint32_t buf_size = vm::read32(set_buf + 0x20);
+    const uint32_t buf = vm::read32(set_buf + 0x24);
+    const uint32_t prefix_ea = vm::read32(set_list + 0x8);
+    const std::string prefix = prefix_ea ? gstr(prefix_ea, 64) : std::string();
+
     std::lock_guard lk(g_lock);
     if (!g_scratch) g_scratch = vm::alloc(vm::Region::Stack, SCRATCH_SIZE, 0x100);
     if (!g_scratch) return ret(ctx, static_cast<int32_t>(ERR_ACCESS));
@@ -363,18 +391,77 @@ HLE_FUNC(cellSysutil, cellSaveDataUserListAutoLoad) {
     const uint32_t list_get = g_scratch + CB_RESULT + 0x40;
     const uint32_t fixed_set = list_get + 0x60;
     std::memset(vm::ptr(list_get), 0, 0x60);
-    vm::write32(list_get + 0, 0);   /* dirNum: nothing saved */
-    vm::write32(list_get + 4, 0);   /* dirListNum */
-    vm::write32(list_get + 8, 0);   /* dirList */
     std::memset(vm::ptr(fixed_set), 0, 0x10);
     std::memset(vm::ptr(cb), 0, 0x20);
-    vm::write32(cb + 0x10, a32(ctx, 9));   /* userdata */
-    LOG_INFO("savedata", "UserListAutoLoad: calling funcFixed 0x%08x with empty list",
-             func_fixed);
+    vm::write32(cb + 0x10, stack_userdata);
+    vm::write32(list_get + 8, buf);   /* dirList points at the caller's buffer */
+
+    /* A title asks for the saves that belong to it by filling dirNamePrefix;
+     * an empty prefix means "everything on the account". The match is a plain
+     * prefix test, exactly as the firmware does it. */
+    std::error_code ec;
+    const std::string root = save_root();
+    std::vector<std::string> names;
+    for (const auto& de : fsys::directory_iterator(root, ec)) {
+        if (!de.is_directory()) continue;
+        const std::string name = de.path().filename().string();
+        if (name.size() > 32) continue;
+        if (!prefix.empty() && name.compare(0, prefix.size(), prefix) != 0) continue;
+        names.push_back(name);
+    }
+    std::sort(names.begin(), names.end());
+
+    /* dirNum is the total number of matches; dirListNum is how many of them
+     * fit in the caller's buffer. Filling more than dirListMax would overrun
+     * it, and filling more than bufSize allows would overrun the buffer. */
+    uint32_t listed = 0;
+    uint32_t clear_at = 0;
+    for (const std::string& name : names) {
+        if (buf && buf_size && clear_at == 0) {
+            /* The firmware clears the caller's buffer only when the first
+             * match is found, so an empty account leaves it untouched. */
+            std::memset(vm::ptr(buf), 0, buf_size);
+        }
+        clear_at++;
+        if (listed >= dir_list_max) continue;
+        const uint64_t need = (uint64_t(listed) + 1) * 0x30;
+        if (!buf || need > buf_size) continue;
+        const uint32_t e = buf + listed * 0x30;
+        std::memset(vm::ptr(e), 0, 0x30);
+        std::memcpy(vm::ptr(e), name.data(), std::min<size_t>(name.size(), 31));
+        /* SAVEDATA_LIST_PARAM comes from the entry's own PARAM.SFO; the list
+         * shows the sort order from it, and garbage there reorders or drops
+         * entries in the title's own view. */
+        vfs::Psf sfo;
+        sfo.load(root + "/" + name + "/PARAM.SFO");
+        std::string lp = sfo.str("SAVEDATA_LIST_PARAM");
+        if (!lp.empty()) std::memcpy(vm::ptr(e + 0x20), lp.data(), std::min<size_t>(lp.size(), 8));
+        listed++;
+    }
+    vm::write32(list_get + 0, static_cast<uint32_t>(names.size()));
+    vm::write32(list_get + 4, listed);
+    LOG_INFO("savedata",
+             "UserListAutoLoad: %zu savedata match prefix '%s' (dirListMax %u bufSize 0x%x buf 0x%08x), listing %u",
+             names.size(), prefix.c_str(), dir_list_max, buf_size, buf, listed);
+
     call_guest(ctx, func_fixed, cb, list_get, fixed_set);
     const int32_t fixed_result = static_cast<int32_t>(vm::read32(cb));
-    LOG_INFO("savedata", "UserListAutoLoad: funcFixed returned %d -> no saved data", fixed_result);
-    ret(ctx, static_cast<int32_t>(ERR_NODATA));
+    /* funcFixed returning OK_NEXT plus a chosen dirName means "the user picked
+     * one"; with no saves there is nothing to pick and the firmware reports
+     * NODATA. */
+    if (fixed_result == CB_OK_NEXT) {
+        const uint32_t chosen = vm::read32(fixed_set + 0x0);
+        const std::string chosen_name = chosen ? gstr(chosen, 32) : std::string();
+        LOG_INFO("savedata", "UserListAutoLoad: funcFixed chose '%s'", chosen_name.c_str());
+        if (chosen_name.empty() && names.empty())
+            return ret(ctx, static_cast<int32_t>(ERR_NODATA));
+        if (!chosen_name.empty())
+            return ret(ctx, static_cast<int32_t>(ERR_NODATA));  /* the listing call does not load */
+    }
+    LOG_INFO("savedata", "UserListAutoLoad: funcFixed returned %d with %zu savedata",
+             fixed_result, names.size());
+    if (names.empty()) return ret(ctx, static_cast<int32_t>(ERR_NODATA));
+    ret(ctx, 0);
 }
 
 /* cellSaveDataUserAutoSave(version, userId, dirName, errDialog, setBuf,
