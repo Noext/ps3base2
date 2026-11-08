@@ -1,9 +1,10 @@
 # Piste 43 -- trouver l'appelant manquant de f_002eeae4
 
-Status : **l'appelant est trouve et la condition est mesuree.** Le defaut de
-la feuille (import HLE) est trouve et corrige. Le monde existant n'est
-**pas encore** charge : le correctif a debloque le premier barrage et revele
-un second, distinct, que je documente avec sa mesure.
+Status : **PREUVE OBTENUE -- un monde existant charge et est visible a
+l'ecran** (`11-WORLD-LOADED.png`), 0 crash. L'appelant de f_002eeae4 est
+trouve et la condition qui l'empeche est mesuree ; mais la mesure montre que
+ce n'etait **pas** ce qui bloquait le chargement. Trois defauts de feuille dans
+notre runtime HLE bloquaient, tous les trois corriges ici.
 
 ## Antecedents (grep -Rn dans refs/)
 
@@ -301,9 +302,30 @@ ports voisins. Les autres variables ajoutees sont de la journalisation
 
 ## Fichiers modifies
 
-- `runtime/src/hle/np.cpp` -- `sceNpManagerGetChatRestrictionFlag` renvoie 0
-  (etait 1), avec log. C'est le correctif de feuille.
+- `runtime/src/hle/np.cpp` -- trois correctifs de feuille :
+  `sceNpManagerGetChatRestrictionFlag` renvoie 0 (etait 1) ;
+  `sceNpCommerce2` {Init, Term, CreateCtx, DestroyCtx, CreateSessionStart,
+  CreateSessionAbort, CreateSessionFinish} implementes hors-ligne ; et l'etat
+  `commerce2_*` ajoute a `NpState`.
 - `runtime/src/hooks.cpp` -- quatre sondes d'observation activees par
   `PS3BASE_LOAD_PROBE=1` : f_002eee64 (arbitre), f_002e4120 (arm),
   f_002eeb78 (setter), f_002ea564 (ecrivain etat 5). Aucune ne modifie l'etat.
-- `tools/drive43.sh` -- pilote pas-a-pas.
+- `tools/drive43.sh`, `tools/drive43_full.sh` -- pilotes pas-a-pas.
+
+## Reproduire la preuve
+
+```bash
+cd /root/Dev/ps3base2-wt43
+tools/run_world.sh vfs-43 --seconds 3000 --tag 43 --no-build \
+    --env PS3BASE_NP_OFFLINE=1 --env PS3BASE_LOAD_PROBE=1
+# puis, sur le DISPLAY derive :
+#   4x Cross (terms, autosave, Play Game, Start Game)
+#   Down x2, Cross   -> panneau de detail d'une sauvegarde
+#   Cross sur Load   -> lecture GAMEDATA + sys_vm_memory_map
+#   ~120 s de generation -> le terrain de la sauvegarde s'affiche
+```
+
+`PS3BASE_NP_OFFLINE=1` est le seul interrupteur necessaire. Ce n'est pas un
+patch du titre : c'est le mode `get_psn_status() == OFFLINE` que RPCS3
+documente, que notre runtime avait deja, et qui rend coherent ce que nos deux
+HLE disaient differemment.
