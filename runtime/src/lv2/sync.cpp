@@ -1,5 +1,7 @@
 #include "object.h"
 
+#include "runtime/syncwatch.h"
+
 #include <atomic>
 #include <cstdlib>
 #include "sync.h"
@@ -145,7 +147,8 @@ LV2_SYSCALL(101, sys_mutex_destroy) {
 }
 
 LV2_SYSCALL(102, sys_mutex_lock) {
-    auto m = get<Mutex>(u32arg(ctx, 0));
+    const uint32_t id = u32arg(ctx, 0);
+    auto m = get<Mutex>(id);
     if (!m) return CELL_ESRCH;
     uint32_t me = current_thread_id();
     std::unique_lock lk(m->m);
@@ -157,11 +160,13 @@ LV2_SYSCALL(102, sys_mutex_lock) {
     if (!wait_for(lk, m->cv, u64arg(ctx, 1), [&] { return m->owner == 0; })) return CELL_ETIMEDOUT;
     m->owner = me;
     m->count = 1;
+    syncwatch::push(syncwatch::K_MUTEX, id);
     return CELL_OK;
 }
 
 LV2_SYSCALL(103, sys_mutex_trylock) {
-    auto m = get<Mutex>(u32arg(ctx, 0));
+    const uint32_t id = u32arg(ctx, 0);
+    auto m = get<Mutex>(id);
     if (!m) return CELL_ESRCH;
     uint32_t me = current_thread_id();
     std::lock_guard lk(m->m);
@@ -173,17 +178,20 @@ LV2_SYSCALL(103, sys_mutex_trylock) {
     if (m->owner) return CELL_EBUSY;
     m->owner = me;
     m->count = 1;
+    syncwatch::push(syncwatch::K_MUTEX, id);
     return CELL_OK;
 }
 
 LV2_SYSCALL(104, sys_mutex_unlock) {
-    auto m = get<Mutex>(u32arg(ctx, 0));
+    const uint32_t id = u32arg(ctx, 0);
+    auto m = get<Mutex>(id);
     if (!m) return CELL_ESRCH;
     std::lock_guard lk(m->m);
     if (m->owner != current_thread_id()) return CELL_EPERM;
     if (--m->count == 0) {
         m->owner = 0;
         m->cv.notify_all();
+        syncwatch::pop(syncwatch::K_MUTEX, id);
     }
     return CELL_OK;
 }
@@ -330,6 +338,7 @@ LV2_SYSCALL(125, sys_rwlock_wlock) {
         return CELL_ETIMEDOUT;
     }
     r->writer = me;
+    syncwatch::push(syncwatch::K_RWLOCK_W, u32arg(ctx, 0));
     return CELL_OK;
 }
 
@@ -354,6 +363,7 @@ LV2_SYSCALL(127, sys_rwlock_wunlock) {
     std::lock_guard lk(r->m);
     if (r->writer != current_thread_id()) return CELL_EPERM;
     r->writer = 0;
+    syncwatch::pop(syncwatch::K_RWLOCK_W, u32arg(ctx, 0));
     r->cv.notify_all();
     return CELL_OK;
 }
@@ -379,20 +389,24 @@ LV2_SYSCALL(91, sys_semaphore_destroy) {
 }
 
 LV2_SYSCALL(92, sys_semaphore_wait) {
-    auto s = get<Semaphore>(u32arg(ctx, 0));
+    const uint32_t id = u32arg(ctx, 0);
+    auto s = get<Semaphore>(id);
     if (!s) return CELL_ESRCH;
     std::unique_lock lk(s->m);
     if (!wait_for(lk, s->cv, u64arg(ctx, 1), [&] { return s->value > 0; })) return CELL_ETIMEDOUT;
     s->value--;
+    syncwatch::push(syncwatch::K_SEMAPHORE, id);
     return CELL_OK;
 }
 
 LV2_SYSCALL(93, sys_semaphore_trywait) {
-    auto s = get<Semaphore>(u32arg(ctx, 0));
+    const uint32_t id = u32arg(ctx, 0);
+    auto s = get<Semaphore>(id);
     if (!s) return CELL_ESRCH;
     std::lock_guard lk(s->m);
     if (s->value <= 0) return CELL_EBUSY;
     s->value--;
+    syncwatch::push(syncwatch::K_SEMAPHORE, id);
     return CELL_OK;
 }
 
@@ -404,6 +418,7 @@ LV2_SYSCALL(94, sys_semaphore_post) {
     std::lock_guard lk(s->m);
     if (s->value + n > s->max) return CELL_EBUSY;
     s->value += n;
+    for (int32_t k = 0; k < n; k++) syncwatch::pop(syncwatch::K_SEMAPHORE, u32arg(ctx, 0));
     s->cv.notify_all();
     return CELL_OK;
 }
