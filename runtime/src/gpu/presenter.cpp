@@ -665,6 +665,11 @@ bool init() {
             }
             SDL_free(ids);
         }
+        /* A container has no /dev/input, so no physical pad can ever appear.
+         * A virtual one keeps the gamepad path alive and gives a human without
+         * a controller something to drive; it defers to a real pad when one is
+         * present. See host::attach_virtual_pad. */
+        host::attach_virtual_pad();
         for (;;) {
             SDL_Event e;
             if (!SDL_WaitEventTimeout(&e, 100)) continue;

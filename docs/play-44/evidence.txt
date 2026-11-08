@@ -1,0 +1,45 @@
+ps3base piste 44 -- extraits de log bruts
+date: 2026-11-08T18:23:55Z
+
+=== 1. play.sh lance le jeu en fenetre, GPU reel (play5.log) ===
+I   0.498668 [1216267] gpu: Vulkan presenter on NVIDIA GeForce RTX 4060 Laptop GPU, swapchain 1280x720
+
+=== 2. chemin SDL clavier -> cellPadGetData (play.log, PS3BASE_INPUT_LOG=1 PS3BASE_PAD_LOG=1) ===
+I  53.721677 [1107555] input: key down scancode 29 (Z) t=53.707
+I  53.756351 [1107720] pad: frame 1874 bytes 00 7c 00 40 80 80 80 80 t=52.53
+
+=== 3. manette virtuelle attachee (play5.log) ===
+I   0.319792 [1216270] input: virtual gamepad attached: ps3base virtual pad (id 3)
+I   0.320079 [1216270] input: gamepad connected: ps3base virtual pad
+
+=== 4. R1 via la manette virtuelle -> b[3]=0x08 ; L1 -> b[3]=0x04 (play5.log) ===
+I 719.953243 [1216355] input: vpad button 10 down t=719.916
+I 779.959882 [1216355] input: vpad button 9 down t=779.921
+I 719.954149 [1216355] pad: frame 22048 bytes 00 7c 00 08 80 80 80 80 t=718.63
+I 779.959931 [1216355] pad: frame 23718 bytes 00 7c 00 04 80 80 80 80 t=778.63
+
+=== 5. la meme chose au clavier: Q (L1) et E (R1) vus par le jeu (play4.log) ===
+I 1485.245275 [1141334] input: key down scancode 8 (E) t=1485.188
+(Q non journalise dans ce run)
+
+=== 6. bug des gachettes: avant/apres correction (play.log vs play5.log) ===
+b[3]=0x03 (L2+R2 au repos) dans play.log  : 9347
+b[3]=0x03 (L2+R2 au repos) dans play5.log : 0
+correction visible dans play5.log :
+I   0.319921 [1216270] input: vpad axis 4 = 0 (raw -32768) t=0.306
+I   0.319934 [1216270] input: vpad axis 5 = 0 (raw -32768) t=0.306
+
+=== 7. monde cree (sys_vm_memory_map) ===
+play.log : 1
+play4.log: 1
+play5.log: 1
+
+=== 8. crash f_0064c044 observe pendant la generation (play2.log) ===
+E 365.378374 [1126425] crash: signal 11 at 0x602cbefcc07a (exe+0x24d007a) fault 0x77f510000024 (guest 0x24) thread (4J) Server 0x1000018
+=== 9. play.sh sur un display DEJA present (aucun Xvfb lance par le script) ===
+$ DISPLAY=:91 tools/play.sh --no-build --seconds 74
+play: vfs    /root/Dev/ps3base2-wt44/vfs
+play: GPU    NVIDIA GeForce RTX 4060 Laptop GPU, swapchain 1280x720
+play: playing (pid 1279510, window 6291502). ...
+play: time budget reached
+(pas de ligne "started Xvfb" : le chemin normal, celui d'un bureau, est celui-la)

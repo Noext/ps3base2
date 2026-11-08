@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <cstdlib>
 #include <mutex>
+#include <string>
+#include <vector>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -13,6 +15,9 @@
 #else
 #include <SDL3/SDL.h>
 #endif
+
+#include "runtime/host.h"
+#include "runtime/log.h"
 
 namespace host {
 
@@ -181,8 +186,192 @@ void* native_window();
 
 namespace host {
 
+namespace {
+
+/* Virtual gamepad. A container has no /dev/input and no /dev/uinput, so a real
+ * pad can never appear; before this, the gamepad path in poll_pad was dead code
+ * there and the pad bytes only ever came from the keyboard. SDL 3.2's
+ * SDL_AttachVirtualJoystick registers a device with the joystick subsystem, so
+ * SDL_GetGamepads() returns it, SDL_OpenGamepad() opens it, and poll_pad reads
+ * it through exactly the same calls a physical pad goes through. The state is
+ * written with SDL_SetJoystickVirtualButton/Axis. */
+SDL_Joystick* g_vpad = nullptr;
+
+bool input_log() {
+    static const bool on = std::getenv("PS3BASE_INPUT_LOG") != nullptr;
+    return on;
+}
+
+double now_s() { return double(SDL_GetTicks()) / 1000.0; }
+
+}  // namespace
+
+void attach_virtual_pad() {
+    if (g_vpad) return;
+    if (std::getenv("PS3BASE_NO_VIRTUAL_PAD")) {
+        LOG_INFO("input", "virtual gamepad disabled by PS3BASE_NO_VIRTUAL_PAD");
+        return;
+    }
+    /* Only when no physical pad is present: a real controller must win. */
+    int have = 0;
+    SDL_JoystickID* ids = SDL_GetJoysticks(&have);
+    bool physical = false;
+    for (int i = 0; i < have; i++) {
+        if (SDL_IsJoystickVirtual(ids[i])) continue;
+        if (SDL_GetGamepadFromID(ids[i]) || SDL_OpenGamepad(ids[i])) physical = true;
+    }
+    SDL_free(ids);
+    if (physical) {
+        LOG_INFO("input", "physical gamepad present, not attaching a virtual one");
+        return;
+    }
+    SDL_VirtualJoystickDesc d;
+    SDL_INIT_INTERFACE(&d);
+    d.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+    d.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
+    d.naxes = SDL_GAMEPAD_AXIS_COUNT;
+    d.vendor_id = 0x054C;   /* Sony, so a title's own pad table recognises it */
+    d.product_id = 0x0268;
+    d.name = "ps3base virtual pad";
+    d.button_mask = 0xFFFFFFFFu;
+    d.axis_mask = 0xFFFFFFFFu;
+    const SDL_JoystickID id = SDL_AttachVirtualJoystick(&d);
+    if (!id) {
+        LOG_WARN("input", "SDL_AttachVirtualJoystick failed: %s", SDL_GetError());
+        return;
+    }
+    g_vpad = SDL_OpenJoystick(id);
+    if (!g_vpad) LOG_WARN("input", "virtual pad attached but SDL_OpenJoystick failed: %s", SDL_GetError());
+    else LOG_INFO("input", "virtual gamepad attached: %s (id %u)", SDL_GetJoystickName(g_vpad), unsigned(id));
+    if (!g_vpad) return;
+    /* Centre the sticks and release the triggers, so the first poll is neutral
+     * instead of whatever a zeroed descriptor reports. Goes through
+     * virtual_pad_axis because a raw trigger axis is not 0 at rest. */
+    for (int a : {SDL_GAMEPAD_AXIS_LEFTX, SDL_GAMEPAD_AXIS_LEFTY, SDL_GAMEPAD_AXIS_RIGHTX,
+                  SDL_GAMEPAD_AXIS_RIGHTY, SDL_GAMEPAD_AXIS_LEFT_TRIGGER, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER})
+        virtual_pad_axis(a, 0);
+    SDL_UpdateJoysticks();
+}
+
+void virtual_pad_button(int sdl_button, bool down) {
+    if (!g_vpad || sdl_button < 0 || sdl_button >= SDL_GAMEPAD_BUTTON_COUNT) return;
+    SDL_SetJoystickVirtualButton(g_vpad, sdl_button, down);
+    SDL_UpdateJoysticks();
+    if (input_log()) LOG_INFO("input", "vpad button %d %s t=%.3f", sdl_button, down ? "down" : "up", now_s());
+}
+
+/* Scripted pad input, through the virtual pad rather than through fill().
+ * "name@start:hold,..." -- same shape as GOWA_AUTOPAD, but every press is an
+ * SDL button/axis on a real SDL gamepad, so this exercises the same path a
+ * human's controller takes: SDL state -> SDL_GetGamepadButton -> pad bytes.
+ * It is the only way to drive the pad on a machine with no /dev/input, and it
+ * is also the regression test for the virtual pad itself. */
+struct VPress {
+    int button = -1;      /* SDL_GAMEPAD_BUTTON_* */
+    int axis = -1;        /* SDL_GAMEPAD_AXIS_* */
+    int value = 0;
+    double at = 0, hold = 0;
+};
+
+std::vector<VPress> g_vscript;
+bool g_vscript_loaded = false;
+bool g_vscript_started = false;
+double g_vscript_t0 = 0;
+
+void load_vscript() {
+    g_vscript_loaded = true;
+    const char* env = std::getenv("PS3BASE_VPAD_SCRIPT");
+    if (!env) return;
+    struct B { const char* n; int b; };
+    static const B btns[] = {
+        {"cross", SDL_GAMEPAD_BUTTON_SOUTH}, {"circle", SDL_GAMEPAD_BUTTON_EAST},
+        {"square", SDL_GAMEPAD_BUTTON_WEST}, {"triangle", SDL_GAMEPAD_BUTTON_NORTH},
+        {"up", SDL_GAMEPAD_BUTTON_DPAD_UP}, {"down", SDL_GAMEPAD_BUTTON_DPAD_DOWN},
+        {"left", SDL_GAMEPAD_BUTTON_DPAD_LEFT}, {"right", SDL_GAMEPAD_BUTTON_DPAD_RIGHT},
+        {"l1", SDL_GAMEPAD_BUTTON_LEFT_SHOULDER}, {"r1", SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER},
+        {"select", SDL_GAMEPAD_BUTTON_BACK}, {"start", SDL_GAMEPAD_BUTTON_START},
+        {"l3", SDL_GAMEPAD_BUTTON_LEFT_STICK}, {"r3", SDL_GAMEPAD_BUTTON_RIGHT_STICK},
+    };
+    struct A { const char* n; int a; int v; };
+    static const A axes[] = {
+        {"lx-", SDL_GAMEPAD_AXIS_LEFTX, -32767}, {"lx+", SDL_GAMEPAD_AXIS_LEFTX, 32767},
+        {"ly-", SDL_GAMEPAD_AXIS_LEFTY, -32767}, {"ly+", SDL_GAMEPAD_AXIS_LEFTY, 32767},
+        {"rx-", SDL_GAMEPAD_AXIS_RIGHTX, -32767}, {"rx+", SDL_GAMEPAD_AXIS_RIGHTX, 32767},
+        {"ry-", SDL_GAMEPAD_AXIS_RIGHTY, -32767}, {"ry+", SDL_GAMEPAD_AXIS_RIGHTY, 32767},
+        /* L2/R2 are analogue triggers, not buttons: SDL exposes them only as
+         * axes, and poll_pad reads them as axes too (press bit at >30/255). */
+        {"l2", SDL_GAMEPAD_AXIS_LEFT_TRIGGER, 32767}, {"r2", SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, 32767},
+    };
+    std::string s = env;
+    size_t pos = 0;
+    while (pos < s.size()) {
+        size_t end = s.find(',', pos);
+        if (end == std::string::npos) end = s.size();
+        std::string item = s.substr(pos, end - pos);
+        pos = end + 1;
+        const size_t at = item.find('@');
+        if (at == std::string::npos) continue;
+        const std::string name = item.substr(0, at);
+        const std::string when = item.substr(at + 1);
+        const size_t colon = when.find(':');
+        VPress p;
+        p.at = std::atof(when.substr(0, colon).c_str());
+        p.hold = colon == std::string::npos ? 0.25 : std::atof(when.substr(colon + 1).c_str());
+        bool ok = false;
+        for (const B& b : btns) if (name == b.n) { p.button = b.b; ok = true; }
+        for (const A& a : axes) if (name == a.n) { p.axis = a.a; p.value = a.v; ok = true; }
+        if (!ok) { LOG_WARN("input", "vpad script: unknown control '%s'", name.c_str()); continue; }
+        g_vscript.push_back(p);
+        LOG_INFO("input", "vpad script: %s at %.2fs for %.2fs", name.c_str(), p.at, p.hold);
+    }
+}
+
+void virtual_pad_tick() {
+    if (!g_vpad) return;
+    if (!g_vscript_loaded) load_vscript();
+    if (g_vscript.empty()) return;
+    /* The clock starts at the first tick, so a script's times are relative to
+     * the moment the pad became usable rather than to process start. */
+    if (!g_vscript_started) { g_vscript_started = true; g_vscript_t0 = now_s(); }
+    const double t = now_s() - g_vscript_t0;
+    static std::vector<bool> held(g_vscript.size(), false);
+    if (held.size() != g_vscript.size()) held.assign(g_vscript.size(), false);
+    for (size_t i = 0; i < g_vscript.size(); i++) {
+        const VPress& p = g_vscript[i];
+        const bool want = t >= p.at && t < p.at + p.hold;
+        if (want == held[i]) continue;
+        held[i] = want;
+        if (p.button >= 0) virtual_pad_button(p.button, want);
+        if (p.axis >= 0) virtual_pad_axis(p.axis, want ? p.value : 0);
+    }
+}
+
+void virtual_pad_axis(int sdl_axis, int value) {
+    if (!g_vpad || sdl_axis < 0 || sdl_axis >= SDL_GAMEPAD_AXIS_COUNT) return;
+    /* SDL_SetJoystickVirtualAxis writes RAW joystick axes, not gamepad axes.
+     * The two agree for the sticks (both -32767..32767) but not for the
+     * triggers: a gamepad trigger is 0..32767 with 0 at rest, while a raw
+     * trigger axis is -32768..32767 with SDL_JOYSTICK_AXIS_MIN at rest
+     * (SDL_joystick.h: "a trigger at rest would have the value of
+     * SDL_JOYSTICK_AXIS_MIN"). Writing 0 for "released" therefore lands the
+     * trigger halfway down, SDL_GetGamepadAxis returns ~16384, the >30/255
+     * threshold in poll_pad fires, and L2+R2 read as permanently held
+     * (measured: b[3]=0x03 with no key and no button pressed). Convert. */
+    const bool trigger = sdl_axis == SDL_GAMEPAD_AXIS_LEFT_TRIGGER || sdl_axis == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER;
+    int raw;
+    if (value < -32767) value = -32767;
+    if (value > 32767) value = 32767;
+    if (trigger) raw = value <= 0 ? SDL_JOYSTICK_AXIS_MIN : (value * 2 - 32768);
+    else raw = value;
+    if (raw < -32768) raw = -32768;
+    SDL_SetJoystickVirtualAxis(g_vpad, sdl_axis, static_cast<Sint16>(raw));
+    SDL_UpdateJoysticks();
+    if (input_log()) LOG_INFO("input", "vpad axis %d = %d (raw %d) t=%.3f", sdl_axis, value, raw, now_s());
+}
+
 void note_key(int scancode, bool down) {
     if (scancode < 0 || scancode >= SDL_SCANCODE_COUNT) return;
+    if (input_log() && down) LOG_INFO("input", "key down scancode %d (%s) t=%.3f", scancode, SDL_GetScancodeName(static_cast<SDL_Scancode>(scancode)), now_s());
     if (!down) return;   /* a release never extends the latch */
     g_latch[scancode].store(kLatchFrames, std::memory_order_relaxed);
 }
@@ -198,6 +387,10 @@ bool allow_unfocused() {
 void poll_pad(uint16_t* b) {
     void* w = gpu::native_window();
     if (!w) return;
+    /* Drive the scripted virtual pad before reading it: SDL applies virtual
+     * button/axis writes on SDL_UpdateJoysticks, so the state has to be pushed
+     * before SDL_GetGamepadButton in the same frame sees it. */
+    virtual_pad_tick();
     if (SDL_Gamepad* p = pad()) {
         auto btn = [&](SDL_GamepadButton x) { return SDL_GetGamepadButton(p, x); };
         if (btn(SDL_GAMEPAD_BUTTON_BACK)) press(b, 2, 0x01, 0);
