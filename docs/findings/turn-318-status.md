@@ -81,3 +81,35 @@ before its budget expired under load. **No valid pair of hashes was obtained.**
 The 10/10 result is solid. The SPU mechanism is proven and reproducible
 (`docs/findings/spu-aot.md`), but only on the phases measured. The hash and
 timing comparisons need a quieter machine and must be redone.
+
+## Root cause of my measurement failures: the game was being killed, not finishing
+
+The crash track found it and I reproduced it. A game launched from inside a tool
+call dies when that call returns: the process is reparented and reaped, and the
+log ends with
+
+    gpu: window closed, exiting
+
+**Measured on my own logs:** `/tmp/sa2.log` -- the fixed-seed verification run I
+reported as "budget expired under load" -- shows exactly one
+`window closed, exiting` and zero crashes, ending at t=699.99. It did not run out
+of budget: it was killed. Same for the earlier sessions that stopped at
+100-400 s with no crash and no verdict.
+
+**What works, verified:**
+
+| launch style | survives? |
+|---|---|
+| plain background job (`timeout ... &`) | **no** -- killed at 60-150 s |
+| `setsid` + `nohup` + `disown` inside the call | **no** |
+| `nohup setsid tools/run_world.sh ... &` + `disown` | **yes** -- t=244 s and counting, 0 window-closed |
+
+So every generation-timing and hash comparison I attempted this turn was
+measuring a process that was killed part-way. That is the explanation for the
+"generation never finishes under load" conclusion I wrote earlier: it was not the
+load, it was the kill.
+
+**Rule for every later run:** launch through `run_world.sh` with
+`nohup setsid ... & disown`, never a bare backgrounded `timeout`. The Xvfb
+servers always survived, which is why the display stayed alive while the game
+did not -- and why the symptom looked like a game problem.
