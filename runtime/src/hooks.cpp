@@ -784,6 +784,88 @@ static bool list_guard(ppu::Context& ctx) {
     return false;   /* observe only: this must never change what the guest sees */
 }
 
+/* piste 43 -- the load-state probe.
+ *
+ * f_002eee64 is the arbiter of the world-load path: it dispatches on
+ * obj+2924 and, in state 5 ONLY, computes the OPD 0xbc0000-6152 = 0xbbe7f8
+ * and calls f_002e8ae8. That OPD is the record for f_002eeae4, the sole
+ * writer of the thumbnail size/pointer at obj+168/+172 -- so if the state
+ * never reaches 5, the thumbnail is never registered and f_002e8ae8 takes
+ * its hard-coded (0,0) branch. This probe reports the state and the four
+ * fields the state-5 arm reads, without changing anything the guest sees.
+ *
+ * Environment: PS3BASE_LOAD_PROBE=1 */
+static bool load_probe(ppu::Context& ctx) {
+    static const bool on = std::getenv("PS3BASE_LOAD_PROBE") != nullptr;
+    if (!on) return false;
+    static std::atomic<int> n{0};
+    const int k = n.fetch_add(1, std::memory_order_relaxed);
+    if (k >= 200) return false;
+    const uint32_t obj = static_cast<uint32_t>(ctx.gpr[3]);
+    if (!obj || !vm::range_mapped(obj + 2924, 16)) {
+        LOG_INFO("loadprobe", "obj 0x%08x unmapped lr=0x%08x", obj, static_cast<uint32_t>(ctx.lr));
+        return false;
+    }
+    auto rd = [&](uint32_t off) { return vm::range_mapped(obj + off, 4) ? vm::read32(obj + off) : 0xdeadbeefu; };
+    LOG_INFO("loadprobe", "#%d lr=0x%08x obj=0x%08x state=%u cnt=%u lim=%u thumb_size=%u thumb_ptr=0x%08x [324]=%u",
+             k, static_cast<uint32_t>(ctx.lr), obj, rd(2924), rd(2928), rd(2900),
+             rd(168), rd(172), rd(324));
+    return false;   /* observe only */
+}
+
+/* piste 43 -- the two candidates named by piste 32, observed.
+ *
+ * f_002e4120 (mc_028.cpp:31505) is the thunk that calls f_002e8ae8 with the
+ * hard-coded object 0xbc0000-11016 = 0xd0d4f8. f_002eeb78 is the state
+ * setter called just before UserAutoLoad in thread_autoload (mc_029.cpp:4190,
+ * 4215), which stores its argument into obj+324 -- the very field the state-5
+ * arm of f_002eee64 tests first. If +324 is 0, the state-5 arm exits at once
+ * and f_002eeae4 is never reached. Environment: PS3BASE_LOAD_PROBE=1 */
+static bool load_arm_probe(ppu::Context& ctx) {
+    static const bool on = std::getenv("PS3BASE_LOAD_PROBE") != nullptr;
+    if (!on) return false;
+    static std::atomic<int> n{0};
+    const int k = n.fetch_add(1, std::memory_order_relaxed);
+    if (k < 60)
+        LOG_INFO("loadprobe", "ARM f_002e4120 #%d lr=0x%08x r3=0x%08x", k,
+                 static_cast<uint32_t>(ctx.lr), static_cast<unsigned>(ctx.gpr[3]));
+    return false;
+}
+
+static bool load_setter_probe(ppu::Context& ctx) {
+    static const bool on = std::getenv("PS3BASE_LOAD_PROBE") != nullptr;
+    if (!on) return false;
+    static std::atomic<int> n{0};
+    const int k = n.fetch_add(1, std::memory_order_relaxed);
+    const uint32_t obj = static_cast<uint32_t>(ctx.gpr[3]);
+    const uint32_t val = static_cast<uint32_t>(ctx.gpr[4]);
+    if (k < 60)
+        LOG_INFO("loadprobe", "SETTER f_002eeb78 #%d lr=0x%08x obj=0x%08x arg=%u (state <- %u)",
+                 k, static_cast<uint32_t>(ctx.lr), obj, val, val);
+    return false;
+}
+
+/* piste 43 -- the ONLY writer that can put obj+2924 into state 5.
+ *
+ * f_002ea564 reaches L_2ea500, which stores 5 into obj+2924 -- but only when
+ * gpr30 (loaded from obj+16 by the preceding call) is ZERO. If gpr30 is
+ * non-zero the same block stores 8 or 9 instead, and state 5 is unreachable,
+ * so f_002eee64 can never take the arm that materialises OPD 0xbbe7f8 and
+ * calls f_002eeae4. This probe reports which one happens and the gate value.
+ * Environment: PS3BASE_LOAD_PROBE=1 */
+static bool load_advance_probe(ppu::Context& ctx) {
+    static const bool on = std::getenv("PS3BASE_LOAD_PROBE") != nullptr;
+    if (!on) return false;
+    static std::atomic<int> n{0};
+    const int k = n.fetch_add(1, std::memory_order_relaxed);
+    if (k >= 40) return false;
+    const uint32_t obj = static_cast<uint32_t>(ctx.gpr[3]);
+    auto rd = [&](uint32_t off) { return vm::range_mapped(obj + off, 4) ? vm::read32(obj + off) : 0xdeadbeefu; };
+    LOG_INFO("loadprobe", "ADVANCE f_002ea564 #%d lr=0x%08x obj=0x%08x state=%u [16]=0x%08x lim=%u cnt=%u",
+             k, static_cast<uint32_t>(ctx.lr), obj, rd(2924), rd(16), rd(2900), rd(2928));
+    return false;
+}
+
 void init() {
     /* Everything below is title-specific: patches by guest address, job
      * intercepts, the jobsys edge, the critical-path hooks. A profile with
@@ -825,6 +907,16 @@ void init() {
      * -- the guard was installed, logged "guard installed", and never called.
      * That is why earlier runs reported "0 false alarms": it was not watching.
      * Assign it again after the guard is registered. */
+    if (std::getenv("PS3BASE_LOAD_PROBE")) {
+        add_guard(0x2eee64, load_probe);
+        add_guard(0x2e4120, load_arm_probe);
+        add_guard(0x2eeb78, load_setter_probe);
+        if (!ppu::hook_impl) ppu::hook_impl = impl;
+        for (uint32_t a : {0x2eee64u, 0x2e4120u, 0x2eeb78u}) ppu::hook_flags[a >> 2] = 1;
+        add_guard(0x2ea564, load_advance_probe);
+        ppu::hook_flags[0x2ea564 >> 2] = 1;
+        LOG_INFO("loadprobe", "probes installed: f_002eee64 (arbiter), f_002e4120 (arm), f_002eeb78 (setter), f_002ea564 (state-5 writer)");
+    }
     if (std::getenv("PS3BASE_LIST_GUARD")) {
         add_guard(0x64c044, list_guard);
         if (!ppu::hook_impl) ppu::hook_impl = impl;

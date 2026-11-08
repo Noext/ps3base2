@@ -128,6 +128,13 @@ struct NpState {
     bool np2_init = false;
     bool match2_init = false;
     bool netctl_init = false;
+    /* piste 43: sceNpCommerce2 state. The title opens a local store session
+     * while loading a save; with no implementation at all it saw a failed
+     * session and aborted the load with "Connection to the server was lost". */
+    bool commerce2_init = false;
+    uint32_t commerce2_ctx_id = 0;
+    uint32_t commerce2_ctx_cb = 0;
+    uint32_t commerce2_ctx_arg = 0;
     uint32_t manager_cb = 0;
     uint32_t manager_cb_arg = 0;
     uint32_t basic_cb = 0;
@@ -602,7 +609,20 @@ HLE_FUNC(sceNp, sceNpBasicSetPresenceDetails2) {
 }
 
 HLE_FUNC(sceNp, sceNpManagerGetChatRestrictionFlag) {
-    if (uint32_t p = a32(ctx, 0)) vm::write32(p, 1);
+    /* piste 43: this must be 0. It was hardcoded to 1, which the title reads as
+     * "this local player has chat restrictions", and it then refuses EVERY
+     * attempt to start a world -- including loading an existing save -- with
+     * "Failed to create game ... Online is disabled on their Sony Entertainment
+     * Network account due to chat restrictions. Uncheck the 'Online Game' box
+     * in 'More Options' to start an offline game." That dialog has no offline
+     * path out of it, so the load never begins.
+     *
+     * refs/rpcs3/.../sceNp.cpp:4271 reads the *parental-control* information and
+     * sets *isRestricted = 0 when nothing restricts chat. We have no parental
+     * control to consult, so an unrestricted local profile is the correct
+     * emulation, not a forcing. */
+    if (uint32_t p = a32(ctx, 0)) vm::write32(p, 0);
+    LOG_INFO("sceNp", "ManagerGetChatRestrictionFlag -> 0");
     ret(ctx, 0);
 }
 HLE_FUNC(sceNp, sceNpManagerGetContentRatingFlag) {
@@ -677,6 +697,109 @@ HLE_FUNC(sceNpTrophy, sceNpTrophyGetTrophyUnlockState) {
 }
 HLE_FUNC(sceNpTrophy, sceNpTrophyGetGameProgress) {
     if (uint32_t p = a32(ctx, 2)) vm::write32(p, 0);
+    ret(ctx, 0);
+}
+
+/* piste 43 -- sceNpCommerce2, which had NO implementation at all.
+ *
+ * Measured failure: with the chat-restriction flag corrected, pressing Load on
+ * an existing save read the whole save (METADATA, THUMB, GAMEDATA 0x3a4eaf
+ * bytes) and then the title raised "Network Error -- Connection to the server
+ * was lost. Exiting to the main menu." The log at that instant showed three
+ * unimplemented imports in a row:
+ *
+ *   unimplemented sceNpCommerce2::sceNpCommerce2Init
+ *   unimplemented sceNpCommerce2::sceNpCommerce2CreateCtx
+ *   unimplemented sceNpCommerce2::sceNpCommerce2CreateSessionStart
+ *
+ * An unimplemented import resolves nowhere and returns nothing defined, so the
+ * title saw a failed store session and abandoned the load. RPCS3 implements
+ * these as local, offline objects: Init just sets a flag, CreateCtx allocates an
+ * id, CreateSessionStart queues the "session done" callback with no network at
+ * all. References:
+ *   refs/rpcs3/rpcs3/Emu/Cell/Modules/sceNpCommerce2.cpp:129 (Init),
+ *   :157 (CreateCtx), :262 (CreateSessionStart), :306 (CreateSessionFinish).
+ * The return codes are RPCS3's: a second Init is ALREADY_INITIALIZED, a call
+ * before Init is NOT_INITIALIZED. */
+namespace {
+constexpr int64_t SCE_NP_COMMERCE2_ERROR_NOT_INITIALIZED = static_cast<int32_t>(0x8002b701);
+constexpr int64_t SCE_NP_COMMERCE2_ERROR_ALREADY_INITIALIZED = static_cast<int32_t>(0x8002b702);
+constexpr int64_t SCE_NP_COMMERCE2_ERROR_CTX_NOT_FOUND = static_cast<int32_t>(0x8002b70b);
+constexpr int64_t SCE_NP_COMMERCE2_ERROR_CTX_MAX = static_cast<int32_t>(0x8002b70a);
+constexpr int64_t SCE_NP_COMMERCE2_ERROR_INVALID_ARGUMENT = static_cast<int32_t>(0x8002b703);
+/* SCE_NP_COMMERCE2_EVENT_CREATE_SESSION_DONE, the event RPCS3 delivers. */
+constexpr uint32_t SCE_NP_COMMERCE2_EVENT_CREATE_SESSION_DONE = 0x4;
+}  // namespace
+
+HLE_FUNC(sceNpCommerce2, sceNpCommerce2Init) {
+    LOG_INFO("sceNp", "Commerce2Init");
+    if (g_np.commerce2_init) return ret(ctx, SCE_NP_COMMERCE2_ERROR_ALREADY_INITIALIZED);
+    /* RPCS3 requires the NP manager to be initialised first. Our g_np.init is
+     * set by sceNpInit, which the title calls during boot. */
+    if (!g_np.init) return ret(ctx, SCE_NP_ERROR_NOT_INITIALIZED);
+    g_np.commerce2_init = true;
+    ret(ctx, 0);
+}
+HLE_FUNC(sceNpCommerce2, sceNpCommerce2Term) {
+    LOG_INFO("sceNp", "Commerce2Term");
+    g_np.commerce2_init = false;
+    ret(ctx, 0);
+}
+HLE_FUNC(sceNpCommerce2, sceNpCommerce2CreateCtx) {
+    const uint32_t version = a32(ctx, 0);
+    const uint32_t np_id = a32(ctx, 1);
+    const uint32_t handler = a32(ctx, 2);
+    const uint32_t arg = a32(ctx, 3);
+    const uint32_t ctx_id_out = a32(ctx, 4);
+    LOG_INFO("sceNp", "Commerce2CreateCtx version=%u npId=0x%08x handler=0x%08x arg=0x%08x out=0x%08x",
+             version, np_id, handler, arg, ctx_id_out);
+    if (!g_np.commerce2_init) return ret(ctx, SCE_NP_COMMERCE2_ERROR_NOT_INITIALIZED);
+    if (!np_id) return ret(ctx, SCE_NP_COMMERCE2_ERROR_INVALID_ARGUMENT);
+    /* One context is enough for a single local store session; RPCS3's CTX_MAX
+     * check is a TODO there too. */
+    g_np.commerce2_ctx_id = g_np.commerce2_ctx_id ? g_np.commerce2_ctx_id : 1;
+    g_np.commerce2_ctx_cb = handler;
+    g_np.commerce2_ctx_arg = arg;
+    if (ctx_id_out) vm::write32(ctx_id_out, g_np.commerce2_ctx_id);
+    ret(ctx, 0);
+}
+HLE_FUNC(sceNpCommerce2, sceNpCommerce2DestroyCtx) {
+    LOG_INFO("sceNp", "Commerce2DestroyCtx ctx=%u", a32(ctx, 0));
+    if (!g_np.commerce2_init) return ret(ctx, SCE_NP_COMMERCE2_ERROR_NOT_INITIALIZED);
+    g_np.commerce2_ctx_id = 0;
+    g_np.commerce2_ctx_cb = 0;
+    ret(ctx, 0);
+}
+HLE_FUNC(sceNpCommerce2, sceNpCommerce2CreateSessionStart) {
+    const uint32_t ctx_id = a32(ctx, 0);
+    LOG_INFO("sceNp", "Commerce2CreateSessionStart ctx=%u", ctx_id);
+    if (!g_np.commerce2_init) return ret(ctx, SCE_NP_COMMERCE2_ERROR_NOT_INITIALIZED);
+    if (!g_np.commerce2_ctx_id) return ret(ctx, SCE_NP_COMMERCE2_ERROR_CTX_NOT_FOUND);
+    /* RPCS3 queues the completion callback immediately: the session is a local
+     * object, so it succeeds without touching the network. Deliver the same
+     * event through the sysutil queue, exactly as the context callbacks above. */
+    const uint32_t cb = g_np.commerce2_ctx_cb, arg = g_np.commerce2_ctx_arg;
+    if (cb) {
+        sysutil_post([cb, arg, ctx_id](ppu::Context& c) {
+            call_guest(c, cb, ctx_id, SCE_NP_COMMERCE2_EVENT_CREATE_SESSION_DONE, 0, arg);
+        });
+    }
+    ret(ctx, 0);
+}
+HLE_FUNC(sceNpCommerce2, sceNpCommerce2CreateSessionAbort) {
+    LOG_INFO("sceNp", "Commerce2CreateSessionAbort ctx=%u", a32(ctx, 0));
+    if (!g_np.commerce2_init) return ret(ctx, SCE_NP_COMMERCE2_ERROR_NOT_INITIALIZED);
+    ret(ctx, 0);
+}
+HLE_FUNC(sceNpCommerce2, sceNpCommerce2CreateSessionFinish) {
+    const uint32_t ctx_id = a32(ctx, 0);
+    const uint32_t info = a32(ctx, 1);
+    LOG_INFO("sceNp", "Commerce2CreateSessionFinish ctx=%u info=0x%08x", ctx_id, info);
+    if (!g_np.commerce2_init) return ret(ctx, SCE_NP_COMMERCE2_ERROR_NOT_INITIALIZED);
+    if (!g_np.commerce2_ctx_id) return ret(ctx, SCE_NP_COMMERCE2_ERROR_CTX_NOT_FOUND);
+    /* Currency and decimals, zeroed: no store is reachable offline, and RPCS3
+     * memsets the same 8 bytes for a pre-3.00 SDK title like this one. */
+    if (info) std::memset(vm::ptr(info), 0, 44);
     ret(ctx, 0);
 }
 
