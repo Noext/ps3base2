@@ -1,7 +1,10 @@
 #include "common.h"
 
 #include <atomic>
+#include <cstdio>
+
 #include "runtime/cbwatch.h"
+#include "runtime/msgdialog.h"
 #include "runtime/sysutil_events.h"
 #include "runtime/vfs.h"
 
@@ -193,17 +196,64 @@ HLE_FUNC(cellSysutil, cellSysCacheClear) {
     ret(ctx, 0);
 }
 
+namespace {
+/* Message-dialog type bits (refs/rpcs3/rpcs3/Emu/Cell/Modules/cellMsgDialog.h:26-52). */
+constexpr uint32_t CELL_MSGDIALOG_TYPE_SE_ERROR = 0u << 0;
+constexpr uint32_t CELL_MSGDIALOG_TYPE_BUTTON_OK = 2u << 4;
+}
+
+/* --- cellMsgDialog*: a real system dialog, not an auto-answer -------------
+ *
+ * The old handler answered the callback on the spot with a guessed button and
+ * never had an "open" state. See runtime/include/runtime/msgdialog.h for what
+ * replaces it and which RPCS3 lines the button values come from. The short
+ * version: the dialog now opens, the SYSTEM reads the pad, the callback fires
+ * when -- and only when -- a button that the dialog type accepts is pressed,
+ * and while a dialog is open a second open2 returns CELL_SYSUTIL_ERROR_BUSY
+ * exactly as firmware does.
+ *
+ * Measurement that motivated this: the "level autosave feature" dialog this
+ * title shows is NOT one of ours. No cellMsgDialog* import is ever called in a
+ * run that displays it (grep 'msgdialog' game.log -> 0 lines before this
+ * change), and no cellSaveData error dialog is raised either. The title draws
+ * that box itself. This rewrite is still the right thing for every OTHER
+ * title dialog, and it makes the import's behaviour correct instead of a
+ * guess; it cannot, on its own, remove the game's own autosave box. */
 HLE_FUNC(cellSysutil, cellMsgDialogOpen2) {
     uint32_t type = a32(ctx, 0);
     std::string msg = gstr(a32(ctx, 1));
     uint32_t cb = a32(ctx, 2), user = a32(ctx, 3);
-    LOG_WARN("cellSysutil", "cellMsgDialogOpen2(0x%x) '%s'", type, msg.c_str());
-    if (cb) {
-        uint32_t button = ((type >> 4) & 7) == 1 ? 1 : 3;
-        post([cb, user, button](ppu::Context& c) { call_guest(c, cb, button, user); });
-    }
-    ret(ctx, 0);
+    ret(ctx, msgdialog::open(type, msg.c_str(), cb, user));
 }
+
+/* cellMsgDialogOpenErrorCode(errorCode, callback, userData, extParam):
+ * refs/rpcs3/.../cellMsgDialog.cpp:432-505 turns the code into localized text
+ * and opens an error-type OK dialog. We keep the code in the message so a log
+ * identifies which error the title reported, and use the same OK-button type
+ * so the same pad rule applies. */
+HLE_FUNC(cellSysutil, cellMsgDialogOpenErrorCode) {
+    uint32_t code = a32(ctx, 0);
+    uint32_t cb = a32(ctx, 1), user = a32(ctx, 2);
+    char buf[64];
+    std::snprintf(buf, sizeof buf, "An error has occurred. (0x%08x)", code);
+    LOG_WARN("cellSysutil", "cellMsgDialogOpenErrorCode(0x%08x)", code);
+    ret(ctx, msgdialog::open(CELL_MSGDIALOG_TYPE_SE_ERROR | CELL_MSGDIALOG_TYPE_BUTTON_OK,
+                             buf, cb, user));
+}
+
+HLE_FUNC(cellSysutil, cellMsgDialogClose) {
+    /* The argument is a float delay in milliseconds. */
+    const float delay = static_cast<float>(ctx.fpr[1]);
+    ret(ctx, msgdialog::close_dialog(delay > 0.0f ? static_cast<uint32_t>(delay) : 0u));
+}
+
+HLE_FUNC(cellSysutil, cellMsgDialogAbort) {
+    ret(ctx, msgdialog::abort());
+}
+
+HLE_FUNC(cellSysutil, cellMsgDialogProgressBarInc) { ret(ctx, 0); }
+HLE_FUNC(cellSysutil, cellMsgDialogProgressBarSetMsg) { ret(ctx, 0); }
+HLE_FUNC(cellSysutil, cellMsgDialogProgressBarReset) { ret(ctx, 0); }
 
 HLE_FUNC(cellSysutil, cellSaveDataListAutoLoad) {
     ret(ctx, static_cast<int32_t>(0x8002b40b));
