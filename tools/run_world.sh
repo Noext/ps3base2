@@ -207,16 +207,20 @@ ensure_xvfb
 launch_game() {
     : > "$LOG"
     : > "$ICMD"
-    local force_env=()
-    [ -n "$FORCE_SPEC" ] && force_env=("PS3BASE_FORCE=$FORCE_SPEC")
-    ( cd "$TREE" && \
-      DISPLAY=:0 XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/0}" \
-      PS3BASE_DISC_DIR="$DISC_DIR" \
-      PS3BASE_LOG="${PS3BASE_LOG:-info}" \
-      PS3BASE_INPUT_CMD="$ICMD" \
-      "${force_env[@]}" \
-      "${EXTRA_ENV[@]}" \
-      timeout "$SECONDS_BUDGET" "$BIN" --no-launcher > "$LOG" 2>&1 ) &
+    # Build the environment as an argv list for env(1). Expanding an empty
+    # array inline under \`set -u\` makes the assignment word itself the command,
+    # which is how "PS3BASE_SAVEDATA_TRACE=1: command not found" happened.
+    local -a env_args=(
+        "DISPLAY=:0"
+        "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/0}"
+        "PS3BASE_DISC_DIR=$DISC_DIR"
+        "PS3BASE_LOG=${PS3BASE_LOG:-info}"
+        "PS3BASE_INPUT_CMD=$ICMD"
+    )
+    [ -n "$FORCE_SPEC" ] && env_args+=("PS3BASE_FORCE=$FORCE_SPEC")
+    local e
+    for e in ${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"}; do env_args+=("$e"); done
+    ( cd "$TREE" && env "${env_args[@]}" timeout "$SECONDS_BUDGET" "$BIN" --no-launcher > "$LOG" 2>&1 ) &
     GAME_PID=$!
 }
 
