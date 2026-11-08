@@ -111,20 +111,35 @@ void release_image_handle(uint32_t id) {
  * the source is not one of the forms served here, so the caller returning an
  * error is informative rather than mysterious. */
 bool read_src_bytes(uint32_t src_ea, std::vector<uint8_t>& out) {
-    if (!src_ea) return false;
+    if (!src_ea) { LOG_WARN("pngdec", "SRC: src_ea 0 -> no source structure"); return false; }
     /* CellPngDecSrc: s32 srcSelect, char* fileName, s64 fileOffset, u32
      * fileSize. srcSelect 0 means "from file". */
     const int32_t select = static_cast<int32_t>(vm::read32(src_ea));
+    /* LOGGED ON PURPOSE: the world-thumbnail path is the one place where the
+     * two source forms behave differently, so the selector has to be visible in
+     * the log next to the outcome, not inferred later. */
+    LOG_INFO("pngdec", "SRC: src=0x%08x srcSelect %d (0=file 1=buffer)",
+             src_ea, select);
     if (select == 1) {
-        /* Buffer source: the PNG lives in guest memory. */
+        /* Buffer source: the PNG lives in guest memory. Offsets are RPCS3's
+         * CellPngDecSrc: +20 streamPtr, +24 streamSize
+         * (refs/rpcs3/rpcs3/Emu/Cell/Modules/cellPngDec.h:130-140). */
         const uint32_t stream_ptr = vm::read32(src_ea + 20);
         const uint32_t stream_size = vm::read32(src_ea + 24);
+        LOG_INFO("pngdec", "SRC buffer: ptr 0x%08x size %u mapped %d",
+                 stream_ptr, stream_size,
+                 (stream_ptr && stream_size) ? (int)vm::range_mapped(stream_ptr, stream_size) : 0);
         if (!stream_ptr || !stream_size || !vm::range_mapped(stream_ptr, stream_size)) {
             LOG_WARN("cellPngDec", "buffer source 0x%08x size %u is not mapped",
                      stream_ptr, stream_size);
             return false;
         }
-        out.assign(vm::ptr(stream_ptr), vm::ptr(stream_ptr) + stream_size);
+        /* A mapped-but-empty buffer is a different defect from an unmapped one:
+         * log the first bytes so a short/garbage PNG is visible. */
+        const uint8_t* p = vm::ptr(stream_ptr);
+        LOG_INFO("pngdec", "SRC buffer bytes: %02x %02x %02x %02x %02x %02x %02x %02x",
+                 p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]);
+        out.assign(p, p + stream_size);
         return true;
     }
     if (select != 0) {
@@ -146,6 +161,8 @@ bool read_src_bytes(uint32_t src_ea, std::vector<uint8_t>& out) {
                  path.c_str());
         return false;
     }
+    LOG_INFO("pngdec", "SRC file: '%s' offset %llu size %u", guest_path.c_str(),
+             (unsigned long long)offset, size);
     std::fseek(f, 0, SEEK_END);
     const long total = std::ftell(f);
     std::fseek(f, static_cast<long>(offset), SEEK_SET);
@@ -283,16 +300,26 @@ HLE_FUNC(cellPngDec, cellPngDecOpen) {
     const uint32_t info_ea = a32(ctx, 3);
     (void)info_ea;
 
-    if (!get_image_handle(handle)) return ret(ctx, static_cast<int32_t>(0x80611202));
+    if (!get_image_handle(handle)) {
+        LOG_WARN("pngdec", "Open EXIT: handle %u (slot 0x%08x) is not a decoder -> 0x80611202",
+                 handle, a32(ctx, 0));
+        return ret(ctx, static_cast<int32_t>(0x80611202));
+    }
 
     std::vector<uint8_t> bytes;
-    if (!read_src_bytes(src_ea, bytes)) return ret(ctx, static_cast<int32_t>(0x80611203));
+    if (!read_src_bytes(src_ea, bytes)) {
+        LOG_WARN("pngdec", "Open EXIT: no bytes from src 0x%08x -> 0x80611203", src_ea);
+        return ret(ctx, static_cast<int32_t>(0x80611203));
+    }
 
     int w = 0, h = 0, n = 0;
     stbi_uc* px = stbi_load_from_memory(bytes.data(), static_cast<int>(bytes.size()),
                                         &w, &h, &n, 4);
     if (!px) {
-        LOG_WARN("cellPngDec", "stb_image refused the file: %s", stbi_failure_reason());
+        LOG_WARN("cellPngDec", "stb_image refused the %zu bytes: %s", bytes.size(),
+                 stbi_failure_reason());
+        LOG_WARN("pngdec", "Open EXIT: stb refused %zu bytes from src 0x%08x -> 0x80611204",
+                 bytes.size(), src_ea);
         return ret(ctx, static_cast<int32_t>(0x80611204));
     }
     /* A sub-handle is one image. Allocating the state here, per Open, is what

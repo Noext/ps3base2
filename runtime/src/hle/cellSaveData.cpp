@@ -473,7 +473,21 @@ HLE_FUNC(cellSysutil, cellSaveDataUserListAutoLoad) {
     /* 9th+ arguments live at sp+0x70 in the caller's parameter area
      * (refs/rpcs3 .../PPUThread.cpp:3251 get_stack_arg: gpr[1] + 0x30 + 8*(i-1)).
      * 0x64 sat inside the r3-r10 save area and read unrelated stack. */
-    const uint32_t stack_userdata = vm::read32(static_cast<uint32_t>(ctx.gpr[1]) + 0x70);
+    /* The parameter area slot is a DOUBLEWORD. The title stores it with
+     * `st64 sp+112, r30` (out/ppu/mc_029.cpp:4201), and on big-endian POWER the
+     * low half of that 8-byte value lives at slot+4. Reading 32 bits at slot+0
+     * returns the HIGH half, which is 0 for every small userdata.
+     * RPCS3 does not make this mistake because get_stack_arg returns a
+     * be_t<u64>* and the caller truncates: (`+*ctx->get_stack_arg(i)` then
+     * ppu_gpr_cast<u32>), i.e. it reads the whole dword and keeps the low bits.
+     * refs/rpcs3/rpcs3/Emu/Cell/PPUThread.cpp:3251 and
+     * refs/rpcs3/rpcs3/Emu/Cell/Modules/sys_libc_.cpp:27. */
+    const uint32_t sp_now = static_cast<uint32_t>(ctx.gpr[1]);
+    const uint64_t slot64 = vm::read64(sp_now + 0x70);
+    const uint32_t stack_userdata = static_cast<uint32_t>(slot64 & 0xffffffffu);
+    LOG_INFO("savedata", "UserListAutoLoad stack arg9: slot64 0x%llx hi 0x%08x lo 0x%08x -> userdata 0x%x",
+             (unsigned long long)slot64, vm::read32(sp_now + 0x70), vm::read32(sp_now + 0x74),
+             stack_userdata);
 
     LOG_INFO("savedata",
              "UserListAutoLoad version 0x%x user %u errDialog 0x%x setList 0x%08x setBuf 0x%08x "
@@ -723,7 +737,13 @@ HLE_FUNC(cellSysutil, cellSaveDataUserAutoLoad) {
      * Cross-check: refs/rpcs3 .../PPUThread.cpp:3251 get_stack_arg(i) returns
      * gpr[1] + 0x30 + 8*(i-1), and the title stores it at gpr[1]+112 in
      * thread_autoload (out/ppu/mc_029.cpp:4201). */
-    const uint32_t userdata = vm::read32(sp + 0x70);
+    /* The slot is a doubleword and big-endian: the value is right-justified,
+     * so its low 32 bits are at slot+4, not slot+0. See the long note in
+     * cellSaveDataUserListAutoLoad below; this is the same read. */
+    const uint64_t slot64 = vm::read64(sp + 0x70);
+    const uint32_t userdata = static_cast<uint32_t>(slot64 & 0xffffffffu);
+    LOG_INFO("savedata", "UserAutoLoad stack arg9: slot64 0x%llx hi 0x%08x lo 0x%08x -> userdata 0x%x",
+             (unsigned long long)slot64, vm::read32(sp + 0x70), vm::read32(sp + 0x74), userdata);
     (void)version; (void)err_dialog; (void)container;
 
     /* The title gates GAMEDATA allocation on result->userdata == 1 (see
