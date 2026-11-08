@@ -237,3 +237,63 @@ Not the emulator. **The input sequence.**
   and the fault is in what we present to the title at read time.
 - `f_0064c044` crashes `(4J) Server` (`lr=0x64c0fc`) after long sessions: a
   corrupted list pointer, unrelated to the render.
+
+# Campaign round: playability, loading, crash — state on merged main
+
+Proof capture: `docs/world-on-main.png` (oasis, trees, lake, ten hearts, hotbar,
+7 fps). Taken on fully merged `main` via `tools/run_world.sh vfs-play
+--seconds 1300`: **610 flips, 0 crashes, 7 world saves on disk, APPLIED = 0**.
+
+## What was fixed (all merged, all with tests or measurements)
+
+| Defect | Fix | Evidence |
+|---|---|---|
+| `xdotool key` presses were lost | `host::note_key` latches a scancode for 5 frames on `SDL_EVENT_KEY_DOWN` | 10 presses at 0 ms: **6 → 57** active pad frames |
+| No keyboard binding for the right stick | R/F/T/G mapped to `b[4]`/`b[5]` | without them the camera cannot aim, so L2/R2 have no target |
+| `userdata` read at `sp+0x60` instead of `sp+0x70` | all 3 savedata sites use `sp+0x70` | `-2` results in a full list walk: **6 → 0** |
+| HLE lwmutex lost ownership; destroy could admit a second thread | ownership tracked, foreign unlock refused, destroy marks dead instead of erasing | `lwmutex_hle` 5 checks, `lwmutex_contention` 3 checks, 0 failures |
+| `tools/run_world.sh` hardcoded `DISPLAY=:0` | a display per run, derived from the VFS path | run picked `:45` on its own beside 8 other servers |
+
+The keyboard result is the one to keep: the game was driven **from the main menu
+into a world by real X events alone**, with no input file and no forcing.
+
+## Retracted claims
+
+- **"The SDL focus guard blocks keyboard input."** Wrong: under Xvfb with no
+  window manager `SDL_GetKeyboardFocus()` returns our window immediately and the
+  guard passes. The press itself was too short to sample.
+- **"THUMB is misclassified as NORMALFILE."** Wrong: the title's own load callback
+  asks for `fileType = 1` in hardcoded form (`mc_029.cpp:5844`), RPCS3's enum does
+  not list THUMB at all, and its `statGet` leaves it as NORMALFILE. Nothing to fix.
+
+## Still open, each with its diagnosis closed
+
+**Loading an existing world — the thumbnail wall.** The only writer of
+list-entry `+168` (thumbnail size) and `+172` (pointer) is `f_002eeae4`
+(`mc_029.cpp:11016-11021`), and it is **never called**: `grep -c 'thumbset:' = 0`
+across a whole run. So `+168` stays 0, `f_002e8ae8` takes its hardcoded `(0,0)`
+branch (`mc_029.cpp:3714-3715`), `f_001013b4` stores zeros at `+2512/+2516`, and
+`f_0004a7a4` finally does `ld8[0]` → SIGSEGV with `guest 0x0`, `r3=r4=r5=0`.
+Reproduced 6 of 6. What is missing is the branch point that should call the
+setter — its OPD `0xbbe7f8` has zero data references, so it is only reachable
+through a vtable filled at run time.
+
+**The `f_0064c044` crash — mechanism known, cause not proven.** One 4-byte word
+of one list node is overwritten with a word from the title's own `.text`
+(`0x00721f30` in one dump, `0x00730100` in another; `0x721f30` disassembles to
+`stw r3,0(r26)`). The other 52 table heads are intact and the chain from the
+crashing object is clean for 29 nodes with a proper `+32 = 0` terminator.
+
+Both hypotheses that seemed obvious were **refuted by test**:
+
+- the guest reservation is fine — a real `lwarx`/`addi`/`stwcx` loop gives exact
+  counts at 2 and 4 threads over three rounds, and invalidation fails exactly
+  when it should;
+- the HLE lwmutex is not involved — with `PS3BASE_LWMUX_TRACE=1` it is never
+  called; the title uses syscalls 95-99 (1271 create, 1155 destroy, 37 lock,
+  32 unlock).
+
+`PS3BASE_LIST_GUARD=1` now names the node and both values **before** the
+dereference, so the next attempt starts from the node rather than from the
+crash. Reproduction is unstable (about 3 runs in 16), so a clean run is not a
+proof.
