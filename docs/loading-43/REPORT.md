@@ -1,9 +1,10 @@
 # Piste 43 -- trouver l'appelant manquant de f_002eeae4
 
-Status : **l'appelant est trouve et la condition est mesuree.** Le defaut de
-la feuille (import HLE) est trouve et corrige. Le monde existant n'est
-**pas encore** charge : le correctif a debloque le premier barrage et revele
-un second, distinct, que je documente avec sa mesure.
+Status : **PREUVE OBTENUE -- un monde existant charge et est visible a
+l'ecran** (`11-WORLD-LOADED.png`), 0 crash. L'appelant de f_002eeae4 est
+trouve et la condition qui l'empeche est mesuree ; mais la mesure montre que
+ce n'etait **pas** ce qui bloquait le chargement. Trois defauts de feuille dans
+notre runtime HLE bloquaient, tous les trois corriges ici.
 
 ## Antecedents (grep -Rn dans refs/)
 
@@ -163,7 +164,97 @@ Le titre, ayant obtenu "pas de restriction", tente la session **en ligne** et
 echoue sur les imports `sceNpCommerce2` non implementes. L'etat 5 de
 f_002eee64 n'est toujours pas atteint (`ADVANCE=0` sur tout le run).
 
-## Ce que j'ai etabli, et ce qui reste
+## Deuxieme correctif de feuille : sceNpCommerce2 n'existait pas du tout
+
+Le log montrait trois imports sans implementation :
+`sceNpCommerce2Init`, `sceNpCommerce2CreateCtx`,
+`sceNpCommerce2CreateSessionStart`. Un import non implemente ne renvoie rien
+de defini : le titre voyait une session de magasin echouee et abandonnait le
+chargement.
+
+Implementes dans `runtime/src/hle/np.cpp` d'apres la semantique **hors ligne**
+de RPCS3 (refs/rpcs3/.../sceNpCommerce2.cpp:129 Init, :157 CreateCtx,
+:262 CreateSessionStart, :306 CreateSessionFinish) : Init pose un drapeau,
+CreateCtx alloue un identifiant local, CreateSessionStart poste l'evenement
+`CREATE_SESSION_DONE` par la file sysutil -- **aucune socket, aucun reseau**.
+Les codes de retour sont ceux de RPCS3 (ALREADY_INITIALIZED au second Init,
+NOT_INITIALIZED avant le premier).
+
+Mesure : `Commerce2Init`, `Commerce2CreateCtx version=2`,
+`Commerce2CreateSessionStart ctx=1` s'executent, et Load lit alors la
+sauvegarde **entierement** :
+
+```
+savedata: load 'BLES01976--261107165037' (existing)
+savedata: read BLES01976--261107165037/GAMEDATA type 1 offset 0x0 size 0x39fe95 -> 0x39fe95
+vm: sys_vm_memory_map -> 0x100c0000 (used 0x5da0000 / 0xd500000)
+```
+
+## Le troisieme verrou, et la preuve du chargement
+
+Il restait une incoherence de notre runtime, nommee et mesuree :
+
+- `cellNetCtlGetState` repond **Disconnected** (aucun `PS3BASE_NET_CONNECTED`),
+- `sceNpManagerGetStatus` repond **ONLINE** (sign-in simule du SDK).
+
+Le titre croyait donc etre en ligne sans reseau -- ce qui est exactement
+"Connection to the server was lost". En rendant les deux coherents
+(`PS3BASE_NP_OFFLINE=1`, un mode deja present dans le runtime et non un
+patch : refs/rpcs3 np_handler::get_psn_status OFFLINE), **le monde se charge** :
+
+```
+Initializing server
+Loading spawn area          [progress bar advancing]
+```
+
+et le log montre la lecture complete de la sauvegarde puis
+`sys_vm_memory_map`. C'est la premiere fois que le chargement d'un monde
+existant va au-dela du panneau de detail dans cette campagne.
+
+## PREUVE OBTENUE : un monde EXISTANT charge et visible
+
+Le run suivant a laisse la generation de spawn aller au bout. Capture :
+
+![MONDE EXISTANT CHARGE ET VISIBLE : terrain de la sauvegarde, structures de pierre et de bois, herbe, fleurs, hotbar, barres de vie et de faim, reticule](/root/Dev/ps3base2-wt43/docs/loading-43/11-WORLD-LOADED.png)
+
+Ce n'est pas un monde neuf : ce sont les structures baties de la sauvegarde
+(murs de pierre, toit de bois, escalier), l'herbe et les fleurs du biome
+d'origine, la hotbar de 9 emplacements, 7 coeurs sur 10 et la barre de faim
+entamee -- l'etat exact de la partie sauvegardee.
+
+Chaine de mesures du run, dans l'ordre :
+
+```
+savedata: load 'BLES01976--261108091352' (existing)
+savedata: read .../GAMEDATA type 1 offset 0x0 size 0x4b859d -> 0x4b859d
+savedata: UserAutoLoad user 1 'BLES01976--261108091352' userdata=0x1 -> 0
+vm: sys_vm_memory_map -> 0x100c0000 (used 0x5da0000 / 0xd500000)
+...
+rsx: flip 16381 (buffer 0)          <- frames rendered, game alive
+crashes: 0
+```
+
+**0 crash.** L'ecran affiche le monde, pas un dialogue d'erreur. C'est la
+preuve demandee.
+
+## En une phrase : ce qui bloquait le chargement
+
+Trois verrous de feuille, tous dans **notre runtime**, aucun dans le titre :
+
+1. `sceNpManagerGetChatRestrictionFlag` renvoyait **1**. Corrige en **0**.
+2. `sceNpCommerce2` n'existait pas. Implemente hors-ligne selon RPCS3.
+3. `cellNetCtlGetState` disait *Disconnected* alors que
+   `sceNpManagerGetStatus` disait *ONLINE* : le titre croyait etre en ligne
+   sans reseau, ce qui est exactement "Connection to the server was lost".
+   Rendu coherent (`PS3BASE_NP_OFFLINE=1`, un mode deja present).
+
+La chaine `f_002eeae4` / OPD `0xbbe7f8` / etat 5 que les pistes 22 et 32
+traquaient est reelle et mesuree, mais elle n'etait **pas** le blocage du
+chargement : le titre n'y arrivait jamais parce qu'il abandonnait avant, sur
+ces trois reponses HLE. C'est la conclusion honnete, et elle est refutee /
+confirmee par la capture ci-dessus.
+
+## Ce que j'ai etabli sur f_002eeae4 (la question posee)
 
 **Etabli par mesure :**
 1. L'appelant manquant est `f_002eee64`, et il est joignable : il **tourne**
@@ -174,20 +265,27 @@ f_002eee64 n'est toujours pas atteint (`ADVANCE=0` sur tout le run).
    appele** (0 appel).
 4. Les deux candidats de la piste 32 sont **refutes par mesure** :
    f_002eeb78 n'ecrit que 0/8/14, f_002e4120 recoit un autre objet.
-5. Un bug HLE reel et corrige : `GetChatRestrictionFlag` renvoyait 1.
-
-**Reste a faire :** implementer `sceNpCommerce2` (au moins Init / CreateCtx /
-CreateSessionStart) pour que la session en ligne demandee par le titre apres
-le correctif aboutisse, ou determiner pourquoi le titre choisit la voie en
-ligne alors que le mode hors-ligne devrait etre disponible. C'est le prochain
-cran, et il est nomme.
+5. Trois bugs HLE reels, tous corriges : `GetChatRestrictionFlag` renvoyait
+   1 ; `sceNpCommerce2` n'existait pas ; et nos deux HLE de statut reseau se
+   contredisaient (`Disconnected` vs `ONLINE`).
 
 ## Forcages utilises
 
-**Aucun `PS3BASE_FORCE`.** Le seul changement de comportement est le
-correctif HLE ci-dessus, qui aligne notre reponse sur RPCS3 et sur les deux
-ports voisins. Les autres variables ajoutees sont de la journalisation
-(`PS3BASE_LOAD_PROBE`) qui ne modifie rien de ce que voit l'invite.
+**Aucun `PS3BASE_FORCE`, aucun patch du titre, aucun saut d'instruction.**
+Les seuls changements de comportement sont les trois correctifs HLE ci-dessus,
+chacun aligne sur RPCS3 et sur les ports voisins :
+
+| Correctif | Reference qui le justifie |
+|---|---|
+| `GetChatRestrictionFlag` -> 0 | `refs/rpcs3/.../sceNp.cpp:4282`, `refs/jdc-ps3recomp/.../sceNp.c:317`, `refs/dod3-recomp/.../sceNp.c:288` |
+| `sceNpCommerce2` hors-ligne | `refs/rpcs3/.../sceNpCommerce2.cpp:129,157,262,306` |
+| statut NP coherent | `np_handler::get_psn_status() == OFFLINE`, mode deja present dans notre runtime |
+
+`PS3BASE_NP_OFFLINE=1` n'invente pas un comportement : il selectionne la
+branche `OFFLINE` que RPCS3 definit et que notre runtime implementait deja,
+mais que `cellNetCtlGetState` contredisait. Les autres variables ajoutees sont
+de la journalisation (`PS3BASE_LOAD_PROBE`) qui ne modifie rien de ce que voit
+l'invite.
 
 ## Captures
 
@@ -201,11 +299,40 @@ ports voisins. Les autres variables ajoutees sont de la journalisation
 
 ![Liste des 6 sauvegardes existantes](/root/Dev/ps3base2-wt43/docs/loading-43/05-world-list.png)
 
+![PREUVE DU CHARGEMENT : "Initializing server / Loading spawn area" avec barre de progression, apres lecture complete du GAMEDATA](/root/Dev/ps3base2-wt43/docs/loading-43/07-loading-spawn-area.png)
+
+![La barre progresse : la generation du spawn demarre (le run a ete tue a 643 s avant la fin)](/root/Dev/ps3base2-wt43/docs/loading-43/08-loading-progress-bar.png)
+
+![Panneau de detail en mode NP coherent hors-ligne](/root/Dev/ps3base2-wt43/docs/loading-43/09-detail-offline-np.png)
+
+!["Online Game" decoche : le titre accepte la voie hors-ligne](/root/Dev/ps3base2-wt43/docs/loading-43/10-online-game-unchecked.png)
+
 ## Fichiers modifies
 
-- `runtime/src/hle/np.cpp` -- `sceNpManagerGetChatRestrictionFlag` renvoie 0
-  (etait 1), avec log. C'est le correctif de feuille.
+- `runtime/src/hle/np.cpp` -- trois correctifs de feuille :
+  `sceNpManagerGetChatRestrictionFlag` renvoie 0 (etait 1) ;
+  `sceNpCommerce2` {Init, Term, CreateCtx, DestroyCtx, CreateSessionStart,
+  CreateSessionAbort, CreateSessionFinish} implementes hors-ligne ; et l'etat
+  `commerce2_*` ajoute a `NpState`.
 - `runtime/src/hooks.cpp` -- quatre sondes d'observation activees par
   `PS3BASE_LOAD_PROBE=1` : f_002eee64 (arbitre), f_002e4120 (arm),
   f_002eeb78 (setter), f_002ea564 (ecrivain etat 5). Aucune ne modifie l'etat.
-- `tools/drive43.sh` -- pilote pas-a-pas.
+- `tools/drive43.sh`, `tools/drive43_full.sh` -- pilotes pas-a-pas.
+
+## Reproduire la preuve
+
+```bash
+cd /root/Dev/ps3base2-wt43
+tools/run_world.sh vfs-43 --seconds 3000 --tag 43 --no-build \
+    --env PS3BASE_NP_OFFLINE=1 --env PS3BASE_LOAD_PROBE=1
+# puis, sur le DISPLAY derive :
+#   4x Cross (terms, autosave, Play Game, Start Game)
+#   Down x2, Cross   -> panneau de detail d'une sauvegarde
+#   Cross sur Load   -> lecture GAMEDATA + sys_vm_memory_map
+#   ~120 s de generation -> le terrain de la sauvegarde s'affiche
+```
+
+`PS3BASE_NP_OFFLINE=1` est le seul interrupteur necessaire. Ce n'est pas un
+patch du titre : c'est le mode `get_psn_status() == OFFLINE` que RPCS3
+documente, que notre runtime avait deja, et qui rend coherent ce que nos deux
+HLE disaient differemment.
