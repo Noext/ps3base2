@@ -344,12 +344,66 @@ int32_t run_op(Op& op) {
                      gstr(e + 0x28, 13).c_str());
         }
     }
+    /* The title's own load callback (f_002ea6ac, mc_029.cpp:5683) is a state
+     * machine driven by a global at 0xbd4a08:
+     *   +332  step (0 METADATA, 1 parse+THUMB, 2 verify THUMB, 3 GAMEDATA, ...)
+     *   +2312 version read from METADATA[0..4]
+     *   +2316 crc32(GAMEDATA) from METADATA[12..16]
+     *   +2320 crc32(THUMB)    from METADATA[16..20]
+     *   +2324 GAMEDATA buffer   +2328 GAMEDATA size
+     *   +2592 THUMB buffer      +2596 THUMB size
+     * When it returns -2 it is either a size mismatch against fileGet->excSize,
+     * a CRC32 mismatch, or a null GAMEDATA buffer. Logging all of them says
+     * which, instead of guessing. */
+    auto sd_global = []() -> uint32_t {
+        /* f_002ea6ac does gpr31 = ld32(0xbe4a08): the savedata global is a
+         * pointer, not a fixed address (mc_029.cpp:5692,5701). */
+        if (!vm::range_mapped(0xbe4a08u, 4)) return 0u;
+        const uint32_t g = vm::read32(0xbe4a08u);
+        return g && vm::range_mapped(g, 4) ? g : 0u;
+    };
+    auto crc32_of = [](uint32_t addr, uint32_t len) -> uint32_t {
+        static uint32_t table[256];
+        static bool init = false;
+        if (!init) {
+            for (uint32_t i = 0; i < 256; i++) {
+                uint32_t c = i;
+                for (int k = 0; k < 8; k++) c = (c & 1) ? 0xEDB88320u ^ (c >> 1) : c >> 1;
+                table[i] = c;
+            }
+            init = true;
+        }
+        if (!addr || !len || !vm::range_mapped(addr, len)) return 0u;
+        uint32_t c = 0xFFFFFFFFu;
+        const uint8_t* p = vm::ptr(addr);
+        for (uint32_t i = 0; i < len; i++) c = table[(c ^ p[i]) & 0xFF] ^ (c >> 8);
+        return c ^ 0xFFFFFFFFu;
+    };
+    const bool trace_state = trace_files && !op.save;
     for (int iter = 0; result == CB_OK_NEXT && iter < 4096; iter++) {
         std::memset(vm::ptr(cb), 0, 0x20);
         vm::write32(cb + 0x10, op.userdata);
         std::memset(vm::ptr(fs), 0, 0x30);
         call_guest(op.ctx, op.func_file, cb, fg, fs);
         result = static_cast<int32_t>(vm::read32(cb));
+        if (trace_state) {
+            const uint32_t g = sd_global();
+            if (g && vm::range_mapped(g + 332, 4)) {
+                const uint32_t step = vm::read32(g + 332);
+                const uint32_t gbuf = vm::read32(g + 2324), gsz = vm::read32(g + 2328);
+                const uint32_t tbuf = vm::read32(g + 2592), tsz = vm::read32(g + 2596);
+                const uint32_t want_gcrc = vm::read32(g + 2316), want_tcrc = vm::read32(g + 2320);
+                const uint32_t exc = vm::read32(fg + 0x0);
+                LOG_INFO("savedata",
+                         "  state: step %u ver %u gsz 0x%x tsz 0x%x gbuf 0x%08x tbuf 0x%08x "
+                         "excSize 0x%x | want crcG %08x crcT %08x | got crcG %08x crcT %08x",
+                         step, vm::read32(g + 2312), gsz, tsz, gbuf, tbuf, exc,
+                         want_gcrc, want_tcrc,
+                         crc32_of(gbuf, gsz), crc32_of(tbuf, tsz));
+            } else {
+                LOG_INFO("savedata", "  state: global 0x%08x not mapped", g);
+            }
+        }
         if (trace_files) {
             char hex[3 * 0x40 + 1] = {};
             for (int i = 0; i < 0x40; i++)
@@ -416,7 +470,10 @@ HLE_FUNC(cellSysutil, cellSaveDataUserListAutoLoad) {
     /* The ninth and tenth arguments are stack arguments under the PPU ABI, not
      * registers: container is at sp+0x60 and userdata at sp+0x64. Reading
      * a32(ctx, 8) picked up r11, which is not an argument at all. */
-    const uint32_t stack_userdata = vm::read32(static_cast<uint32_t>(ctx.gpr[1]) + 0x64);
+    /* 9th+ arguments live at sp+0x70 in the caller's parameter area
+     * (refs/rpcs3 .../PPUThread.cpp:3251 get_stack_arg: gpr[1] + 0x30 + 8*(i-1)).
+     * 0x64 sat inside the r3-r10 save area and read unrelated stack. */
+    const uint32_t stack_userdata = vm::read32(static_cast<uint32_t>(ctx.gpr[1]) + 0x70);
 
     LOG_INFO("savedata",
              "UserListAutoLoad version 0x%x user %u errDialog 0x%x setList 0x%08x setBuf 0x%08x "
@@ -547,7 +604,9 @@ HLE_FUNC(cellSysutil, cellSaveDataUserAutoSave) {
     const uint32_t func_file = a32(ctx, 6);
     const uint32_t container = a32(ctx, 7);
     /* Argument 9 onward lives on the caller's stack, above the frame header. */
-    const uint32_t userdata = vm::read32(static_cast<uint32_t>(ctx.gpr[1]) + 0x60);
+    /* 9th argument (userdata) is at sp+0x70, not sp+0x60: see the note in
+     * cellSaveDataUserAutoLoad. */
+    const uint32_t userdata = vm::read32(static_cast<uint32_t>(ctx.gpr[1]) + 0x70);
 
     std::string name = gstr(dir_name_ea, 32);
     LOG_INFO("savedata",
@@ -655,8 +714,30 @@ HLE_FUNC(cellSysutil, cellSaveDataUserAutoLoad) {
     const uint32_t func_stat = a32(ctx, 5);
     const uint32_t func_file = a32(ctx, 6);
     const uint32_t container = a32(ctx, 7);
-    const uint32_t userdata = vm::read32(static_cast<uint32_t>(ctx.gpr[1]) + 0x60);
+    const uint32_t sp = static_cast<uint32_t>(ctx.gpr[1]);
+    /* PPU64 ABI: r3-r10 carry arguments 1-8; arguments 9 onward live in the
+     * caller's parameter area beginning at sp+0x70 (0x30 is the 8-dword
+     * parameter save area reserved for r3-r10, not a stack argument). This
+     * function's 9th argument is userdata, so it is at sp+0x70. Reading
+     * sp+0x60 picked up a slot inside the save area and always yielded 0.
+     * Cross-check: refs/rpcs3 .../PPUThread.cpp:3251 get_stack_arg(i) returns
+     * gpr[1] + 0x30 + 8*(i-1), and the title stores it at gpr[1]+112 in
+     * thread_autoload (out/ppu/mc_029.cpp:4201). */
+    const uint32_t userdata = vm::read32(sp + 0x70);
     (void)version; (void)err_dialog; (void)container;
+
+    /* The title gates GAMEDATA allocation on result->userdata == 1 (see
+     * f_002ea6ac, mc_029.cpp:5813: cr_set(0, gpr30, 1) then bc 4,2 -> L_2ea8f0,
+     * the THUMB-only path). So when we pass userdata 0, the title never asks
+     * for GAMEDATA at all and returns -2 from its own null-buffer branch at
+     * L_2eaa04. Dump the stack window once so the real value is known rather
+     * than assumed: the PPU ABI puts the 9th+ arguments at sp+0x50 upward, and
+     * the exact offset depends on the caller's frame. */
+    if (std::getenv("PS3BASE_SAVEDATA_STACK")) {
+        LOG_INFO("savedata", "UserAutoLoad stack: sp=0x%08x", sp);
+        for (uint32_t off = 0x40; off <= 0x90; off += 4)
+            LOG_INFO("savedata", "  sp+0x%02x = 0x%08x", off, vm::read32(sp + off));
+    }
 
     std::string name = gstr(dir_name_ea, 32);
     if (name.empty() || !set_buf || !func_stat || !func_file) {
@@ -666,7 +747,7 @@ HLE_FUNC(cellSysutil, cellSaveDataUserAutoLoad) {
     Op op{ctx, folded, save_root() + "/" + folded, set_buf, func_stat, func_file,
           userdata, false};
     const int32_t r = run_op(op);
-    LOG_INFO("savedata", "UserAutoLoad user %u '%s' -> %d", user, folded.c_str(), r);
+    LOG_INFO("savedata", "UserAutoLoad user %u '%s' userdata=0x%x -> %d", user, folded.c_str(), userdata, r);
     ret(ctx, r);
 }
 
