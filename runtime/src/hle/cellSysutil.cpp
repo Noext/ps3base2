@@ -1,6 +1,7 @@
 #include "common.h"
 
 #include <atomic>
+#include "runtime/cbwatch.h"
 #include "runtime/sysutil_events.h"
 #include "runtime/vfs.h"
 
@@ -49,6 +50,7 @@ HLE_FUNC(cellSysutil, cellSysutilRegisterCallback) {
     if (slot > 3) return ret(ctx, static_cast<int32_t>(0x8002b101));
     std::lock_guard lk(g_lock);
     g_callbacks[slot] = {a32(ctx, 1), a32(ctx, 2)};
+    cbwatch::note_register("sysutil", a32(ctx, 1), a32(ctx, 2));
     static std::atomic<int> seen{0};
     if (seen.fetch_add(1) < 20) {
         const uint32_t opd = a32(ctx, 1);

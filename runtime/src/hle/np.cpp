@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstdlib>
+#include "runtime/cbwatch.h"
 #include "runtime/sysutil_events.h"
 
 #include <cstring>
@@ -84,6 +85,10 @@ static void sysutil_send(uint64_t event) {
 HLE_FUNC(cellNetCtl, cellNetCtlInit) { ret(ctx, 0); }
 HLE_FUNC(cellNetCtl, cellNetCtlTerm) { ret(ctx, 0); }
 HLE_FUNC(cellNetCtl, cellNetCtlAddHandler) {
+    /* The handler OPD is stored so the census can report it as a callback the
+     * title registered. Nothing raises it: there is no network, so no event
+     * ever arrives. */
+    cbwatch::note_register("netctl-handler", a32(ctx, 1), a32(ctx, 2));
     if (uint32_t id = a32(ctx, 2)) vm::write32(id, 1);
     ret(ctx, 0);
 }
@@ -158,10 +163,22 @@ HLE_FUNC(sceNp2, sceNp2Term) { ret(ctx, 0); }
 HLE_FUNC(sceNp, sceNpInit) { NP_ENTER("sceNpInit"); ret(ctx, 0); }
 HLE_FUNC(sceNp, sceNpTerm) { ret(ctx, 0); }
 HLE_FUNC(sceNp, sceNpLookupInit) { ret(ctx, 0); }
-HLE_FUNC(sceNp, sceNpManagerRegisterCallback) { ret(ctx, 0); }
+/* sceNpManagerRegisterCallback(callback, arg): store the OPD in the census.
+ * This runtime never raises an NP manager event, so a title whose PSN
+ * sign-in path waits for one waits forever -- and the inventory names it. */
+HLE_FUNC(sceNp, sceNpManagerRegisterCallback) {
+    cbwatch::note_register("np-manager", a32(ctx, 0), a32(ctx, 1));
+    ret(ctx, 0);
+}
 HLE_FUNC(sceNp, sceNpManagerUnregisterCallback) { ret(ctx, 0); }
-HLE_FUNC(sceNp, sceNpBasicRegisterContextSensitiveHandler) { ret(ctx, 0); }
-HLE_FUNC(sceNp, sceNpBasicRegisterHandler) { ret(ctx, 0); }
+HLE_FUNC(sceNp, sceNpBasicRegisterContextSensitiveHandler) {
+    cbwatch::note_register("np-basic-ctx", a32(ctx, 0), a32(ctx, 1));
+    ret(ctx, 0);
+}
+HLE_FUNC(sceNp, sceNpBasicRegisterHandler) {
+    cbwatch::note_register("np-basic", a32(ctx, 0), a32(ctx, 1));
+    ret(ctx, 0);
+}
 HLE_FUNC(sceNp, sceNpManagerGetStatus) {
     if (uint32_t p = a32(ctx, 0)) vm::write32(p, static_cast<uint32_t>(SCE_NP_MANAGER_STATUS_OFFLINE));
     ret(ctx, 0);

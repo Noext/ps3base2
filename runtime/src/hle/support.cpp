@@ -1,4 +1,5 @@
 #include "common.h"
+#include "runtime/cbwatch.h"
 #include "runtime/thread.h"
 
 #include <map>
@@ -23,6 +24,9 @@ bool module_overridden(const std::string& file) {
 
 void call_guest(ppu::Context& ctx, uint32_t opd, uint64_t a0, uint64_t a1, uint64_t a2,
                 uint64_t a3, uint64_t a4) {
+    /* Every delivery of a guest callback passes through here, which makes this
+     * the one place that can count them against the registrations. */
+    cbwatch::note_call("hle", opd, a1);
     ppu::Context saved = ctx;
     ctx.gpr[1] = (ctx.gpr[1] - 0x200) & ~0xFull;
     ctx.gpr[3] = a0;

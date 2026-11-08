@@ -5,6 +5,7 @@
 #include "runtime/kernel.h"
 #include "runtime/loader.h"
 #include "runtime/log.h"
+#include "runtime/cbwatch.h"
 #include "runtime/force.h"
 #include "runtime/trace.h"
 #include <atomic>
@@ -244,9 +245,12 @@ void call_import(Context& ctx, uint8_t* base, uint32_t index) {
         call_import_body(ctx, base, index, slot, st, imp);
         uint64_t us = (trace::now_ns() - t0) / 1000;
         trace::emit(trace::T_IMPORT, id, a0, a1, a2, ctx.gpr[3], (uint64_t(lr) << 32) | (us > 0xFFFFFFFFull ? 0xFFFFFFFFull : us));
+        cbwatch::note_import(imp.module, *imp.name ? imp.name : "?", ctx.gpr[3], lr, st >= 0);
         return;
     }
+    const uint32_t lr = static_cast<uint32_t>(ctx.lr);
     call_import_body(ctx, base, index, slot, st, imp);
+    cbwatch::note_import(imp.module, *imp.name ? imp.name : "?", ctx.gpr[3], lr, st >= 0);
 }
 
 void call_import_inner(Context& ctx, uint8_t* base, uint32_t index, ImportSlot& slot, int32_t st, const image::ImportEntry& imp);

@@ -1,4 +1,5 @@
 #include "runtime/placement.h"
+#include "runtime/cbwatch.h"
 #include "runtime/host.h"
 #include "runtime/image.h"
 #include "runtime/loader.h"
@@ -373,6 +374,19 @@ int main(int argc, char** argv) {
             peeks.push_back(static_cast<uint32_t>(std::strtoul(q, &end, 16)));
             q = *end ? end + 1 : end;
         }
+    }
+    int cb_dump_at = std::getenv("PS3BASE_CENSUS_AT") ? std::atoi(std::getenv("PS3BASE_CENSUS_AT")) : 30;
+    if (std::getenv("PS3BASE_CENSUS") && cb_dump_at > 0) {
+        /* Periodic, not at exit: a run stopped by "timeout" gets SIGTERM and
+         * never reaches a shutdown path, so the inventory has to be written
+         * while the run is still alive. */
+        std::thread([cb_dump_at] {
+            host::set_thread_name("census dump");
+            for (;;) {
+                std::this_thread::sleep_for(std::chrono::seconds(cb_dump_at));
+                cbwatch::dump("periodic");
+            }
+        }).detach();
     }
     for (int tick = 0;; tick++) {
         if (census > 0 && tick % census == 0) thread_census(census);
