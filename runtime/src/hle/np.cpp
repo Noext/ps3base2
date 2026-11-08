@@ -160,8 +160,18 @@ NpState g_np;
  * simulated mode is a sign-in the SDK itself can produce; it is not a lie
  * about an error path, which is what the forcing is. */
 int32_t np_psn_status() {
-    static const bool offline = std::getenv("PS3BASE_NP_OFFLINE") != nullptr;
-    return offline ? SCE_NP_MANAGER_STATUS_OFFLINE : SCE_NP_MANAGER_STATUS_ONLINE;
+    /* Offline is the DEFAULT, and an opt-in switch selects the simulated
+     * sign-in. The reverse was a regression: with ONLINE reported, the title
+     * believes it has a session, starts one, and then dies on
+     * "Connection to the server was lost -- exiting to the main menu". That
+     * happened AFTER the world was created, so a short proof run never saw it.
+     *
+     * Offline is also the mode the loading proof used
+     * (docs/loading-43/REPORT.md), so making it the default keeps both paths:
+     * creating a world and loading one. PS3BASE_NP_ONLINE=1 opts into the
+     * simulated sign-in for anyone who wants to test that branch. */
+    static const bool online = std::getenv("PS3BASE_NP_ONLINE") != nullptr;
+    return online ? SCE_NP_MANAGER_STATUS_ONLINE : SCE_NP_MANAGER_STATUS_OFFLINE;
 }
 
 /* SCE_NP_MANAGER_EVENT_GOT_TICKET (255) is the only event RPCS3's header

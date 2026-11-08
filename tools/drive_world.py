@@ -93,7 +93,16 @@ def main():
         journal.append(state)
         print(f"{time.time()-t0:6.1f}s {state}", flush=True)
 
-        if state == "DIALOG":
+        if state == "PSNOFFLINE":
+            # "Online ID currently not online" -> two buttons: Connect, and
+            # "Continue playing offline". Default focus is Connect, which would
+            # take us onto the network path this build does not have. Move down
+            # once and confirm the offline row.
+            press(display, "Down")
+            time.sleep(0.8)
+            press(display, "z")
+            time.sleep(2.0)
+        elif state == "DIALOG":
             press(display, "z")
             time.sleep(1.5)
         elif state == "MENU":
