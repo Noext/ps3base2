@@ -305,3 +305,40 @@ world saves : GAMEDATA files in the VFS; 3+ means worlds are being written
   `NORMALFILE` where RPCS3 uses a content type.
 - `f_0064c044` crashes `(4J) Server` (`lr=0x64c0fc`) on long sessions: a
   corrupted linked-list pointer read as if it were a node.
+
+## Measured corrections to this document
+
+Two claims in this file were wrong and are retracted with measurement:
+
+**"The keyboard focus guard is why `xdotool key` never reaches the game."**
+Wrong. Under Xvfb with no window manager, `SDL_GetKeyboardFocus()` returns our
+window immediately (`GetKeyboardFocus == our_window` at t=0.000), the guard at
+`host_input.cpp:202` passes, and a press does reach `cellPadGetData`
+(`pad: frame 2537 bytes 00 7c 40 00 80 80 80 80`, `b[2]=0x40` = D-pad down).
+
+**The real cause: an X key press lasts too briefly to be sampled.**
+`xdotool key` sends press and release within the same millisecond;
+`poll_pad` reads `SDL_GetKeyboardState` once per frame at ~60 Hz, so a 0 ms
+press falls between two polls and is never seen.
+
+| Input | Frames where the pad was active |
+|---|---|
+| 10x `xdotool key Down` (0 ms press) | **6** -- about 90% lost |
+| 10x `keydown`/`keyup` at 120 ms | **69** -- reliable |
+| 10x `xdotool key Down` after the latch fix | **57** -- 10 of 10 seen |
+
+`host::note_key` now latches a scancode for 5 frames on `SDL_EVENT_KEY_DOWN`, so
+even a zero-length press is observed. `PS3BASE_ALLOW_UNFOCUSED_INPUT=1` lifts
+the focus guard for a server with no window manager (the guard stays on by
+default so a real desktop keeps normal behaviour).
+
+**For scripts:** never `xdotool key X`; use
+`xdotool keydown X; sleep 0.15; xdotool keyup X`.
+
+## One display per run
+
+`run_world.sh` derives a display from the VFS path and starts its own Xvfb
+there; `--display :NN` overrides. Sharing `:0` between runs makes windows steal
+each other's focus and pad input, and a capture can photograph another run's
+game. Kill a run by its process group (`kill -9 -- -$GAME_PID`), never by image
+name: `pkill -9 -x ps3base` kills every other agent's run too.

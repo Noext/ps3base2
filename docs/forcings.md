@@ -217,9 +217,23 @@ Not the emulator. **The input sequence.**
 
 ## Still open (does not block the world)
 
-- Loading an existing world: `Load` now issues `savedata: load` and the names
-  display, but the title's file callback returns `-2` at iteration #2 after
-  reading `METADATA` and `THUMB`, before `GAMEDATA`. `THUMB` is reported as
-  `NORMALFILE` instead of a content type -- the next thing to try.
+- Loading an existing world: `Load` issues `savedata: load` and the names
+  display, but the title's file callback returns `-2` after `METADATA` and
+  `THUMB`, before `GAMEDATA`.
+
+  **Correction of an earlier note**: `THUMB` is *not* misclassified. The title's
+  own load callback (`f_002ea6ac`, `mc_029.cpp:5841-5855`) asks for `THUMB` with
+  `fileType = 1` (`NORMALFILE`) in hardcoded form, RPCS3's `CellSaveDataFileType`
+  does not even list `THUMB` (`cellSaveData.h:103-108`), and its `statGet` maps
+  only `ICON0.PNG`/`ICON1.PAM`/`PIC1.PNG`/`SND0.AT3` to content types, leaving
+  `THUMB` as `NORMALFILE` (`cellSaveData.cpp:1676`). We already do the same.
+
+  The real gate is inside the title's callback, which is a state machine over a
+  global at `0xbe4a08 + 332`. Two branches return `-2`: after reading `THUMB`,
+  if the exceeded size does not match, or if `CRC32(THUMB)` does not match the
+  expected value; and if the `GAMEDATA` buffer was not allocated by the title.
+  `METADATA` is a 256-byte manifest (`count`, sizes and CRC32s for both files)
+  and its four fields match the files on disk exactly, so the disk is coherent
+  and the fault is in what we present to the title at read time.
 - `f_0064c044` crashes `(4J) Server` (`lr=0x64c0fc`) after long sessions: a
   corrupted list pointer, unrelated to the render.
