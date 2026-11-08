@@ -143,3 +143,77 @@ scroll arrow, but **the rows render blank and pressing Load does nothing**: no
 right count while the entry contents the title reads back are not what it
 expects -- the next thing to check is a byte-level dump of our `CellSaveDataDirList`
 entries against what the title reads at `funcFixed` time.
+
+# The world is rendered (verified on main, no forcing)
+
+**Capture**: `docs/world-on-main.png` -- sky, terrain, trees, ten hearts, hotbar,
+targeting cross, `Crafting`/`Inventory` prompts, 20-198 fps. Reproduced on a
+clean `main` via `tools/run_world.sh` with **no forcing at all**: the log's only
+`force:` line is "save completed; flag rule armed", never an `APPLIED`.
+
+## There was no forcing left to remove
+
+`f216258=1` had already become a no-op (the override fired as
+`r3 0x1 -> 0x1`) once the real NP chain returned a signed-in identity. The world
+renders without it, so it is gone from every default command.
+
+## What actually blocked the view
+
+Not the emulator. **The input sequence.**
+
+1. The autosave dialog "This game has a level autosave feature" appears *several*
+   times -- once for the world save, then periodically in game. Each one swallows
+   one press. A fixed sequence that sends one `cross` per anticipated dialog
+   desynchronises and then sits on a dialog forever. Every 30 s capture lands on
+   that dialog, which reads exactly like a frozen screen.
+2. On the new-world form the cursor sits on `Difficulty: Easy`, not on
+   `Create New World`. Pressing `cross` there toggles the difficulty and nothing
+   happens. It needs two `down` presses first.
+3. `input.cmd` is consumed on read: a press written during a transition can be
+   lost. Always screenshot after a press instead of assuming.
+
+## Two claims this campaign refuted, with measurements
+
+- **"`(4J) FullscreenProgress` never gets its flag, so the screen cannot close."**
+  Wrong. On the successful run it waits 169 s and is then served:
+  `wait-in t=237.245 lr=0x0006f1f8 bits=0x1 mode=0x11 pattern 0x0` then
+  `wait-ok t=406.447 pattern 0x0 -> 0x1`. The producer is `(4J) Server`,
+  `lr=0x00072144` -> `f_00072130` (`out/ppu/mc_003.cpp:23353`), calling
+  `sys_event_flag_set` right after `_sys_ppu_thread_create 'thread_autosave'`.
+  It is late because the generator must finish first, not absent.
+- **"The flag id is a stable identifier."** Wrong. It is heap-allocated and
+  differs every run (`0x98046c00`, `0x98066e00`, `0x98068f00`, `0x9806f000`
+  observed). Any forcing keyed on a flag address cannot survive a relaunch.
+  The `lr` are stable; use those.
+
+## Timeline of a successful world (no forcing)
+
+| t | event |
+|---|---|
+| ~362 s | `(4J) Post processing` starts generating |
+| 406.4 s | `UserAutoSave` writes `GAMEDATA` (~3.4 MB) |
+| 406.44 s | `_sys_ppu_thread_create 'thread_autosave'` |
+| 406.447 s | `(4J) Server` sets the FullscreenProgress flag |
+| ~410 s | first world frame |
+
+## Real defects found and fixed while getting here
+
+| Defect | Fix |
+|---|---|
+| `cellSaveDataUserListAutoLoad` never read the disk | enumeration with `directory_iterator`, prefix filter, real counts |
+| Save directories carried an invented `u0_` prefix; RPCS3 stores the title's `dirName` verbatim | store and list the name as given |
+| `CellSysutilCallback` argument order reversed -- `(fn, arg, event, 0)` instead of `(fn, event, param, arg)` | corrected; `event` is r3, so no system event was ever recognised |
+| `CELL_NET_CTL_STATE_IPObtained` was 4, the real value is 3 | corrected |
+| `cellSaveDataGetListItem` unimplemented, so list rows had no content | implemented to RPCS3 offsets |
+| `fill_stat` reported `SECUREFILE` for ordinary files, and did not sort | `NORMALFILE`, sorted by name, per-file rounded size |
+| `tools/run_world.sh` never passed `PS3BASE_VFS_DIR`, so runs read the wrong VFS | passed |
+| `tools/run_world.sh` launched through a subshell, so `GAME_PID` was the subshell's -- capture could photograph another agent's window | `env --chdir` |
+
+## Still open (does not block the world)
+
+- Loading an existing world: `Load` now issues `savedata: load` and the names
+  display, but the title's file callback returns `-2` at iteration #2 after
+  reading `METADATA` and `THUMB`, before `GAMEDATA`. `THUMB` is reported as
+  `NORMALFILE` instead of a content type -- the next thing to try.
+- `f_0064c044` crashes `(4J) Server` (`lr=0x64c0fc`) after long sessions: a
+  corrupted list pointer, unrelated to the render.
