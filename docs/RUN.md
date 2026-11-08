@@ -396,3 +396,22 @@ stick.
   clean path later; both paths already converge in `fill()`.
 
 
+
+## The autosave dialog can repeat indefinitely
+
+A run can sit on the "This game has a level autosave feature" dialog and refuse
+every press, however it is sent. Measured on a guard run: 11 queued pad commands
+via `input.cmd` and 3 real `keydown`/`keyup` presses, all delivered (the pad
+logged them), and the dialog stayed. `vm_map` never advanced, the list walk was
+never reached, and `PS3BASE_LIST_GUARD` therefore logged no node.
+
+What that means in practice: **a run is only useful once it is past this
+dialog.** Check `grep -c 'sys_vm_memory_map ->'` -- zero means the world was
+never created and any instrumentation downstream of the world is untested
+regardless of what the verdict block says. The block reports flips and captures,
+which stay healthy while the game loops in the front end.
+
+Two things that did work when `input.cmd` did not: real keyboard events
+(`xdotool keydown z; sleep 0.25; xdotool keyup z`) advanced past the dialog and
+into the new-world form, and the pad path is the one that queues. If one path
+stalls, try the other before concluding the emulator is stuck.
