@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <list>
+#include <vector>
+#include <cstdlib>
 
 namespace lv2 {
 
@@ -62,6 +64,36 @@ bool flag_match(uint64_t pattern, uint64_t bits, uint32_t mode) {
 
 constexpr uint32_t FLAG_TRACE_ID = 0x98046c00u;
 
+/* The flag that matters belongs to a subsystem whose ids are allocated on the
+ * heap, so it changes every run. Watch a list given by PS3BASE_FLAG_TRACE_IDS
+ * (comma separated hex) instead of one compiled-in address, and optionally log
+ * every set that wakes somebody (PS3BASE_FLAG_TRACE_SETS=1) so the producer of
+ * a stuck bit is visible even when its id was not guessed in advance. */
+bool trace_sets_all() {
+    static const bool on = std::getenv("PS3BASE_FLAG_TRACE_SETS") != nullptr;
+    return on;
+}
+
+bool flag_watched(uint32_t id) {
+    static const bool all = std::getenv("PS3BASE_FLAG_TRACE_ALL") != nullptr;
+    if (all && (id & 0xff000000u) == 0x98000000u) return true;
+    static const std::vector<uint32_t> ids = [] {
+        std::vector<uint32_t> v;
+        const char* e = std::getenv("PS3BASE_FLAG_TRACE_IDS");
+        if (!e) return v;
+        const char* p = e;
+        while (*p) {
+            while (*p == ',' || *p == ' ') ++p;
+            if (!*p) break;
+            v.push_back(static_cast<uint32_t>(std::strtoul(p, nullptr, 16)));
+            while (*p && *p != ',' && *p != ' ') ++p;
+        }
+        return v;
+    }();
+    if (id == FLAG_TRACE_ID) return true;
+    return std::find(ids.begin(), ids.end(), id) != ids.end();
+}
+
 int flag_waiters(uint32_t id) {
     auto f = get<EventFlag>(id);
     return f ? int(f->waiters) : -1;
@@ -71,7 +103,7 @@ int flag_waiters(uint32_t id) {
  * whether a bit is ever produced, only execution order can. */
 void flag_trace(const char* op, uint32_t id, uint64_t bits, uint32_t mode,
                 uint32_t lr, uint64_t before, uint64_t after) {
-    if (id != FLAG_TRACE_ID) return;
+    if (!flag_watched(id)) return;
     const guest::Thread* t = guest::current();
     LOG_INFO("flagtrace", "%-8s thread=%s(0x%x) lr=0x%08x bits=0x%llx mode=0x%02x "
              "pattern 0x%llx -> 0x%llx waiters=%d",
@@ -441,7 +473,7 @@ LV2_SYSCALL(85, sys_event_flag_wait) {
      * only when it actually blocks for more than a moment: an immediately
      * satisfied wait is noise, a blocking one is the answer. */
     const uint64_t before = f->pattern;
-    if (u32arg(ctx, 0) == FLAG_TRACE_ID && !flag_match(before, bits, mode)) {
+    if (flag_watched(u32arg(ctx, 0)) && !flag_match(before, bits, mode)) {
         flag_trace("wait-in", u32arg(ctx, 0), bits, mode,
                    static_cast<uint32_t>(ctx.lr), before, before);
         LOG_INFO("flagtrace", "timeout  value=0x%llx (0 means wait forever)",
@@ -484,7 +516,7 @@ LV2_SYSCALL(85, sys_event_flag_wait) {
                      int(f->cancel_gen != gen), static_cast<long long>(us));
     }
     f->waiters--;
-    if (u32arg(ctx, 0) == FLAG_TRACE_ID)
+    if (flag_watched(u32arg(ctx, 0)))
         flag_trace(ok ? "wait-ok" : "wait-to", u32arg(ctx, 0), bits, mode,
                    static_cast<uint32_t>(ctx.lr), before, f->pattern);
     if (result) vm::write64(result, f->pattern);
@@ -521,9 +553,20 @@ int64_t event_flag_set_bits_traced(uint32_t id, uint64_t bits, uint32_t from_lr,
     std::lock_guard lk(f->m);
     const uint64_t before = f->pattern;
     f->pattern |= bits;
-    if (id == FLAG_TRACE_ID && !who)
+    if (trace_sets_all() && f->waiters && f->pattern != before) {
+        const char* by = who ? who : (guest::current() ? guest::current()->name.c_str() : "?");
+        static std::atomic<uint64_t> ns{0};
+        const uint64_t n = ns.fetch_add(1);
+        if (n < 400)
+            LOG_INFO("flagset", "#%llu id=0x%x set=0x%llx by=%s lr=0x%08x pattern 0x%llx -> 0x%llx waiters=%u",
+                     static_cast<unsigned long long>(n + 1), id,
+                     static_cast<unsigned long long>(bits), by,
+                     from_lr, static_cast<unsigned long long>(before),
+                     static_cast<unsigned long long>(f->pattern), f->waiters);
+    }
+    if (flag_watched(id) && !who)
         who = guest::current() ? guest::current()->name.c_str() : "?";
-    if (id == FLAG_TRACE_ID)
+    if (flag_watched(id))
         LOG_INFO("flagtrace", "set      from=%s lr=0x%08x bits=0x%llx pattern 0x%llx -> 0x%llx waiters=%d",
                  who, from_lr, static_cast<unsigned long long>(bits),
                  static_cast<unsigned long long>(before),
