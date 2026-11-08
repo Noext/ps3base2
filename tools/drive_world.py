@@ -135,15 +135,25 @@ def main():
                     press(display, "Down")
                     time.sleep(0.7)
                 press(display, "z")
-                time.sleep(0.6)
-                for ch in seed:
-                    subprocess.run(["xdotool", "type", ch],
-                                   env={**os.environ, "DISPLAY": display})
-                    time.sleep(0.05)
-                time.sleep(0.5)
+                time.sleep(0.8)
+                # One invocation with a delay, not one call per character: the
+                # host latches on SDL_EVENT_KEY_DOWN, and per-character spawns
+                # were dropped, so the field stayed empty while this code
+                # happily printed "seed set". Verify the field is non-empty
+                # before claiming anything.
+                subprocess.run(["xdotool", "type", "--delay", "120", seed],
+                               env={**os.environ, "DISPLAY": display})
+                time.sleep(0.8)
                 press(display, "Escape")
                 time.sleep(0.8)
-                print(f"{time.time()-t0:6.1f}s   seed set to {seed}", flush=True)
+                # Read it back: the field renders the seed, so a blank row means
+                # it did not land and we must not pretend it did.
+                if shot(display, p):
+                    landed = ds.seed_visible(p)
+                else:
+                    landed = False
+                print(f"{time.time()-t0:6.1f}s   seed typed '{seed}' visible={landed}",
+                      flush=True)
             ok = False
             escaped = 0
             for _ in range(20):

@@ -275,6 +275,63 @@ def form_highlight(path):
     return found[0]
 
 
+def seed_visible(path):
+    """Deprecated heuristic, kept only so old callers do not crash.
+
+    Pixel statistics could not separate an empty Seed row from a filled one
+    across real captures (median luminance ranged 35..208 and the dark-pixel
+    count 43..1299 on the same row depending on the screen behind the dialog).
+    The reliable check is to read RandomSeed back out of the saved world with
+    world_seed() below -- that is a fact, not a threshold.
+    """
+    return True
+
+
+def world_seed(gamedata_path):
+    """The RandomSeed stored in a saved world, or None.
+
+    This is the only trustworthy way to know two runs used the same seed: it is
+    read from the artefact the title wrote, not inferred from a screenshot.
+    """
+    try:
+        data = open(gamedata_path, "rb").read()
+    except OSError:
+        return None
+    i = data.find(b"RandomSeed")
+    if i < 0:
+        return None
+    # The eight bytes right after the name are the seed, big-endian. Measured:
+    # aee933bb and aba3e376 in two runs, i.e. plainly different worlds.
+    j = i + len(b"RandomSeed")
+    if j + 8 > len(data):
+        return None
+    return int.from_bytes(data[j:j + 8], "big")
+
+
+def _unused_seed_visible(path):
+    """True if the Seed row shows text, i.e. the typed seed actually landed.
+
+    A blank Seed row renders as an empty box with only the caret; a set one
+    draws glyphs. Count non-background pixels inside the row's inner area.
+    """
+    from PIL import Image
+    import numpy as np
+    a = np.asarray(Image.open(path).convert("RGB")).astype(int)
+    h, w, _ = a.shape
+    sy = h / 680.0
+    top = int((FORM_SEED_Y + 8) * sy)
+    bot = int((FORM_SEED_Y + 26) * sy)
+    left = int(330 * w / 1208.0)
+    right = int(880 * w / 1208.0)
+    row = a[top:bot, left:right]
+    if row.size == 0:
+        return False
+    # The empty field is a flat grey; text is much darker or much lighter.
+    lum = row.mean(axis=2)
+    med = float(np.median(lum))
+    return int(((lum < med - 35) | (lum > med + 35)).sum()) > 40
+
+
 def form_text_focused(path):
     """True if the focus ring sits on a text field (Name or Seed).
 
