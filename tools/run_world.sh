@@ -26,6 +26,9 @@ DISC_DIR="${PS3BASE_DISC_DIR:-/root/Dev/mc-port/disc}"
 
 VFS=""
 SECONDS_BUDGET=900
+# Each agent gets its own X display by default: on a shared one, windows steal
+# focus from each other and a capture can show another agent's game.
+RUN_DISPLAY="${RUN_DISPLAY:-}"
 BUILD_DIR=""
 FORCE_SPEC=""
 TAG=""
@@ -36,6 +39,7 @@ die() { echo "run_world: $*" >&2; exit 2; }
 
 while [ $# -gt 0 ]; do
     case "$1" in
+        --display) RUN_DISPLAY="$2"; shift 2 ;;
         --seconds) SECONDS_BUDGET="$2"; shift 2 ;;
         --build-dir) BUILD_DIR="$2"; shift 2 ;;
         --force) FORCE_SPEC="$2"; shift 2 ;;
@@ -51,6 +55,11 @@ done
 [ -n "$VFS" ] || die "usage: tools/run_world.sh <vfs-dir> [options]"
 case "$VFS" in /*) ;; *) VFS="$PWD/$VFS" ;; esac
 
+if [ -z "$RUN_DISPLAY" ]; then
+    # Derive a stable per-VFS display so two runs never share one by accident.
+    RUN_DISPLAY=":$(( 10 + ($(printf '%s' "$VFS" | cksum | cut -d' ' -f1) % 40) ))"
+fi
+export RUN_DISPLAY
 TAG="${TAG:-$(basename "$VFS")}"
 RUN_DIR="${PS3BASE_RUN_DIR:-/tmp/run-world-$TAG}"
 CAP_DIR="$RUN_DIR/caps"
@@ -139,12 +148,13 @@ prep_build() {
 Xvfb_pid=""
 start_xvfb() {
     # A stale lock from a killed server blocks the restart.
-    rm -f /tmp/.X11-unix/X0 /tmp/.X0-lock 2>/dev/null
-    Xvfb :0 -screen 0 1280x720x24 -ac +extension GLX +render -noreset \
+    local n="${RUN_DISPLAY#:}"
+    rm -f "/tmp/.X11-unix/X$n" "/tmp/.X$(printf '%s' "$n" | tr -d ':')-lock" 2>/dev/null
+    Xvfb "$RUN_DISPLAY" -screen 0 1280x720x24 -ac +extension GLX +render -noreset \
           > "$RUN_DIR/xvfb.log" 2>&1 &
     Xvfb_pid=$!
     for _ in $(seq 1 40); do
-        if DISPLAY=:0 timeout 2 xdpyinfo >/dev/null 2>&1; then return 0; fi
+        if DISPLAY="$RUN_DISPLAY" timeout 2 xdpyinfo >/dev/null 2>&1; then return 0; fi
         sleep 0.25
     done
     return 1
@@ -152,18 +162,18 @@ start_xvfb() {
 
 ensure_xvfb() {
     # Reuse a healthy server; replace a hung or missing one.
-    if DISPLAY=:0 timeout 2 xdpyinfo >/dev/null 2>&1; then
-        Xvfb_pid="$(pgrep -f 'Xvfb :0' | head -1 || true)"
+    if DISPLAY="$RUN_DISPLAY" timeout 2 xdpyinfo >/dev/null 2>&1; then
+        Xvfb_pid="$(pgrep -f "Xvfb $RUN_DISPLAY" | head -1 || true)"
         return 0
     fi
-    pkill -9 -f 'Xvfb :0' 2>/dev/null
+    pkill -9 -f "Xvfb $RUN_DISPLAY" 2>/dev/null
     sleep 0.5
     start_xvfb || die "cannot start Xvfb"
     echo "run_world: Xvfb up (pid $Xvfb_pid)"
 }
 
 xvfb_alive() {
-    DISPLAY=:0 timeout 2 xdpyinfo >/dev/null 2>&1
+    DISPLAY="$RUN_DISPLAY" timeout 2 xdpyinfo >/dev/null 2>&1
 }
 
 # ------------------------------------------------------------------ capture --
@@ -173,11 +183,11 @@ game_window() {
     # search cheap: a window is only resolved once and then reused until it
     # stops answering.
     local w p
-    for w in $(DISPLAY=:0 timeout 4 xdotool search --name 'Minecraft' 2>/dev/null); do
-        p="$(DISPLAY=:0 timeout 1 xdotool getwindowpid "$w" 2>/dev/null)"
+    for w in $(DISPLAY="$RUN_DISPLAY" timeout 4 xdotool search --name 'Minecraft' 2>/dev/null); do
+        p="$(DISPLAY="$RUN_DISPLAY" timeout 1 xdotool getwindowpid "$w" 2>/dev/null)"
         if [ -n "${GAME_PID:-}" ] && [ "$p" = "$GAME_PID" ]; then echo "$w"; return; fi
     done
-    DISPLAY=:0 timeout 4 xdotool search --name 'Minecraft' 2>/dev/null | tail -1
+    DISPLAY="$RUN_DISPLAY" timeout 4 xdotool search --name 'Minecraft' 2>/dev/null | tail -1
 }
 
 capture_loop() {
@@ -185,11 +195,11 @@ capture_loop() {
     local win=""
     while [ ! -f "$stop" ]; do
         i=$((i + 1))
-        if [ -z "$win" ] || ! DISPLAY=:0 timeout 2 xdotool getwindowname "$win" >/dev/null 2>&1; then
+        if [ -z "$win" ] || ! DISPLAY="$RUN_DISPLAY" timeout 2 xdotool getwindowname "$win" >/dev/null 2>&1; then
             win="$(game_window)"
         fi
         if [ -n "$win" ]; then
-            DISPLAY=:0 import -window "$win" "$CAP_DIR/cap-$(printf '%03d' "$i").png" 2>/dev/null
+            DISPLAY="$RUN_DISPLAY" import -window "$win" "$CAP_DIR/cap-$(printf '%03d' "$i").png" 2>/dev/null
         fi
         # 30 s, in slices so the stop file is noticed promptly
         for _ in $(seq 1 30); do [ -f "$stop" ] && break; sleep 1; done
@@ -211,7 +221,7 @@ launch_game() {
     # array inline under \`set -u\` makes the assignment word itself the command,
     # which is how "PS3BASE_SAVEDATA_TRACE=1: command not found" happened.
     local -a env_args=(
-        "DISPLAY=:0"
+        "DISPLAY="$RUN_DISPLAY""
         "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/0}"
         "PS3BASE_DISC_DIR=$DISC_DIR"
         "PS3BASE_LOG=${PS3BASE_LOG:-info}"
@@ -224,10 +234,10 @@ launch_game() {
     # No subshell: \`cd ... && cmd &\` would put the subshell's pid in $!, and a
     # pid that is not the game's makes the window lookup below match nothing --
     # capture then falls back to any Minecraft window and can photograph a
-    # neighbour's instance when two agents share DISPLAY=:0.
+    # neighbour's instance when two agents share DISPLAY="$RUN_DISPLAY".
     # setsid: the game becomes its own process-group leader, so it can be killed
     # as a group. Otherwise \`kill -9 \$GAME_PID\` kills only \`timeout\` and the
-    # game survives -- which is how two instances ended up sharing DISPLAY=:0
+    # game survives -- which is how two instances ended up sharing DISPLAY="$RUN_DISPLAY"
     # after an Xvfb restart, each stealing the other's input.
     setsid env --chdir="$TREE" "${env_args[@]}" timeout "$SECONDS_BUDGET" "$BIN" --no-launcher > "$LOG" 2>&1 &
     GAME_PID=$!
