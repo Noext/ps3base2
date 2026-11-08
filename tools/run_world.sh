@@ -225,7 +225,11 @@ launch_game() {
     # pid that is not the game's makes the window lookup below match nothing --
     # capture then falls back to any Minecraft window and can photograph a
     # neighbour's instance when two agents share DISPLAY=:0.
-    env --chdir="$TREE" "${env_args[@]}" timeout "$SECONDS_BUDGET" "$BIN" --no-launcher > "$LOG" 2>&1 &
+    # setsid: the game becomes its own process-group leader, so it can be killed
+    # as a group. Otherwise \`kill -9 \$GAME_PID\` kills only \`timeout\` and the
+    # game survives -- which is how two instances ended up sharing DISPLAY=:0
+    # after an Xvfb restart, each stealing the other's input.
+    setsid env --chdir="$TREE" "${env_args[@]}" timeout "$SECONDS_BUDGET" "$BIN" --no-launcher > "$LOG" 2>&1 &
     GAME_PID=$!
 }
 
@@ -244,7 +248,7 @@ while kill -0 "$GAME_PID" 2>/dev/null; do
     if ! xvfb_alive; then
         RESTARTS=$((RESTARTS + 1))
         echo "run_world: Xvfb died mid-run, restarting (restart $RESTARTS) and relaunching the game"
-        kill -9 "$GAME_PID" 2>/dev/null
+        kill -9 -- "-$GAME_PID" 2>/dev/null || kill -9 "$GAME_PID" 2>/dev/null
         wait "$GAME_PID" 2>/dev/null
         if [ "$RESTARTS" -ge 3 ]; then DEAD_WHY="Xvfb kept dying"; break; fi
         ensure_xvfb || { DEAD_WHY="cannot restart Xvfb"; break; }
