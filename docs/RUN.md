@@ -342,3 +342,36 @@ there; `--display :NN` overrides. Sharing `:0` between runs makes windows steal
 each other's focus and pad input, and a capture can photograph another run's
 game. Kill a run by its process group (`kill -9 -- -$GAME_PID`), never by image
 name: `pkill -9 -x ps3base` kills every other agent's run too.
+
+## Playability: what works, what does not
+
+Driven entirely by real X events, no input file and no forcing
+(`docs/playability-21/REPORT.md`):
+
+| Action | State |
+|---|---|
+| movement | **works** |
+| breaking a block | **works** (HUD confirms "R2 Mine") |
+| inventory open | **works** (player model, armour slots, 9x3 grid) |
+| placing a block | **not proven** — see below |
+
+Placing is blocked by game state, not by input: L2, R2 and R3 all arrive as the
+right bytes, R3 is interpreted (the "Grass Block" tooltip appears), but this
+build's Creative hotbar stays empty, R2 does not add the broken block, and the
+PS3 build has no Creative category tabs to take a block from. Do not read that as
+a broken input path.
+
+**Two limits of this container, stated as limits:**
+
+- **No GPU presentation without Xvfb.** The RTX 4060 does the rasterisation
+  (`renderD128`, driver 590.48.01) but presentation goes through Xvfb: there is
+  no `Xorg`, no `xinit`, and no way to present on DRM/KMS from here. In-game
+  is ~24-30 fps.
+- **No real gamepad.** No `/dev/input`, no `/dev/uinput`.
+  `SDL_AttachVirtualJoystick` is present in the installed SDL3 headers and is the
+  clean path later; both paths already converge in `fill()`.
+
+**Trap that costs runs:** without keyboard bindings for the right stick, the
+camera cannot turn and L2/R2 have no target. A run was lost concluding "breaking
+does not work" while the pad bytes were perfect. `R/F/T/G` now drive the right
+stick; anyone testing break or place needs them or will measure a false negative.
