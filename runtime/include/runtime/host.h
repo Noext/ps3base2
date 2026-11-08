@@ -12,6 +12,18 @@ namespace host {
  * interval -- which is exactly what "xdotool key" produces. */
 void note_key(int scancode, bool down);
 
+#ifndef _WIN32
+/* Virtual gamepad, for a machine with no /dev/input (a container, a headless
+ * server, CI): SDL 3.2's SDL_AttachVirtualJoystick registers an SDL_Gamepad
+ * that every consumer of the normal gamepad path sees, so poll_pad reads it
+ * through the same SDL_GetGamepadButton calls a physical pad goes through.
+ * attach_virtual_pad is called once from the window thread; the state is then
+ * driven with virtual_pad_button / virtual_pad_axis. */
+void attach_virtual_pad();
+void virtual_pad_button(int sdl_button, bool down);
+void virtual_pad_axis(int sdl_axis, int value);
+#endif
+
 uint64_t qpc();
 uint64_t qpf();
 uint64_t thread_cycles();
