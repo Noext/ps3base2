@@ -14,7 +14,12 @@ namespace {
 constexpr int32_t SCE_NP_MANAGER_STATUS_OFFLINE = -1;
 constexpr int32_t SCE_NP_MANAGER_STATUS_ONLINE = 3;
 constexpr int32_t CELL_NET_CTL_STATE_Disconnected = 0;
-constexpr int32_t CELL_NET_CTL_STATE_IPObtained = 4;
+/* 3, not 4. The title's own consumer (out/ppu/mc_003.cpp f_00074080) loads
+ * the state cellNetCtlGetState wrote and compares it against 3 to decide
+ * "online"; refs/rpcs3 cellNetCtl.h agrees (Disconnected 0, Connecting 1,
+ * IPObtaining 2, IPObtained 3). Reporting 4 made every "am I connected" test
+ * in the title false even with PS3BASE_NET_CONNECTED set. */
+constexpr int32_t CELL_NET_CTL_STATE_IPObtained = 3;
 constexpr int64_t SCE_NP_ERROR_NOT_INITIALIZED = static_cast<int32_t>(0x8002aa01);
 constexpr int64_t SCE_NP_ERROR_ALREADY_INITIALIZED = static_cast<int32_t>(0x8002aa02);
 constexpr int64_t SCE_NP_ERROR_INVALID_ARGUMENT = static_cast<int32_t>(0x8002aa03);
@@ -76,14 +81,23 @@ static constexpr uint64_t CELL_SYSUTIL_NET_CTL_NETSTART_LOADED   = 0x0801;
 static constexpr uint64_t CELL_SYSUTIL_NET_CTL_NETSTART_FINISHED = 0x0802;
 static constexpr uint64_t CELL_SYSUTIL_NET_CTL_NETSTART_UNLOADED = 0x0803;
 
-/* Raise a system command to every registered sysutil callback. */
-static void sysutil_send(uint64_t event) {
+/* Raise a system command to every registered sysutil callback.
+ *
+ * CellSysutilCallback is void(u64 status, u64 param, void* userdata):
+ * the EVENT is the FIRST argument and the title's own pointer is the THIRD.
+ * This call used to pass them the other way round -- userdata in r3, event in
+ * r4 -- so every sysutil delivery reached the title with a heap pointer where
+ * the event code belonged. All four registered handlers dispatch on r3
+ * (0x0021a3d4 compares it against 0x801/0x802, 0x0021d850 against
+ * 0x121/0x122/0x131/0x132/0x141/0x142/0x101), so not one system event has
+ * ever been recognised since this module existed. */
+static void sysutil_send(uint64_t event, uint64_t param = 0) {
     for (int slot = 0; slot < 4; slot++) {
         const uint32_t fn = callback_function(slot);
         if (!fn) continue;
         const uint32_t arg = callback_arg(slot);
-        sysutil_post([fn, arg, event](ppu::Context& c) {
-            call_guest(c, fn, arg, event, 0);
+        sysutil_post([fn, arg, event, param](ppu::Context& c) {
+            call_guest(c, fn, event, param, arg);
         });
     }
 }
@@ -125,6 +139,12 @@ struct NpState {
     uint32_t ctx_id = 0;
     uint32_t ctx_cb = 0;
     uint32_t ctx_cb_arg = 0;
+    /* How many events each registration has been given. The census can only
+     * say "registered and never delivered"; these say whether the delivery we
+     * added actually happened, and how many times. */
+    uint32_t manager_delivered = 0;
+    uint32_t basic_delivered = 0;
+    uint32_t netctl_delivered = 0;
 };
 
 NpState g_np;
@@ -137,6 +157,49 @@ int32_t np_psn_status() {
     return offline ? SCE_NP_MANAGER_STATUS_OFFLINE : SCE_NP_MANAGER_STATUS_ONLINE;
 }
 
+/* SCE_NP_MANAGER_EVENT_GOT_TICKET (255) is the only event RPCS3's header
+ * names, and it is a ticket event, not a sign-in one. The sign-in event is the
+ * manager STATUS itself: the title's own manager callback
+ * (code 0x0021a370) compares its first argument against 3 and 255, and on 3 it
+ * calls 0x00215db8 -- sceNpMatching2Init2, sceNpManagerGetNpId,
+ * sceNpMatching2CreateContext, sceNpMatching2ContextStartAsync. That is the
+ * whole NP setup, reached from the callback instead of from the poll loop.
+ * A port that has already made this work offline delivers the status the same
+ * way: refs/jdc-ps3recomp/libs/network/sceNp.c, np_fire_manager_cb_once. */
+constexpr int32_t kBasicEndOfInitialPresence = 6;   /* SCE_NP_BASIC_EVENT_* */
+constexpr int32_t kNetCtlEventEstablish = 1;        /* CELL_NET_CTL_EVENT_*  */
+
+/* Deliver the manager's current sign-in state to the title's callback, once per
+ * registration. Runs on the guest thread that polls cellSysutilCheckCallback,
+ * which is the thread a real firmware delivers on. */
+void np_deliver_manager_status() {
+    if (!g_np.manager_cb) return;
+    const uint32_t cb = g_np.manager_cb, arg = g_np.manager_cb_arg;
+    const int32_t st = np_psn_status();
+    g_np.manager_delivered++;
+    sysutil_post([cb, arg, st](ppu::Context& c) {
+        /* SceNpManagerCallback = void(s32 event, s32 result, void* arg) */
+        call_guest(c, cb, static_cast<uint32_t>(st), 0, arg);
+    });
+    LOG_INFO("sceNp", "manager callback 0x%08x <- event %d (%s), arg 0x%08x",
+             cb, st, st == SCE_NP_MANAGER_STATUS_ONLINE ? "online" : "offline", arg);
+}
+
+/* SCE_NP_BASIC_EVENT_END_OF_INITIAL_PRESENCE: what a registered basic handler
+ * is told once the initial presence pass is over. RPCS3 sends exactly this
+ * (np_handler.cpp, handle_initial_presence) and nothing else without a
+ * network. It is a "you may stop waiting" event, not a social one. */
+void np_deliver_basic_presence_end() {
+    if (!g_np.basic_cb) return;
+    const uint32_t cb = g_np.basic_cb, arg = g_np.basic_cb_arg;
+    g_np.basic_delivered++;
+    sysutil_post([cb, arg](ppu::Context& c) {
+        /* SceNpBasicEventHandler = void(s32 event, s32 retCode, u32 reqId, void* arg) */
+        call_guest(c, cb, static_cast<uint32_t>(kBasicEndOfInitialPresence), 0, 0, arg);
+    });
+    LOG_INFO("sceNp", "basic handler 0x%08x <- END_OF_INITIAL_PRESENCE, arg 0x%08x", cb, arg);
+}
+
 }  // namespace npdetail
 
 using namespace npdetail;
@@ -147,12 +210,39 @@ using namespace npdetail;
  * "Continue playing offline". */
 HLE_FUNC(cellNetCtl, cellNetCtlInit) { g_np.netctl_init = true; ret(ctx, 0); }
 HLE_FUNC(cellNetCtl, cellNetCtlTerm) { g_np.netctl_init = false; ret(ctx, 0); }
-/* cellNetCtlAddHandler(handler, arg, s32* hid). The handler is
- * void(event, errorCode, arg); it is never called while the state is
- * Disconnected, which is the truthful offline behaviour. */
+/* The transition a handler receives when the interface comes up:
+ * CellNetCtlHandler = void(s32 prev_state, s32 new_state, s32 event,
+ *                           s32 error_code, void* arg)
+ * -- five arguments, with the caller's pointer LAST. Compare
+ * CellSysutilCallback, whose userdata is the THIRD: getting these two
+ * conventions confused is exactly the defect that made every sysutil
+ * delivery unrecognisable. */
+void np_deliver_netctl_establish() {
+    if (!g_np.netctl_handler) return;
+    const uint32_t h = g_np.netctl_handler, arg = g_np.netctl_arg;
+    g_np.netctl_delivered++;
+    sysutil_post([h, arg](ppu::Context& c) {
+        call_guest(c, h, CELL_NET_CTL_STATE_Disconnected /* prev */,
+                   CELL_NET_CTL_STATE_IPObtained /* new */,
+                   kNetCtlEventEstablish, 0, arg);
+    });
+    LOG_INFO("cellNetCtl", "handler 0x%08x <- ESTABLISH 0->3, arg 0x%08x", h, arg);
+}
+
+/* cellNetCtlAddHandler(handler, arg, s32* hid).
+ * The transition is delivered only when there is one to report. The state this
+ * runtime reports is Disconnected unless PS3BASE_NET_CONNECTED is set, and a
+ * Disconnected interface never raises ESTABLISH -- so by default the handler
+ * correctly stays silent, and RPCS3 agrees (its AddHandler is a todo stub).
+ * PS3BASE_NETCTL_ESTABLISH=1 delivers the transition anyway, so the delivery
+ * path itself can be measured rather than assumed. */
 HLE_FUNC(cellNetCtl, cellNetCtlAddHandler) {
     /* Census: record the registered handler so the inventory reports it. */
-    cbwatch::note_register("netctl-handler", a32(ctx, 1), a32(ctx, 2));
+    /* (handler, arg, hid): the handler is argument 0, not 1. The census was
+     * keyed on argument 1 -- the title's own pointer -- and filed a stack
+     * address as the "opd", so the one registration it exists to make visible
+     * was reported under the wrong number. */
+    cbwatch::note_register("netctl-handler", a32(ctx, 0), a32(ctx, 1));
     if (!g_np.netctl_init) return ret(ctx, CELL_NET_CTL_ERROR_NOT_INITIALIZED);
     const uint32_t hid = a32(ctx, 2);
     if (!hid) return ret(ctx, CELL_NET_CTL_ERROR_INVALID_ADDR);
@@ -160,6 +250,8 @@ HLE_FUNC(cellNetCtl, cellNetCtlAddHandler) {
     g_np.netctl_arg = a32(ctx, 1);
     vm::write32(hid, 1);
     LOG_INFO("cellNetCtl", "AddHandler handler=0x%08x arg=0x%08x -> hid 1", a32(ctx, 0), a32(ctx, 1));
+    static const bool force_establish = std::getenv("PS3BASE_NETCTL_ESTABLISH") != nullptr;
+    if (force_establish || std::getenv("PS3BASE_NET_CONNECTED")) np_deliver_netctl_establish();
     ret(ctx, 0);
 }
 HLE_FUNC(cellNetCtl, cellNetCtlDelHandler) {
@@ -413,8 +505,12 @@ HLE_FUNC(sceNp, sceNpTerm) { g_np.init = false; ret(ctx, 0); }
 HLE_FUNC(sceNp, sceNpLookupInit) { ret(ctx, 0); }
 /* sceNpManagerRegisterCallback(callback, arg).
  * SceNpManagerCallback = void(event, result, arg). Delivering nothing leaves a
- * state machine waiting; the manager is registered by the title and then
- * polled. */
+ * state machine waiting, so the registration is followed by the event itself:
+ * the sign-in status. RPCS3 does not need to send it because its manager is a
+ * live object; refs/jdc-ps3recomp/libs/network/sceNp.c fires it from the
+ * registration for exactly this failure (np_fire_manager_cb_once), and its
+ * comment names the symptom: an event-driven title never leaves
+ * "initializing" and never reaches its teardown/savedata phase. */
 HLE_FUNC(sceNp, sceNpManagerRegisterCallback) {
     cbwatch::note_register("np-manager", a32(ctx, 0), a32(ctx, 1));
     const uint32_t cb = a32(ctx, 0), arg = a32(ctx, 1);
@@ -424,6 +520,7 @@ HLE_FUNC(sceNp, sceNpManagerRegisterCallback) {
     g_np.manager_cb_arg = arg;
     LOG_INFO("sceNp", "ManagerRegisterCallback opd=0x%08x code=0x%08x toc=0x%08x arg=0x%08x",
              cb, code, toc, arg);
+    np_deliver_manager_status();
     ret(ctx, 0);
 }
 HLE_FUNC(sceNp, sceNpManagerUnregisterCallback) { g_np.manager_cb = 0; ret(ctx, 0); }
@@ -435,11 +532,16 @@ HLE_FUNC(sceNp, sceNpBasicRegisterContextSensitiveHandler) {
     ret(ctx, 0);
 }
 HLE_FUNC(sceNp, sceNpBasicRegisterHandler) {
-    cbwatch::note_register("np-basic", a32(ctx, 0), a32(ctx, 1));
+    /* (context, handler, arg): the handler is argument 1, the context
+     * pointer is argument 0. Keying the census on argument 0 filed this
+     * registration under the SceNpCommunicationId address, so the delivery
+     * below landed on a different key and the ledger still read 0. */
+    cbwatch::note_register("np-basic", a32(ctx, 1), a32(ctx, 2));
     const uint32_t cp = a32(ctx, 0), cb = a32(ctx, 1), arg = a32(ctx, 2);
     g_np.basic_cb = cb;
     g_np.basic_cb_arg = arg;
     LOG_INFO("sceNp", "BasicRegisterHandler ctx=0x%08x cb=0x%08x arg=0x%08x", cp, cb, arg);
+    np_deliver_basic_presence_end();
     ret(ctx, 0);
 }
 HLE_FUNC(sceNp, sceNpBasicGetEvent) { ret(ctx, kBasicNoEvent); }
