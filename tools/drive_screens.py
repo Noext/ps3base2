@@ -210,14 +210,22 @@ def form_row(path):
 #   208 Game Mode (lavender bar)  393 Difficulty (yellow ring)
 #   449 More Options (lavender)   507 Create New World (lavender)
 FORM_CREATE_Y = 507
-FORM_HIGHLIGHT_TOL = 6
+FORM_HIGHLIGHT_TOL = 12
+# The text rows are detected with a wider band than the Create check: the ring
+# is drawn around a taller widget and its detected top drifts by a few pixels
+# between captures (measured 127 and 131 for the same row).
+FORM_TEXT_TOL = 26
 # The form's text rows. When one of these holds the focus ring, the field has
 # taken keyboard focus and consumes Down/Up as text editing, so navigation does
 # not move the selection at all -- the cursor sits there and the next confirm
 # does nothing. Measured: this is what made three agents' fixed press counts
 # stop working mid-run.
-FORM_TEXT_ROWS = (110, 154)   # World Name, Seed
-FORM_TEXT_TOL = 14
+# Measured on a real form capture: the two yellow text-field rings start at
+# these y-tops in 680-space. Earlier values (110/154) were guesses and never
+# matched, so the text-field guard never fired.
+FORM_SEED_Y = 113              # the Seed row's focus-ring y-top
+FORM_TEXT_ROWS = (65, 113)     # World Name, Seed
+
 
 
 def form_highlight(path):

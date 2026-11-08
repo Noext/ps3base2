@@ -71,6 +71,7 @@ def main():
 
     t0 = time.time()
     form_used = False        # the FORM is navigated once, and only once
+    seed_done = False
     journal = []
     n = 0
     while time.time() - t0 < budget:
@@ -119,6 +120,30 @@ def main():
             # opened instead of the world being created). Walk Down until the
             # ring is on "Create New World", then confirm -- bounded, so a
             # wrong guess costs presses and never the iteration.
+            # A fixed seed makes two runs comparable: the same words in the
+            # same order must produce the same terrain. Set it BEFORE walking
+            # to Create, by focusing the Seed row and typing.
+            seed = os.environ.get("DRIVE_SEED")
+            if seed and not seed_done:
+                seed_done = True
+                for _ in range(10):
+                    if not shot(display, p):
+                        break
+                    y0 = ds.form_highlight(p)
+                    if y0 is not None and abs(y0 - ds.FORM_SEED_Y) <= ds.FORM_HIGHLIGHT_TOL:
+                        break
+                    press(display, "Down")
+                    time.sleep(0.7)
+                press(display, "z")
+                time.sleep(0.6)
+                for ch in seed:
+                    subprocess.run(["xdotool", "type", ch],
+                                   env={**os.environ, "DISPLAY": display})
+                    time.sleep(0.05)
+                time.sleep(0.5)
+                press(display, "Escape")
+                time.sleep(0.8)
+                print(f"{time.time()-t0:6.1f}s   seed set to {seed}", flush=True)
             ok = False
             escaped = 0
             for _ in range(20):
