@@ -757,29 +757,80 @@ static void morton_trace(ppu::Context& ctx)
 static bool list_guard(ppu::Context& ctx) {
     static const bool on = std::getenv("PS3BASE_LIST_GUARD") != nullptr;
     if (!on) return false;
-    const uint32_t node = static_cast<uint32_t>(ctx.gpr[30]);
+    /* Entry census. The walk is NOT called during ordinary play -- measured:
+     * 0 invocations in 400 s of a healthy run -- so arming lines from it can
+     * never pre-empt the crash. Naming *when* it runs is what makes the watch
+     * usable: the corruption happens around a save or a chunk update, so the
+     * window to instrument is that call, not the whole session. */
+    static std::atomic<uint32_t> calls{0};
+    {
+        const uint32_t n = calls.fetch_add(1, std::memory_order_relaxed);
+        if (n < 40) {
+            guest::Thread* t = guest::current();
+            LOG_INFO("listguard", "call #%u t=%.2f thread %s r30=0x%08x r29=0x%08x lr=0x%08x",
+                     n, logging::uptime(), t ? t->name.c_str() : "?",
+                     static_cast<uint32_t>(ctx.gpr[30]), static_cast<uint32_t>(ctx.gpr[29]),
+                     static_cast<uint32_t>(ctx.lr));
+        }
+    }
+    /* THE NODE IS NOT IN r30 AT ENTRY. Measured, and it invalidated the guard:
+     *
+     *   f_0064c044_body:  save r29, save r31, r29 = r3, r31 = r4,
+     *                     ld32[r29+40], SAVE r30, ld32[r29+52],
+     *                     r30 = ld32[r29+36]      <-- the node, this late
+     *
+     *   f_004e2ac0_body:  r30 = r3, r31 = r4, ld32[r30+0] ...
+     *
+     * so at entry r30 still holds the caller's saved r30, and r29 holds the
+     * *caller's* frame pointer (0xd0xxxxxx = a guest stack address), not the
+     * object. The guard read both at entry and therefore inspected unrelated
+     * stack memory. That is why it "never fired" in the earlier runs and why,
+     * once it finally ran, it reported 8 nodes whose +28/+32 were UTF-16 text
+     * ("\0.\00", "\0i\0\0"): a stack frame, not a list node.
+     *
+     * The object IS available at entry: it is r3, and the walk starts from
+     * ld32[obj+52] + ld32[obj+36]*4. Reading the first node from there is what
+     * the lifted code does four instructions later, and it is exact. */
+    const uint32_t obj = static_cast<uint32_t>(ctx.gpr[3]);
+    if (!obj || !vm::range_mapped(obj, 56)) return false;
+    const uint32_t count = vm::read32(obj + 36);
+    const uint32_t table = vm::read32(obj + 52);
+    if (!table || !vm::range_mapped(table + count * 4, 4)) return false;
+    const uint32_t head = vm::read32(table + count * 4);
+    const uint32_t node = head ? head - 32 : 0;
+    cw::note_line(obj);
+    cw::note_line(table);
     if (!node) return false;
     if (vm::range_mapped(node, 40)) {
         cw::note_line(node);
         cw::note_line(node + 32);
-        /* The container: its table of head pointers is what selects this node. */
-        cw::note_line(static_cast<uint32_t>(ctx.gpr[29]));
     }
     if (!vm::range_mapped(node, 36)) {
-        LOG_ERROR("listguard", "node 0x%08x is not mapped (obj r29=0x%08x lr=0x%08x)",
-                  node, static_cast<uint32_t>(ctx.gpr[29]), static_cast<uint32_t>(ctx.lr));
+        LOG_ERROR("listguard", "node 0x%08x (head 0x%08x) is not mapped (obj=0x%08x table=0x%08x count=%u)",
+                  node, head, obj, table, count);
         return false;
     }
     const uint32_t f28 = vm::read32(node + 28);
     const uint32_t f32 = vm::read32(node + 32);
-    auto is_code = [](uint32_t v) { return v >= 0x00010000u && v < 0x00ba3688u && (v & 3) == 0; };
+    /* A word of the title's code is 4-aligned, inside the executable range, and
+     * NOT bit-identical to UTF-16 text. 0x002e0030 (".0") and 0x0046006c ("lF")
+     * are text; 0x00721f30 is an instruction. Requiring the low half not to be
+     * printable ASCII is what separates them -- measured on all seven dumps. */
+    auto is_code = [](uint32_t v) {
+        if ((v & 3) != 0) return false;
+        if (v < 0x00010200u || v >= 0x008aa674u) return false;
+        const uint32_t hi = v >> 16, lo = v & 0xFFFF;
+        auto printable = [](uint32_t h) { return h >= 0x20 && h <= 0x7E; };
+        if ((hi == 0 || printable(hi)) && (lo == 0 || printable(lo))) return false;
+        return true;
+    };
     if (is_code(f28)) {
-        LOG_ERROR("listguard", "node 0x%08x [28]=0x%08x is a TEXT address, not an object (obj=0x%08x next=0x%08x)",
-                  node, f28, static_cast<uint32_t>(ctx.gpr[29]), f32);
+        LOG_ERROR("listguard", "node 0x%08x [28]=0x%08x is a CODE WORD, not an object (obj=0x%08x next=0x%08x)",
+                  node, f28, obj, f32);
     }
-    if (f32 && is_code(f32) && f32 > 0x100) {
-        LOG_ERROR("listguard", "node 0x%08x [32]=0x%08x is a TEXT address, not a next pointer (obj=0x%08x obj28=0x%08x)",
-                  node, f32, static_cast<uint32_t>(ctx.gpr[29]), f28);
+    if (is_code(f32)) {
+        LOG_ERROR("listguard", "node 0x%08x [32]=0x%08x is a CODE WORD, not a next pointer (obj=0x%08x obj28=0x%08x)",
+                  node, f32, obj, f28);
     }
     return false;   /* observe only: this must never change what the guest sees */
 }
@@ -829,7 +880,10 @@ void init() {
         add_guard(0x64c044, list_guard);
         if (!ppu::hook_impl) ppu::hook_impl = impl;
         ppu::hook_flags[0x64c044 >> 2] = 1;
-        LOG_INFO("listguard", "guard installed on f_0064c044: node +28/+32 are checked against the text range 0x00010000..0x00ba3688");
+        /* Prove the wiring, do not assume it: a guard that is never called and a
+         * guard that is called and finds nothing are opposite results. */
+        LOG_INFO("listguard", "guard installed on f_0064c044: hook_impl=%s flag=%u, node +28/+32 are checked against the text range 0x00010000..0x00ba3688",
+                 ppu::hook_impl ? "set" : "NULL", unsigned(ppu::hook_flags[0x64c044 >> 2]));
     }
     /* Any hook or guard registered above needs the dispatcher, whether or not
      * the title-specific hook set is enabled. */

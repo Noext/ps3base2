@@ -105,6 +105,8 @@ void set_known_entries(const uint32_t* addrs, uint32_t count) {
     LOG_INFO("codewatch", "%u legal call targets registered: a text word that is one of them is a function pointer, not corruption", count);
 }
 
+const std::vector<uint32_t>& entries() { return g_entries; }
+
 bool known_entry(uint32_t v) {
     if (g_entries.empty()) return false;
     return std::binary_search(g_entries.begin(), g_entries.end(), v);
@@ -267,6 +269,64 @@ void measure_pattern() {
  * corruption even when the writer was missed, and the sweep is also what
  * proves the writer-side watcher is not blind.
  * ---------------------------------------------------------------------- */
+/* Addresses that already held a signature match when the scan started. The heap
+ * legitimately contains ~900k words that fall inside the text range at boot; what
+ * matters is a NEW one appearing, at an address that did not hold one before. The
+ * baseline is a sorted vector of addresses, 4 bytes each.
+ *
+ * This is the "recherche valeur" the investigation asked for, done so it can run
+ * during a live session instead of only after a memory dump: a full sweep of the
+ * heap at 4 bytes is 50 M reads, which costs about 0.2 s and runs every 5 s. */
+static std::vector<uint32_t> g_baseline;
+
+/* A word of the title's code, as opposed to a word that merely falls inside the
+ * text range. Measured on blackbox/memory_0.bin: of 1 637 146 four-aligned words
+ * in 0x10200..0x8aa674 inside the heap, 728 000 are UTF-16 text ("de", "st",
+ * "ab") whose halves are both printable ASCII. The two real corrupt values,
+ * 0x00721f30 and 0x00730100, have a printable high half (every code address
+ * 0x00xxxxxx does) and a NON-printable low half -- 0x1f30 and 0x0100. Requiring
+ * the low half not to be printable ASCII removes the text and keeps the code. */
+static bool text_halves(uint32_t v) {
+    const uint32_t hi = v >> 16, lo = v & 0xFFFF;
+    auto printable = [](uint32_t h) { return h >= 0x20 && h <= 0x7E; };
+    return (hi == 0 || printable(hi)) && (lo == 0 || printable(lo));
+}
+
+/* The discriminant that actually separates the corruption from ordinary data,
+ * measured on blackbox/memory_0.bin over the whole 0x30000000 heap:
+ *
+ *   aligned word inside the text range                      1 637 146
+ *   ... minus lifted function entries                       1 632 591
+ *   ... minus UTF-16 text (both halves printable)             461 711
+ *   ... minus words within 0x20000 of the previous entry           68
+ *
+ * The corrupt value 0x00721f30 is 85 496 bytes past the entry at 0x0070d138 --
+ * deep inside a function, where no legitimate pointer target or switch-table
+ * entry ever lands, because 0x710000..0x720000 contains no lifted function at
+ * all. "A code address far from any function start" is 68 words in a 200 MB heap,
+ * which is quiet enough to run for a whole session. */
+constexpr uint32_t kMinGap = 0x20000;
+
+static uint32_t entry_before(uint32_t v) {
+    /* First entry strictly less than v. */
+    extern const std::vector<uint32_t>& entries();
+    const std::vector<uint32_t>& e = entries();
+    auto it = std::lower_bound(e.begin(), e.end(), v);
+    return it == e.begin() ? 0u : *(it - 1);
+}
+
+static bool signature_at(uint32_t a, uint32_t* out) {
+    if (!vm::range_mapped(a, 4)) return false;
+    const uint32_t v = vm::read32(a);
+    if ((v & 3u) != 0) return false;
+    if (v < g_lo.load() || v >= g_hi.load()) return false;
+    if (known_entry(v)) return false;
+    if (text_halves(v)) return false;
+    if (v - entry_before(v) < kMinGap) return false;
+    if (out) *out = v;
+    return true;
+}
+
 void start_scan() {
     std::thread([] {
         const uint32_t lo = g_lo.load();
@@ -274,22 +334,28 @@ void start_scan() {
         for (;;) {
             host::sleep_ms(5000);
             if (!g_on.load(std::memory_order_relaxed)) return;
+            if (g_baseline.empty()) {
+                /* First pass after arming: this is the baseline, not a result. */
+                for (uint64_t a = 0x30000000ull; a < 0x3D000000ull; a += 4) {
+                    uint32_t v;
+                    if (!signature_at(static_cast<uint32_t>(a), &v)) continue;
+                    g_baseline.push_back(static_cast<uint32_t>(a));
+                }
+                std::sort(g_baseline.begin(), g_baseline.end());
+                LOG_INFO("codewatch", "sweep baseline t=%.1f: %zu addresses already hold a text word at boot; only NEW ones are reported",
+                         logging::uptime(), g_baseline.size());
+                continue;
+            }
             uint32_t found = 0;
             for (uint64_t a = 0x30000000ull; a < 0x3D000000ull; a += 4) {
                 uint32_t v;
-                std::memcpy(&v, vm::ptr(static_cast<uint32_t>(a)), 4);
-                v = __builtin_bswap32(v);
-                if ((v & 3u) != 0) continue;          /* UTF-16 text is never aligned */
-                if (v < lo || v >= hi) continue;
-                if (known_entry(v)) continue;          /* a function pointer is legal */
-                if (++found > 6) break;
+                if (!signature_at(static_cast<uint32_t>(a), &v)) continue;
+                if (std::binary_search(g_baseline.begin(), g_baseline.end(), static_cast<uint32_t>(a))) continue;
+                if (++found > 8) break;
                 const uint32_t prev = vm::read32(static_cast<uint32_t>(a) - 4);
                 const uint32_t next = vm::read32(static_cast<uint32_t>(a) + 4);
-                LOG_WARN("codewatch", "sweep t=%.1f: CODE WORD 0x%08x in the heap at 0x%08x (prev 0x%08x next 0x%08x)",
+                LOG_WARN("codewatch", "sweep t=%.1f: NEW text word 0x%08x in the heap at 0x%08x (prev 0x%08x next 0x%08x)",
                          logging::uptime(), v, static_cast<uint32_t>(a), prev, next);
-                /* From here on, every store into that line is logged, so the
-                 * writer that re-creates it is named even if it writes an
-                 * aligned code pointer the value test would have accepted. */
                 note_line(static_cast<uint32_t>(a));
             }
         }
