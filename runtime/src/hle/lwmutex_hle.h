@@ -143,8 +143,8 @@ inline int64_t lock(uint32_t ea) {
         std::lock_guard lk(table_lock());
         if (e->owner && e->owner == me() && e->recursive) {
             e->depth++;
-            mark_held(ea);
             syncwatch::push(syncwatch::K_LWMUTEX, ea);
+            mark_held(ea);
             return 0;
         }
     }
@@ -157,8 +157,11 @@ inline int64_t lock(uint32_t ea) {
         e->owner = me();
         e->depth = 1;
         e->dead = false;
-        mark_held(ea);
+        /* push BEFORE mark_held: mark_held is a guest store, and the line
+         * watch must see the mutex as held for it. Measured on run 42: with
+         * the push after, every HLE bookkeeping write reported "held -". */
         syncwatch::push(syncwatch::K_LWMUTEX, ea);
+        mark_held(ea);
         trace("lock-fast", ea, 0, e->owner, caller_lr());
         return 0;
     }
@@ -172,8 +175,8 @@ inline int64_t lock(uint32_t ea) {
         e->depth = 1;
         e->dead = false;
     }
-    mark_held(ea);
     syncwatch::push(syncwatch::K_LWMUTEX, ea);
+    mark_held(ea);
     trace("lock-slow", ea, 0, me(), caller_lr());
     return 0;
 }
@@ -196,8 +199,8 @@ inline int64_t trylock(uint32_t ea) {
         e->depth = 1;
         e->dead = false;
     }
-    mark_held(ea);
     syncwatch::push(syncwatch::K_LWMUTEX, ea);
+    mark_held(ea);
     return 0;
 }
 
@@ -228,8 +231,8 @@ inline int64_t unlock(uint32_t ea) {
         e->owner = 0;
         e->depth = 0;
     }
-    mark_free(ea);
     syncwatch::pop(syncwatch::K_LWMUTEX, ea);
+    mark_free(ea);
     e->m.unlock();
     trace("unlock", ea, 0, 0, caller_lr());
     reap_if_dead(ea, e);

@@ -1,5 +1,7 @@
 #include "lwsync.h"
 
+#include "runtime/syncwatch.h"
+
 namespace lv2 {
 
 int64_t LwMutex::sleep(std::unique_lock<std::mutex>& lk, LwWaiter& w, uint64_t timeout) {
@@ -53,32 +55,40 @@ LV2_SYSCALL(96, _sys_lwmutex_destroy) {
 }
 
 LV2_SYSCALL(97, _sys_lwmutex_lock) {
-    auto m = get<LwMutex>(u32arg(ctx, 0));
+    const uint32_t id = u32arg(ctx, 0);
+    auto m = get<LwMutex>(id);
     if (!m) return CELL_ESRCH;
     std::unique_lock lk(m->m);
     if (int s = m->signaled) {
         m->signaled = 0;
+        if (s & 1) syncwatch::push(syncwatch::K_LWMUTEX, id);
         return (s & 1) ? CELL_OK : CELL_EBUSY;
     }
     LwWaiter w{current_thread_id()};
-    return m->sleep(lk, w, u64arg(ctx, 1));
+    int64_t rc = m->sleep(lk, w, u64arg(ctx, 1));
+    if (rc == CELL_OK) syncwatch::push(syncwatch::K_LWMUTEX, id);
+    return rc;
 }
 
 LV2_SYSCALL(99, _sys_lwmutex_trylock) {
-    auto m = get<LwMutex>(u32arg(ctx, 0));
+    const uint32_t id = u32arg(ctx, 0);
+    auto m = get<LwMutex>(id);
     if (!m) return CELL_ESRCH;
     std::lock_guard lk(m->m);
     if (m->signaled & 1) {
         m->signaled = 0;
+        syncwatch::push(syncwatch::K_LWMUTEX, id);
         return CELL_OK;
     }
     return CELL_EBUSY;
 }
 
 LV2_SYSCALL(98, _sys_lwmutex_unlock) {
-    auto m = get<LwMutex>(u32arg(ctx, 0));
+    const uint32_t id = u32arg(ctx, 0);
+    auto m = get<LwMutex>(id);
     if (!m) return CELL_ESRCH;
     std::lock_guard lk(m->m);
+    syncwatch::pop(syncwatch::K_LWMUTEX, id);
     m->release(CELL_OK);
     return CELL_OK;
 }
