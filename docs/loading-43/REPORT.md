@@ -265,20 +265,27 @@ confirmee par la capture ci-dessus.
    appele** (0 appel).
 4. Les deux candidats de la piste 32 sont **refutes par mesure** :
    f_002eeb78 n'ecrit que 0/8/14, f_002e4120 recoit un autre objet.
-5. Un bug HLE reel et corrige : `GetChatRestrictionFlag` renvoyait 1.
-
-**Reste a faire :** implementer `sceNpCommerce2` (au moins Init / CreateCtx /
-CreateSessionStart) pour que la session en ligne demandee par le titre apres
-le correctif aboutisse, ou determiner pourquoi le titre choisit la voie en
-ligne alors que le mode hors-ligne devrait etre disponible. C'est le prochain
-cran, et il est nomme.
+5. Trois bugs HLE reels, tous corriges : `GetChatRestrictionFlag` renvoyait
+   1 ; `sceNpCommerce2` n'existait pas ; et nos deux HLE de statut reseau se
+   contredisaient (`Disconnected` vs `ONLINE`).
 
 ## Forcages utilises
 
-**Aucun `PS3BASE_FORCE`.** Le seul changement de comportement est le
-correctif HLE ci-dessus, qui aligne notre reponse sur RPCS3 et sur les deux
-ports voisins. Les autres variables ajoutees sont de la journalisation
-(`PS3BASE_LOAD_PROBE`) qui ne modifie rien de ce que voit l'invite.
+**Aucun `PS3BASE_FORCE`, aucun patch du titre, aucun saut d'instruction.**
+Les seuls changements de comportement sont les trois correctifs HLE ci-dessus,
+chacun aligne sur RPCS3 et sur les ports voisins :
+
+| Correctif | Reference qui le justifie |
+|---|---|
+| `GetChatRestrictionFlag` -> 0 | `refs/rpcs3/.../sceNp.cpp:4282`, `refs/jdc-ps3recomp/.../sceNp.c:317`, `refs/dod3-recomp/.../sceNp.c:288` |
+| `sceNpCommerce2` hors-ligne | `refs/rpcs3/.../sceNpCommerce2.cpp:129,157,262,306` |
+| statut NP coherent | `np_handler::get_psn_status() == OFFLINE`, mode deja present dans notre runtime |
+
+`PS3BASE_NP_OFFLINE=1` n'invente pas un comportement : il selectionne la
+branche `OFFLINE` que RPCS3 definit et que notre runtime implementait deja,
+mais que `cellNetCtlGetState` contredisait. Les autres variables ajoutees sont
+de la journalisation (`PS3BASE_LOAD_PROBE`) qui ne modifie rien de ce que voit
+l'invite.
 
 ## Captures
 
