@@ -226,3 +226,24 @@ timeout 1200 ./build/ps3base --no-launcher
 the server loop after 66 ms. The list of active forcings and what each one
 unblocks lives in `docs/forcings.md`; each is a debt to be replaced by the real
 fix.
+
+## One command (preferred)
+
+`tools/run_world.sh <vfs-dir>` prepares and runs everything: clang
+RelWithDebInfo build, `bin/`+`fw/` links, generated `out/` sources, a dedicated
+VFS (seeded from the main one on first use), Xvfb with automatic restart and
+game relaunch if it dies, the title itself, a capture every 30 s, and a
+mechanical verdict.
+
+```bash
+cd /root/Dev/ps3base2-wtN
+tools/run_world.sh vfs-N --seconds 900 --tag N
+```
+
+The verdict prints state (alive/crashed), exit code, crash count, flip count and
+span, capture count and world save count. Exit 0 = alive at the budget, 1 =
+crashed, 2 = environment failure.
+
+**No forcing is passed by default.** `f216258=1` is a proven no-op now that the
+real NP chain returns a signed-in identity (`force: APPLIED ... r3 0x1 -> 0x1`).
+Use `--force SPEC` only to test one deliberately.
