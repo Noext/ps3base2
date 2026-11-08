@@ -1,136 +1,127 @@
-# f_0064c044: the writer, found -- and it is a race, not a stray store
+# f_0064c044: the writer hunt -- corrected again, the "two threads" reading was wrong
 
-Status: **the writer is identified.** It is not a wild pointer and not a DMA.
-Two of the title's own save-path threads write the *same 4-byte field of the same
-list node* from two different call sites, flip-flopping it between two values, at
-t=329.4 s; the `(4J) Server` walk crashes at t=331.99 s reading the node the
-other thread is still holding.
-
-The campaign's premise -- "one 4-byte store of a code word into a heap field" --
-was produced by reading a memory dump after the fact. In a live run with the
-write-side watch armed, the same crash has a different and much more specific
-explanation. Both are recorded here; the dump reading is retracted in the places
-where it was wrong.
+Status: **a fourth retraction.** The previous version of this document claimed
+"two save-path threads write the same node field, no mutual exclusion". That is
+**false**, and it was refuted from my own log by piste 42 in one grep. The
+measurement that survives is narrower: one thread oscillates a field inside a
+lock it already holds, the other thread touches it five times, and the crash is
+in a *different* function on a *different* node. What follows separates what was
+measured from what was guessed.
 
 ## Antecedents (grep over refs/, -R)
 
 | Finding | Source (path:line) | Applies here? |
 |---|---|---|
-| A page-guard watchpoint exists to catch stores that `vm_write*` cannot see, logging the faulting RIP | `refs/jdc-ps3recomp/runtime/ppu/ppu_loader.cpp:1171` | **yes** -- the shape of `GOWA_TRAP`, and it is what named the writer here |
-| Value-CAS `stwcx` is ABA-vulnerable; a stale commit produces heap corruption through a reused block | `refs/jdc-ps3recomp/runtime/ppu/ppu_loader.cpp:821` | **no for the corruption**, but the *family* is right: unsynchronised shared-state mutation is what this is |
+| A page-guard watchpoint exists to catch stores that `vm_write*` cannot see, logging the faulting RIP | `refs/jdc-ps3recomp/runtime/ppu/ppu_loader.cpp:1171` | **yes** -- the shape of `GOWA_TRAP`, and it is what produced the raw data below |
+| Value-CAS `stwcx` is ABA-vulnerable; stale commits corrupt through reused blocks | `refs/jdc-ps3recomp/runtime/ppu/ppu_loader.cpp:821` | **no** -- reservation is exact at 2 and 4 threads (measured earlier) |
 | A re-entrancy guard on the fault handler is mandatory | `refs/jdc-ps3recomp/runtime/ppu/ppu_loader.cpp:1179` | yes, noted |
-| A code word inside a data pointer field | `refs/rpcs3/**` | no match |
+| A deadlock/corruption report traced to a lock held across a call into a callback | `refs/rpcs3/**` | no match |
 
-## The measurement
+## Retraction 4: there are not two writers
 
-Run 9: 2400 s budget, `PS3BASE_LIST_GUARD=1` (corrected), write watch armed.
-Crashed at **t=331.99 s**, thread `(4J) Server`:
-
-```
-crash: signal 11 ... fault 0x7b0544000000 (guest 0x0)
-  #0 ppu::ld32                 runtime/include/ppu/ops.h:43
-  #1 f_0064c2f8_body           mc_063.cpp:23242
-  #3 f_0064be6c_body           mc_063.cpp:22978
-```
-
-Immediately before, the line watch on that node's 128-byte line fired 43 times
-from **two distinct call sites**, alternating the same word:
+The previous text said the 43 writes of `0x378c9c7c+4` alternated "from two
+distinct call sites, two threads". Both halves are wrong:
 
 ```
-codewatch: line-write 0x378c9c7c+4 prev 0x00000031 -> 0x00000033 by rsv::store_range
-           (guest lr 0x005eb2c0) thread (4J) Save thread 0
-codewatch: line-write 0x378c9c7c+4 prev 0x00000033 -> 0x00000031 by rsv::store_range
-           (guest lr 0x005ea480) thread (4J) Save thread 0
-  ... 22 hits from lr 0x5eb2c0, 21 hits from lr 0x5ea480, alternating ...
-codewatch: line-write 0x378c9c7c+4 prev 0x00000061 -> 0x00000043 ... t=329.469
-codewatch: line-write 0x378c9c7c+4 prev 0x00000043 -> 0x00000061 ... t=329.497
-crash                                                          t=331.99
+$ grep 'line-write 0x378c9c7c+4' /tmp/run-world-33/game.log | grep -oE '\[[0-9]+\]' | sort | uniq -c
+     38 [1054653]        # (4J) Server
+      5 [1059742]        # (4J) Save thread 0
 ```
 
-`0x5eb2c0` = `f_005eb260+0x60`; `0x5ea480` = `f_005ea428+0x58`. Both are save-path
-entry points in `out/ppu/mc_059.cpp`, and both are entered with the same `r3`
-(the node) -- they write its field and the walk reads it.
+**38 of the 43 writes are one thread.** The alternation I reported is *within*
+that thread, between two return addresses -- not between two writers. Piste 42
+found this; the grep is trivial and I should have run it before writing the
+claim. The 5 Save-thread writes are a single burst at t=329.469.
 
-**Two writers, one field, no mutual exclusion.** The guest is using the node
-concurrently; either the title's own lock is not being honoured on our side, or
-our reservation/lock HLE lets both threads in. That is a different investigation
-from "find the stray store", and it is the one the evidence supports.
+## Retraction 5: the two "call sites" are lock returns, not stores
 
-## Retractions (each measured, each was load-bearing)
-
-### The guard had never run, and once it ran it read a stack frame
-
-`hooks::init()` assigned `ppu::hook_impl` while `g_hooks` was empty, registered
-`list_guard`, and returned early when `PS3BASE_GAME_HOOKS` was unset.
-`ppu::hook_call` only dispatches when `hook_impl` is non-null, so the guard was
-never called -- for any address hook. Fixed; the log now prints
-`hook_impl=set flag=1`.
-
-With that fixed, the guard immediately reported nodes whose `+32` was
-`0x002e0030` (UTF-16 `".0"`) and `0x00af9068`. It was reading a stack frame:
-at entry `f_0064c044_body` has not yet assigned `r30` (`r30 = ld32[r29+36]`
-comes two instructions later), and `r29` still holds the **caller's** frame
-pointer. The guard now derives the node from `r3`:
-`table = ld32[obj+52]`, `head = ld32[table + ld32[obj+36]*4]`, `node = head-32`.
-
-### "A word from the .text in the heap" is not a signature
-
-Over the whole heap of `blackbox/memory_0.bin`:
-
-| filter | words left |
-|---|---|
-| 4-aligned word in 0x10200..0x8aa674 | 1 637 146 |
-| minus lifted function entries | 1 632 591 |
-| minus UTF-16 text (both halves printable or zero) | 461 711 |
-| minus words within 0x20000 of the previous entry | 68 |
-
-Scanning all seven dumps in `/root/Dev/*/blackbox/` yields the *same* 44-68
-addresses -- ordinary data. A live run's first hit, `0x00730100` at
-`0x3005087c`, decodes to the bytes `00 73 01 00` six bytes into the NBT string
-`"TileZ"`: a coincidence of string layout.
-
-### The dump's "corrupt +28" is not what a live run shows
-
-The chain from `obj = 0x35558670` reconstructs exactly: `count = 53`,
-`table = 0x359089b0`, `table[19] = 0x359c1d70`, so `node = 0x359c1d50`, and
-`node+28 = 0x00721f30`. But `0x359c1d50` holds zeros or unrelated data in the
-runs that did not crash, and in the crash dump the 128 bytes before it are UTF-16
-(`"SpawnX"`). `0x00721f30` is not proof of a stray code word: it also matches the
-shape of a **16-bit store with a byte-wide source**, which the trap caught doing
-exactly that at the node's field:
+`0x5eb2c0` and `0x5ea480` are not store sites. Disassembling `bin/mc/mc.elf` at
+both:
 
 ```
-trap 0 write 0x359c1d6c = 0x00750000 by main_thread
-   <- rsv::store_range <- f_00775ce8_body (mc_075.cpp:22559)
-   <- f_006d2b90 <- f_00763038 (mc_074) <- f_000e07e8 (mc_008) <- f_000d5f30 (mc_007)
-
-L_7766e4:
-    gpr[0]  = int8(gpr[0])      # one BYTE from the source
-    gpr[10] += 2                # destination advances by TWO
-    gpr[8]  += 1                # source advances by one
-    st16(dest = gpr[9], value = gpr[0])
+005eb2bc  bl    0x5e9b10      ; f_005e9b10 -> call_import(ctx, base, 326)
+005eb2c0  cmpwi cr7, r3, 0   <<< the "lr" I reported
+```
+```
+005ea47c  bl    0x5e9b10
+005ea480  cmpwi cr7, r3, 0   <<< the "lr" I reported
 ```
 
-`0x00750000` is one source byte `0x00` with `0x75` ("u") above it.
+Both are the instruction *after* the call, and `f_005e9b10` is
+`sys_lwmutex_lock` (import 326; 327 is `sys_lwmutex_unlock`). Scanning forward
+from `0x5eb2c0` to the next `bl` finds **no store at all**. So the `lr` my
+line-watch printed is the return address of the lock acquisition, which is what
+the thread's `ctx.lr` naturally holds at that moment -- not the store that
+triggered the watch.
 
-## Tooling delivered
+This also explains the oscillation shape. `f_005eb260` takes the lock, checks
+whether the block is already in use, and on the failure path sets `r31 = 0`,
+releases at `0x5eb328`, and returns -- **the acquire/release pair runs in a retry
+loop**, and each iteration re-reads and re-writes the same header word. 0x31 and
+0x33 are not data; they are the allocation bookkeeping of that retry.
+
+## What is actually established
+
+1. The field `0x378c9c7c+4` is written **only** by the save path, inside
+   `sys_lwmutex_lock`-protected code, by one thread, in a retry loop.
+2. The crash is **not** at that field. Run 9 crashed at
+   `f_0064c2f8_body` (mc_063.cpp:23242) via `f_0064be6c_body` (mc_063.cpp:22978),
+   fault guest `0x0` -- a null dereference, in `(4J) Server`, at t=331.99, two and
+   a half seconds after the save burst.
+3. A fresh dump from that run (`/root/Dev/ps3base2-wt33/blackbox/memory_0.bin`,
+   503 MB, taken at crash time) shows the watched word holding `0x0068006f`
+   (UTF-16 `"ho"`) followed by `0x006c0064` (`"ld"`) -- **the region is a UTF-16
+   string**, not a list node. The old dump's node `0x359c1d50` holds
+   `0x314142b8` in this run, entirely different data.
+
+So the earlier narrative -- "a list node's +28 holds a code word, find the stray
+store" -- is not supported by any live measurement. It was an artefact of reading
+one dump without a control. **The +28 field was read from a memory image whose
+contents at that address are a string.**
+
+## The earlier findings that still stand
+
+* **The guard had never run**: `hook_impl` was assigned while `g_hooks` was empty,
+  so any address hook was inert without `PS3BASE_GAME_HOOKS`. Fixed; the log now
+  prints `hook_impl=set flag=1`.
+* **The guard read `r30` at entry**, before `f_0064c044_body` assigns it, so it
+  inspected the caller's stack frame -- hence "code words" that were UTF-16
+  (`0x002e0030` = `".0"`). Now derived from `r3`.
+* **"A word from .text in the heap" is not a signature**: 1 637 146 aligned words
+  in the text range; 461 711 after removing UTF-16; 68 after removing words near
+  the previous function entry -- and those 68 are identical across all seven
+  dumps. `0x00730100` at `0x3005087c` is the bytes `00 73 01 00` inside the NBT
+  string `"TileZ"`.
+* **`memory_map` did not link on main** (calls `vm::write32` without
+  `reservation.cpp`). Suite is 9/9.
+
+## Tooling delivered (unchanged, and it is what made these corrections possible)
 
 `runtime/include/runtime/codewatch.h` + `runtime/src/codewatch.cpp`, hooked into
-every guest-write choke point (`rsv::store_range`, `store_locked`,
-`store_unconditional`, `merge_bits`, the SPU direct put, `ppu::notify_store`).
-Together those cover every lifted `ppu::st*`, every `vm::write*` and every SPU MFC
-put. `cw::note_line` arms one 128-byte line through a 512 KB bitmap over the
-whole 4 GB guest space; the test on the store path is one array read, and each
-hit logs `prev -> value`, guest lr and thread. Off unless `PS3BASE_CODEWATCH`.
+`rsv::store_range`, `store_locked`, `store_unconditional`, `merge_bits`, the SPU
+direct put and `ppu::notify_store` -- together every lifted `ppu::st*`, every
+`vm::write*` and every SPU MFC put. `cw::note_line` arms one 128-byte line via a
+512 KB bitmap over the whole 4 GB guest space; the store-path test is one array
+read, and each hit logs `prev -> value`, guest lr and thread. Off unless
+`PS3BASE_CODEWATCH`.
 
-Also fixed: `memory_map` did not link on main (it calls `vm::write32` without
-`reservation.cpp`). Suite is 9/9.
+The **`prev -> value` field is what made this retraction possible**: without it,
+38 identical-looking writes would have hidden the retry loop. The **guest lr
+being a lock return** is the tool's limitation to document: `ctx.lr` at a store
+is the *current* call's return address, not the store's own location, so a
+watch hit must be read together with a disassembly of `lr`.
 
-## Next step
+## Next step: stop chasing the field
 
-The field is shared, so the question is now **which lock the title takes around
-`f_005eb260` and `f_005ea428` and why both threads are inside it**. Concretely:
-log the guest `lwarx`/`stwcx` and the LV2 semaphore/mutex calls of
-`(4J) Save thread 0` and `(4J) Server` in the second before a hit on the line,
-and check whether the save thread ever acquires the lock the server holds. That is
-a lock-coverage question, not a memory-corruption one.
+The live evidence no longer supports "the writer of a corrupted list node". It
+supports a **null dereference in `(4J) Server` after a save**, at
+`f_0064c2f8` / `f_0064be6c`. The productive next question is what
+`f_0064c2f8_body` dereferences at mc_063.cpp:23242 and which field of the object
+is zero there -- and whether that object is the one the save path just rewrote.
+That is checkable with the watch already in place, by logging the faulting
+object rather than the whole line.
+
+A caution for whoever picks this up: three successive narratives about this
+crash ("reservation is broken", "a code word was stored into a node", "two threads
+race on the field") all died on measurement. Treat any story that comes from a
+post-mortem dump alone as a hypothesis, not a finding.
