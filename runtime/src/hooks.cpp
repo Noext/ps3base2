@@ -795,6 +795,10 @@ void init() {
         std::memset(ppu::hook_flags, 1, sizeof ppu::hook_flags);
         ppu::hook_impl = impl;
     }
+    /* hook_impl must be non-null for hook_call to dispatch anything. Assign it
+     * here AND again after the diagnostics below register their hooks: a guard
+     * added after this line would otherwise never be reached, which is exactly
+     * how PS3BASE_LIST_GUARD ended up inert. */
     if (!g_hooks.empty() && !ppu::hook_impl) ppu::hook_impl = impl;
     /* The list guard is generic: it observes the node pointer a walk is about to
      * pass, and needs no title-specific address beyond the text range it tests
@@ -803,6 +807,13 @@ void init() {
     if (std::getenv("PS3BASE_LIST_GUARD")) {
         add_guard(0x64c044, list_guard);
         LOG_INFO("listguard", "guard installed on f_0064c044: node +28/+32 are checked against the text range 0x00010000..0x00ba3688");
+    }
+    /* Any hook or guard registered above needs the dispatcher, whether or not
+     * the title-specific hook set is enabled. */
+    if (ppu::hook_impl == nullptr) {
+        bool any = !g_hooks.empty();
+        for (uint32_t a = 0; a < 0x800000 && !any; a++) any = ppu::hook_flags[a] != 0;
+        if (any) ppu::hook_impl = impl;
     }
     if (std::getenv("PS3BASE_GAME_HOOKS") == nullptr) return;
     if (std::getenv("GOWA_BATCH_DIAG")) std::thread(batch_diag_thread).detach();
