@@ -14,6 +14,7 @@
 #include "ppu/ops.h"
 #include "runtime/log.h"
 #include "runtime/trace.h"
+#include "runtime/codewatch.h"
 #include "runtime/memory.h"
 #include "runtime/reservation.h"
 #ifdef _WIN32
@@ -869,6 +870,8 @@ bool SpuThread::dma_direct(uint32_t cmd, uint32_t lsa, uint32_t ea, uint32_t siz
             }
         }
         if (g_edge_direct >= 2 && !merge_hit && edge_loaded(ls) && in_ring(ls, ea, size) && !(table && ea < table + 0xA280 && ea + size > table)) {
+            cw::check_store(ea, size, ls + lsa, "spu:direct");
+            cw::note_hit(ea, size, "spu:direct", size >= 4 ? vm::read32(ea) : 0);
             std::memcpy(vm::ptr(ea), ls + lsa, size);
             edge_direct_puts++;
             return true;

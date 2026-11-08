@@ -1,4 +1,5 @@
 #include "ppu/ops.h"
+#include "runtime/codewatch.h"
 #include "runtime/host.h"
 #include "runtime/force.h"
 #include "runtime/thread.h"
@@ -747,11 +748,23 @@ static void morton_trace(ppu::Context& ctx)
  * pointer never lands there; an instruction word copied into a pointer field
  * always does. That is exactly what the two dumps show: +28 held 0x00721f30
  * ('stw r3,0(r26)') in one and 0x00730100 in the other. */
+/* The guard also ARMS the line watch. Every node the walk reaches is a line of
+ * memory whose writer matters, and arming it here means the writer is already
+ * being recorded before the corruption is seen -- the log then contains the
+ * exact store, with its thread, guest lr and value. This is the "permanent watch
+ * on the word" the investigation needed; it is free at run time (one bit set per
+ * new line, then one array read on each store). */
 static bool list_guard(ppu::Context& ctx) {
     static const bool on = std::getenv("PS3BASE_LIST_GUARD") != nullptr;
     if (!on) return false;
     const uint32_t node = static_cast<uint32_t>(ctx.gpr[30]);
     if (!node) return false;
+    if (vm::range_mapped(node, 40)) {
+        cw::note_line(node);
+        cw::note_line(node + 32);
+        /* The container: its table of head pointers is what selects this node. */
+        cw::note_line(static_cast<uint32_t>(ctx.gpr[29]));
+    }
     if (!vm::range_mapped(node, 36)) {
         LOG_ERROR("listguard", "node 0x%08x is not mapped (obj r29=0x%08x lr=0x%08x)",
                   node, static_cast<uint32_t>(ctx.gpr[29]), static_cast<uint32_t>(ctx.lr));
@@ -803,9 +816,19 @@ void init() {
     /* The list guard is generic: it observes the node pointer a walk is about to
      * pass, and needs no title-specific address beyond the text range it tests
      * against. Installed before the early return below so it also works on a run
-     * that does not enable the title's other hooks. */
+     * that does not enable the title's other hooks.
+     *
+     * MEASURED BUG, fixed here: add_guard sets a hook_flags bit, but the lifted
+     * code only consults hook_flags when ppu::hook_impl is non-null. hook_impl
+     * was assigned ABOVE this block, while g_hooks was still empty, so with
+     * PS3BASE_GAME_HOOKS unset -- which is the documented way to run this guard
+     * -- the guard was installed, logged "guard installed", and never called.
+     * That is why earlier runs reported "0 false alarms": it was not watching.
+     * Assign it again after the guard is registered. */
     if (std::getenv("PS3BASE_LIST_GUARD")) {
         add_guard(0x64c044, list_guard);
+        if (!ppu::hook_impl) ppu::hook_impl = impl;
+        ppu::hook_flags[0x64c044 >> 2] = 1;
         LOG_INFO("listguard", "guard installed on f_0064c044: node +28/+32 are checked against the text range 0x00010000..0x00ba3688");
     }
     /* Any hook or guard registered above needs the dispatcher, whether or not

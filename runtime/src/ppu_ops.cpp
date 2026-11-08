@@ -1,6 +1,10 @@
 #include <immintrin.h>
 #include "ppu/ops.h"
+#include "runtime/codewatch.h"
+#include "runtime/log.h"
+#include "runtime/memory.h"
 #include "runtime/reservation.h"
+#include "runtime/thread.h"
 
 #include <atomic>
 #include <cmath>
@@ -136,7 +140,22 @@ bool stdcx(Context& ctx, uint8_t* base, uint32_t ea, uint64_t value) {
     return store_conditional(ctx, base, ea, &be, 8);
 }
 
-void notify_store(uint8_t* base, uint32_t ea, uint32_t size) {}
+/* dcbz zero-fills 128 bytes, so it can erase a node but cannot place a text
+ * word. It is reported anyway: a dcbz on the watched line explains a field
+ * that went to zero, and the cost is one atomic load. */
+std::atomic<uint64_t> g_dcbz_on_line{0};
+void notify_store(uint8_t* base, uint32_t ea, uint32_t size) {
+    (void)base;
+    if (!cw::g_on.load(std::memory_order_relaxed)) return;
+    const uint32_t line = cw::g_line.load(std::memory_order_relaxed);
+    if (line != 0xFFFFFFFFu && ((ea & ~127u) == line || ((ea + size - 1) & ~127u) == line)) {
+        cw::Context c{};
+        if (cw::current_context) c = cw::current_context();
+        g_dcbz_on_line.fetch_add(1);
+        LOG_WARN("codewatch", "dcbz (zero fill) of 0x%08x..0x%08x reached the watched line (guest lr 0x%08x) thread %s",
+                 ea, ea + size - 1, c.lr, c.thread ? c.thread : host::thread_name().c_str());
+    }
+}
 
 uint8_t hook_flags[0x800000];
 void (*hook_impl)(Context& ctx, uint8_t* base, uint32_t addr, BodyFn fn) = nullptr;
