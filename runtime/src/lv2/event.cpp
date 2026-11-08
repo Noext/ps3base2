@@ -83,12 +83,32 @@ LV2_SYSCALL(130, sys_event_queue_receive) {
     if (q->type != 1) return CELL_EINVAL;
     std::unique_lock lk(q->m);
     q->waiters++;
+    const bool had = !q->events.empty();
+    const uint32_t qid = u32arg(ctx, 0);
+    const uint32_t call_lr = static_cast<uint32_t>(ctx.lr);
+    if (std::getenv("PS3BASE_QUEUE_TRACE")) {
+        const guest::Thread* t = guest::current();
+        static std::atomic<uint64_t> n{0};
+        if (n.fetch_add(1) < 200)
+            LOG_INFO("queuerecv", "thread=%s(0x%x) q=0x%x pending=%d timeout=0x%llx",
+                     t ? t->name.c_str() : "?", t ? t->id : 0, qid,
+                     int(q->events.size()), static_cast<unsigned long long>(u64arg(ctx, 2)));
+    }
     bool ok = wait_for(lk, q->cv, u64arg(ctx, 2), [&] { return !q->events.empty() || q->destroyed; });
     q->waiters--;
     if (q->destroyed) return CELL_ECANCELED;
     if (!ok) return CELL_ETIMEDOUT;
     Event e = q->events.front();
     q->events.pop_front();
+    if (std::getenv("PS3BASE_QUEUE_TRACE") && qid == 0x8d009600u) {
+        const guest::Thread* t = guest::current();
+        LOG_INFO("spursrecv", "thread=%s(0x%x) lr=0x%08x source=0x%llx data1=0x%llx data2=0x%llx data3=0x%llx",
+                 t ? t->name.c_str() : "?", t ? t->id : 0, call_lr,
+                 static_cast<unsigned long long>(e.source),
+                 static_cast<unsigned long long>(e.data1),
+                 static_cast<unsigned long long>(e.data2),
+                 static_cast<unsigned long long>(e.data3));
+    }
     ctx.gpr[4] = e.source;
     ctx.gpr[5] = e.data1;
     ctx.gpr[6] = e.data2;

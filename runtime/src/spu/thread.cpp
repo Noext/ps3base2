@@ -461,6 +461,15 @@ void SpuThread::write_channel(uint32_t ch, uint32_t value) {
         uint32_t data1 = out_mbox;
         out_mbox_full = false;
         lk.unlock();
+        {
+            static const bool on = std::getenv("PS3BASE_SPU_MBOX") != nullptr;
+            if (on) {
+                static std::atomic<uint64_t> n{0};
+                if (n.fetch_add(1) < 500)
+                    LOG_INFO("spumbox", "thread=0x%x code=%u data0=0x%x data1=0x%x pc=0x%05x",
+                             id, code, data0, data1, ctx.pc);
+            }
+        }
         if (code < 128) {
             uint32_t port = code & 63;
             bool reply = code < 64;
@@ -473,10 +482,20 @@ void SpuThread::write_channel(uint32_t ch, uint32_t value) {
                 }
             }
             int64_t r = lv2::CELL_ENOTCONN;
+            const uint32_t bound_q = spup[port];
+            const bool have_obj = bound_q && lv2::get<lv2::EventQueue>(bound_q) != nullptr;
             if (uint32_t q = spup[port]) {
                 if (auto queue = lv2::get<lv2::EventQueue>(q)) {
                     r = lv2::push_event(queue, {SPU_USER_EVENT_KEY, id, (uint64_t(port) << 32) | data0, data1});
                 }
+            }
+            if (std::getenv("PS3BASE_SPU_MBOX")) {
+                static std::atomic<uint64_t> m{0};
+                if (m.fetch_add(1) < 200)
+                    LOG_INFO("spuroute", "thread=0x%x code=%u port=%u bound_q=0x%x queue_found=%d "
+                             "data0=0x%x data1=0x%x -> 0x%llx",
+                             id, code, port, bound_q, int(have_obj), data0, data1,
+                             static_cast<unsigned long long>(r));
             }
             LOG_DEBUG("spu", "thread 0x%x %s port %u data0 0x%x data1 0x%x queue 0x%x -> 0x%llx", id, reply ? "send_event" : "throw_event", port, data0, data1,
                       spup[port], static_cast<unsigned long long>(r));
@@ -1071,6 +1090,14 @@ void SpuThread::process_mfc(uint32_t cmd) {
         break;
     case 0xD0: {
         uint32_t line = ea & ~127u;
+        {
+            static const bool on = std::getenv("PS3BASE_ATOMIC_LINE") != nullptr;
+            if (on && line == 0x30028500u) {
+                const uint32_t* w = reinterpret_cast<const uint32_t*>(vm::ptr(0x30028570));
+                LOG_INFO("atomicline", "GETLLAR thread=0x%x pc=0x%05x line=0x%x cur70=0x%08x",
+                         id, ctx.pc, line, __builtin_bswap32(*w));
+            }
+        }
         bool lost_lr = raddr && raddr != line && rsv::lost(raddr, rtime, rdata);
         uint8_t snap[128];
         uint64_t ver = rsv::snapshot(line, snap);

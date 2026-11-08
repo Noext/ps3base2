@@ -397,10 +397,14 @@ LV2_SYSCALL(82, sys_event_flag_create) {
     {
         static const bool on = std::getenv("PS3BASE_FLAG_TRACE") != nullptr;
         static std::atomic<int> n{0};
-        if (on && n.fetch_add(1) < 200) LOG_INFO("flag", "create id=0x%x init=0x%llx (r5=0x%llx r6=0x%llx)",
-                                                id, static_cast<unsigned long long>(f->pattern),
-                                                static_cast<unsigned long long>(ctx.gpr[5]),
-                                                static_cast<unsigned long long>(ctx.gpr[6]));
+        if (on && n.fetch_add(1) < 200) {
+            const guest::Thread* t = guest::current();
+            LOG_INFO("flag", "create id=0x%x init=0x%llx thread=%s lr=0x%08x r3=0x%x r4=0x%x r5=0x%llx",
+                     id, static_cast<unsigned long long>(f->pattern),
+                     t ? t->name.c_str() : "?", static_cast<unsigned>(ctx.lr),
+                     static_cast<unsigned>(ctx.gpr[3]), static_cast<unsigned>(ctx.gpr[4]),
+                     static_cast<unsigned long long>(ctx.gpr[5]));
+        }
     }
     vm::write32(out, id);
     return CELL_OK;
