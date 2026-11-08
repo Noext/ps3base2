@@ -211,6 +211,13 @@ def form_row(path):
 #   449 More Options (lavender)   507 Create New World (lavender)
 FORM_CREATE_Y = 507
 FORM_HIGHLIGHT_TOL = 6
+# The form's text rows. When one of these holds the focus ring, the field has
+# taken keyboard focus and consumes Down/Up as text editing, so navigation does
+# not move the selection at all -- the cursor sits there and the next confirm
+# does nothing. Measured: this is what made three agents' fixed press counts
+# stop working mid-run.
+FORM_TEXT_ROWS = (110, 154)   # World Name, Seed
+FORM_TEXT_TOL = 14
 
 
 def form_highlight(path):
@@ -258,3 +265,16 @@ def form_highlight(path):
     if not found:
         return None
     return found[0]
+
+
+def form_text_focused(path):
+    """True if the focus ring sits on a text field (Name or Seed).
+
+    A text field swallows the arrow keys, so the driver must leave it with
+    Escape before it can navigate. Without this the walk-Down loop below spins
+    forever on a ring that never moves.
+    """
+    y = form_highlight(path)
+    if y is None:
+        return False
+    return any(abs(y - r) <= FORM_TEXT_TOL for r in FORM_TEXT_ROWS)

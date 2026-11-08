@@ -111,7 +111,8 @@ def main():
             # ring is on "Create New World", then confirm -- bounded, so a
             # wrong guess costs presses and never the iteration.
             ok = False
-            for _ in range(14):
+            escaped = 0
+            for _ in range(20):
                 if not shot(display, p):
                     break
                 y = ds.form_highlight(p)
@@ -119,6 +120,15 @@ def main():
                 if y is not None and abs(y - ds.FORM_CREATE_Y) <= ds.FORM_HIGHLIGHT_TOL:
                     ok = True
                     break
+                # A text field eats the arrows. Leave it before pressing Down,
+                # otherwise this loop spins on a ring that cannot move. Escape
+                # is bounded so a field we cannot identify still costs only
+                # presses, never the iteration.
+                if ds.form_text_focused(p) and escaped < 3:
+                    escaped += 1
+                    press(display, "Escape")
+                    time.sleep(0.6)
+                    continue
                 press(display, "Down")
                 time.sleep(0.8)
             if ok:
