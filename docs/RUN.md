@@ -415,3 +415,15 @@ Two things that did work when `input.cmd` did not: real keyboard events
 (`xdotool keydown z; sleep 0.25; xdotool keyup z`) advanced past the dialog and
 into the new-world form, and the pad path is the one that queues. If one path
 stalls, try the other before concluding the emulator is stuck.
+
+## The new-world form wraps
+
+The option list on the new-world form **wraps**: going down past the last row
+returns to the first (Bonus Chest -> back to Online Game). A fixed "Down x6"
+therefore does not reliably land on `Create New World`; measured, the cursor
+reaches it after **Down x2** from the form entry.
+
+Screenshot between presses and count by twos rather than trusting a fixed
+number. This is the same family of mistake as the recurring autosave dialog: a
+blind fixed sequence desynchronises, and the screen then looks frozen when it is
+only waiting on a different row.
