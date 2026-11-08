@@ -1,20 +1,21 @@
-# Piste 42 -- f_0064c044 : le mot de code en +28, et jusqu'ou l'heure a tenu
+# Piste 42 -- f_0064c044 : le mot de code en +28, l'heure non atteinte, et `held` non mesurable
 
 Branche `explore/42`, worktree `/root/Dev/ps3base2-wt42`, VFS `vfs-42`.
-Build RelWithDebInfo clang++, `-j 8`. Suite de tests : 9/9.
+Build RelWithDebInfo clang++, `-j 8`. Suite de tests : **9/9**.
 
 **Resultat en une phrase : le crash est bien une corruption de `node+28` par un
-mot du `.text`, prouve par desassemblage et par le dump de registres ; mais
-l'heure complete de jeu n'a PAS ete atteinte, et je ne la revendique pas.**
-Le maximum mesure est 927 s dans le monde, captures a l'appui.
+mot du `.text`, prouve par desassemblage et par un dump de registres ; l'heure
+complete n'a PAS ete atteinte (maximum mesure : 927 s dans le monde) ; et
+`held` n'a pas pu etre mesure.** Les trois sont dits separement, parce que deux
+d'entre eux sont des non-resultats.
 
 ## 1. Antecedents (grep -Rn ... refs/)
 
 | Trouvaille | Source (path:line) | S'applique ici ? |
 |---|---|---|
-| Un watchpoint de garde de page existe pour attraper les stores que `vm_write*` ne voit pas | `refs/jdc-ps3recomp/runtime/ppu/ppu_loader.cpp:1171` | **oui** -- meme forme que `PS3BASE_CODEWATCH` |
-| `stwcx` est vulnerable a ABA et corrompt via des blocs reutilises | `refs/jdc-ps3recomp/runtime/ppu/ppu_loader.cpp:821` | **non** -- reservation mesuree exacte a 2 et 4 threads |
-| Un garde de re-entrance est obligatoire dans le handler de faute | `refs/jdc-ps3recomp/runtime/ppu/ppu_loader.cpp:1179` | oui, note |
+| Un watchpoint de garde de page existe pour attraper les stores que `vm_write*` ne voit pas, en loggant le RIP fautif | `refs/jdc-ps3recomp/runtime/ppu/ppu_loader.cpp:1171` | **oui** -- meme forme que `PS3BASE_CODEWATCH` |
+| `stwcx` est vulnerable a ABA ; un commit obsolete corrompt via un bloc reutilise | `refs/jdc-ps3recomp/runtime/ppu/ppu_loader.cpp:821` | **non** -- la reservation est mesuree exacte a 2 et 4 threads (piste 33) |
+| Un garde de re-entrance dans le handler de faute est obligatoire | `refs/jdc-ps3recomp/runtime/ppu/ppu_loader.cpp:1179` | oui, note |
 | `_sys_lwmutex_lock` prend son propre mutex autour d'un mot `signaled` ; la boucle de retry est chez l'APPELANT | `refs/rpcs3/rpcs3/Emu/Cell/lv2/sys_lwmutex.cpp:135` | **oui** -- c'est pourquoi deux lr dans un log ne sont pas deux ecrivains |
 
 ## 2. Ce que le crash est vraiment (mesure)
@@ -98,11 +99,8 @@ titre utilise reellement), `sys_semaphore_wait/trywait`, `sys_rwlock_wlock` ;
 pops dans les releases correspondants. Le `line-write` de codewatch se termine
 maintenant par `held <liste>`.
 
-Cela repond a la question que la session precedente ne pouvait que poser :
-*le champ a-t-il ete ecrit pendant que le thread tenait son propre verrou ?*
-
 Deux defauts de cette instrumentation ont ete trouves **par la mesure**, et
-corriges :
+corriges (`eaa261d`) :
 
 1. `_sys_lwmutex_lock/unlock/trylock` (fichier `lv2/lwmutex.cpp`) ne poussaient
    rien : le commit precedent n'instrumentait que le HLE dans `lwmutex_hle.h`.
@@ -112,30 +110,59 @@ corriges :
 
 ## 5. Mesures brutes
 
-### Le champ `held` : non concluant, et je le dis
+### `held` : NON MESURE, et voici exactement pourquoi
 
-Sur le run 42 (binaire d'AVANT le correctif d'ordre), **532 line-writes sur 532
-ont rapporte `held -`**. Deux explanations, et la seconde est mon propre bug :
+C'est le point que je ne veux pas laisser ambigu :
 
-* soit ce chemin n'appelle pas le lwmutex HLE ;
-* soit `mark_held` ecrivait le mot de verrou avant le push (corrige par `eaa261d`).
+| Binaire | line-writes | `held -` | `held` non-vide |
+|---|---|---|---|
+| avant correctif d'ordre (run 42) | 532 | **532** | **0** |
+| apres correctif (runs 42f, 42g) | **0** | 0 | 0 |
 
-Sur le run 42f (binaire d'APRES le correctif) : **0 line-writes**, donc le
-chemin de sauvegarde n'a jamais ete atteint et `held` n'a pas pu etre re-mesure.
-**Je ne fournis donc pas les deux chiffres demandes : la mesure n'a pas eu lieu.**
-Le prochain run qui atteint la sauvegarde les donnera.
+Sur le binaire d'avant correctif, 532 ecritures sur 532 rapportaient `held -`,
+et l'une des deux causes possibles est mon propre bug d'ordre (corrige). Sur les
+binaries d'apres correctif, le chemin de sauvegarde n'a **jamais** ete atteint
+dans mes runs, donc l'instrumentation n'a jamais parle.
+
+**Conclusion honnete : `held` n'a pas ete mesure.** Une instrumentation dont on
+sait qu'elle n'a pas encore parle vaut mieux qu'une instrumentation dont on
+croit qu'elle a parle.
 
 ### Duree de jeu reellement atteinte
 
-| Run | Duree dans le monde | Crash | Capture |
+| Run | Duree DANS le monde | Crash | Capture |
 |---|---|---|---|
-| 42 (budget 3600 s, tue a 3912 s) | **927 s** | non | oui, `evidence-42/world-in-survival-t2985.png` |
-| 42f (budget 9000 s, tue a 700 s) | 0 s (generation) | non | non |
+| 42 (budget 3600 s) | **927 s** | non (tue : voir section 6) | oui |
+| 42f | 0 s (generation) | non (tue) | non |
+| 42g | ~1 s (segfault en generation) | **oui, segfault** | non (voir ci-dessous) |
 
-Le monde a ete cree et **joue** : `docs/findings/evidence-42/world-in-survival-t2985.png`
-montre coeurs, barre de faim, hotbar et terrain en Survie ;
-`world-player-moved-t3050.png` montre le joueur ayant bouge et le HUD
-`Crafting / Inventory / R2 Mine`. **Ce n'est pas une heure.**
+Le monde a ete cree et **joue** deux fois. Preuves :
+
+* `docs/findings/evidence-42/world-in-survival-t2985.png` -- 10 coeurs, faim,
+  hotbar, terrain, en Survie (run 42, t=2985) ;
+* `docs/findings/evidence-42/world-player-moved-t3050.png` -- le joueur a bouge,
+  HUD `Crafting / Inventory / R2 Mine` (run 42) ;
+* `docs/findings/evidence-42/world-42g-entered.png` -- deuxieme entree
+  independante, 22:27:18, 10 coeurs pleins, arbres, ocean, nuages.
+
+**Ce n'est pas une heure, et je ne la revendique pas.**
+
+### Le segfault du run 42g, et ce qu'il ne montre pas
+
+42g a segfaute pendant la generation (`Segmentation fault` rapporte par
+`run_world.sh`, 0 `crash: signal` dans le log applicatif). Un dump de 510 MB a
+ete pris (`blackbox/memory_0.bin`, 22:27). Je l'ai analyse avec le filtre des
+sessions precedentes :
+
+* `node+0x1c` a `0x378c9dcc` : **quatre mots a zero** -- le noeud de la piste 33
+  n'existe pas dans ce dump (heap different, ou dump pris a un autre moment) ;
+* `0x378c9c80` (le mot surveille) : zero ;
+* scan "mot de code dans le heap" apres le filtre complet (aligne, dans le
+  `.text`, pas une entree de fonction, pas de l'UTF-16, pas a moins de 0x20000
+  d'une entree) : **66 valeurs**. Ce sont les memes adresses que dans les sept
+  dumps precedents -- donc de la donnee ordinaire, pas cette corruption.
+
+Ce segfault n'est donc **pas** demontre etre `f_0064c044`. Je ne l'attribue pas.
 
 ## 6. Cause racine des runs qui mouraient sans crash (utile aux autres pistes)
 
@@ -152,7 +179,8 @@ Matrice mesuree :
 | `nohup ... & disown` depuis l'appel, avec `tools/run_world.sh` | **oui** (700 s, et 3912 s plus tot) |
 
 Les Xvfb survivent toujours ; seule l'instance du jeu meurt, ce qui fait
-ressembler le probleme a un defaut du jeu.
+ressembler le probleme a un defaut du jeu. C'est la cause que l'orchestrateur a
+independamment reproduite et documentee (`docs/findings/turn-318-status.md`).
 
 ## 7. Lecon de methode : un detecteur de capture peut mentir
 
@@ -164,8 +192,7 @@ l'ecran" (la hotbar). Il a donne deux faux positifs :
 
 J'ai donc rapporte "dans le monde" a t=1635 s alors que la barre de generation
 etait a 35 %. Le detecteur final teste la structure et est valide sur 8
-references (`docs/world-on-main.png`, `playability-31/world-survival.png`,
-`mine-hole.png`, et les captures de chargement/mort) :
+references :
 
 * barre de progression verte saturee, ou logo du titre bien visible -> `LOADING` ;
 * rouge sombre dominant (>55 % de l'image) -> `DEAD` ;
@@ -176,14 +203,15 @@ references (`docs/world-on-main.png`, `playability-31/world-survival.png`,
 ## 8. Resultat
 
 * La corruption est **reelle et localisee** : `node+28`, un mot du `.text`
-  (`0x0048f640`, mi-fonction), et la chaine `lwz r4,0x14(r4)` sur ce mot est ce
-  qui produit la faute guest 0.
+  (`0x0048f640`, mi-fonction), et `lwz r4,0x14(r4)` sur ce mot est ce qui
+  produit la faute guest 0.
 * L'ecrivain de ce mot **n'est toujours pas nomme**. Le watch est arme sur les
   lignes des noeuds que la marche atteint, et `held` enregistre l'etat de verrou
   a chaque ecriture ; le prochain run qui atteint le crash avec le watch arme
-  le nommera.
+  et le binaire corrige le nommera.
 * L'heure complete **n'a pas ete atteinte** : 927 s dans le monde est le
   maximum mesure, avec capture.
+* `held` **n'a pas ete mesure**, et c'est ecrit comme tel.
 
 Quatre recits sont deja morts sur la mesure ("la reservation est cassee",
 "un mot de code a ete stocke", "deux threads se courent apres", "+28 est de
