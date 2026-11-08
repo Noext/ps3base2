@@ -113,3 +113,38 @@ load, it was the kill.
 `nohup setsid ... & disown`, never a bare backgrounded `timeout`. The Xvfb
 servers always survived, which is why the display stayed alive while the game
 did not -- and why the symptom looked like a game problem.
+
+## The hash comparison: the seeds were not the same, so the hashes prove nothing
+
+I finally got one run of each mode on a clean VFS with the driver told to use
+seed `truth1`. The hashes differed:
+
+    interpreted  a27cddfc...be31  size 2 964 422
+    compiled     80f3c5c8...fae40 size 3 017 914
+
+**That is not a compiler bug.** Reading `RandomSeed` out of each saved world:
+
+    BLES01976--261108215613  RandomSeed=aee933bb
+    BLES01976--261108221751  RandomSeed=672650a0
+
+Two different random seeds, so two different worlds. The comparison is void.
+
+**Why `DRIVE_SEED` did not work:** the driver did print `seed set to truth1`,
+so the code path ran, but it types the seed with one `xdotool type` call per
+character. The host input path latches on `SDL_EVENT_KEY_DOWN` and the field
+never received the text. **The "seed set" line is printed whether or not the
+text landed** -- the driver was reporting that it had pressed keys, not that the
+field held the seed. That is the same class of mistake as the capture classifier
+lying: an action reported as done when only the attempt happened.
+
+**What a valid comparison needs, and what I did not have time to do:**
+- type the seed with a single `xdotool type --delay` invocation, or set the seed
+  through a mechanism that does not depend on per-character key events;
+- read `RandomSeed` back out of the saved world and assert the two runs match
+  **before** comparing any hash, so a seed mismatch can never be mistaken for a
+  compiler difference again.
+
+The generation times I measured (interp 117.99 -> 618.43 s, compiled 126.58 ->
+667.37 s) are on those two different worlds, so they are only indicative: the
+compiled run was not faster on a heavier world, and neither number is a
+controlled measurement.
