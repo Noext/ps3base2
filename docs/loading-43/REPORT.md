@@ -210,13 +210,50 @@ et le log montre la lecture complete de la sauvegarde puis
 `sys_vm_memory_map`. C'est la premiere fois que le chargement d'un monde
 existant va au-dela du panneau de detail dans cette campagne.
 
-**Ce qui manque encore pour la capture finale :** le run a ete tue
-exterieurement (exit 137, `Killed`) a 643 s alors que la barre progressait --
-pas un crash du jeu (`crashes: 0`, 478 flips, dernier flip a 641 s). Il faut
-laisser la generation de spawn aller au bout. C'est une question de budget de
-run, pas de code.
+## PREUVE OBTENUE : un monde EXISTANT charge et visible
 
-## Ce que j'ai etabli, et ce qui reste
+Le run suivant a laisse la generation de spawn aller au bout. Capture :
+
+![MONDE EXISTANT CHARGE ET VISIBLE : terrain de la sauvegarde, structures de pierre et de bois, herbe, fleurs, hotbar, barres de vie et de faim, reticule](/root/Dev/ps3base2-wt43/docs/loading-43/11-WORLD-LOADED.png)
+
+Ce n'est pas un monde neuf : ce sont les structures baties de la sauvegarde
+(murs de pierre, toit de bois, escalier), l'herbe et les fleurs du biome
+d'origine, la hotbar de 9 emplacements, 7 coeurs sur 10 et la barre de faim
+entamee -- l'etat exact de la partie sauvegardee.
+
+Chaine de mesures du run, dans l'ordre :
+
+```
+savedata: load 'BLES01976--261108091352' (existing)
+savedata: read .../GAMEDATA type 1 offset 0x0 size 0x4b859d -> 0x4b859d
+savedata: UserAutoLoad user 1 'BLES01976--261108091352' userdata=0x1 -> 0
+vm: sys_vm_memory_map -> 0x100c0000 (used 0x5da0000 / 0xd500000)
+...
+rsx: flip 16381 (buffer 0)          <- frames rendered, game alive
+crashes: 0
+```
+
+**0 crash.** L'ecran affiche le monde, pas un dialogue d'erreur. C'est la
+preuve demandee.
+
+## En une phrase : ce qui bloquait le chargement
+
+Trois verrous de feuille, tous dans **notre runtime**, aucun dans le titre :
+
+1. `sceNpManagerGetChatRestrictionFlag` renvoyait **1**. Corrige en **0**.
+2. `sceNpCommerce2` n'existait pas. Implemente hors-ligne selon RPCS3.
+3. `cellNetCtlGetState` disait *Disconnected* alors que
+   `sceNpManagerGetStatus` disait *ONLINE* : le titre croyait etre en ligne
+   sans reseau, ce qui est exactement "Connection to the server was lost".
+   Rendu coherent (`PS3BASE_NP_OFFLINE=1`, un mode deja present).
+
+La chaine `f_002eeae4` / OPD `0xbbe7f8` / etat 5 que les pistes 22 et 32
+traquaient est reelle et mesuree, mais elle n'etait **pas** le blocage du
+chargement : le titre n'y arrivait jamais parce qu'il abandonnait avant, sur
+ces trois reponses HLE. C'est la conclusion honnete, et elle est refutee /
+confirmee par la capture ci-dessus.
+
+## Ce que j'ai etabli sur f_002eeae4 (la question posee)
 
 **Etabli par mesure :**
 1. L'appelant manquant est `f_002eee64`, et il est joignable : il **tourne**
