@@ -146,10 +146,16 @@ entries against what the title reads at `funcFixed` time.
 
 # The world is rendered (verified on main, no forcing)
 
-**Capture**: `docs/world-on-main.png` -- sky, terrain, trees, ten hearts, hotbar,
-targeting cross, `Crafting`/`Inventory` prompts, 20-198 fps. Reproduced on a
-clean `main` via `tools/run_world.sh` with **no forcing at all**: the log's only
-`force:` line is "save completed; flag rule armed", never an `APPLIED`.
+**Capture**: `docs/world-on-main.png` -- a snowy biome with trees, ten hearts,
+hotbar, targeting cross and the `Crafting`/`Inventory` prompts, 22 fps.
+
+Reproduced on the **fully merged** `main` (after explore/11, /12 and /13) via
+`tools/run_world.sh vfs-proof --seconds 1400`, with **no forcing of any kind**:
+`APPLIED` is 0 for the whole session and the only `force:` line is
+"save completed; flag rule armed". 434 flips, no crash, three world saves.
+
+Earlier evidence, same result on an intermediate main: `/tmp/run-world-mainrepro`
+-- plains biome, 57 fps, 3 saves, 336 flips.
 
 ## There was no forcing left to remove
 
