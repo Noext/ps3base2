@@ -109,3 +109,37 @@ dialog, instead of "No Games Found".
 After the first autosave dialog is acknowledged, a **second identical dialog**
 appears and needs its own press. A fixed input sequence that does not expect it
 sits there forever. Always screenshot after an OK.
+
+## Forcing #1 is now redundant
+
+The explore/3 work implemented the real NP chain. Measured consequence: with
+that in place, `force: APPLIED func 0x00216258: r3 0x1 -> 0x1` -- **the value
+before the override is already 1**. `sceNpManagerGetNpId` now returns a
+signed-in identity, `f_00216260` returns success on its own, and `f_00216560`
+leaves `CellServer+593` at 1 without help.
+
+`PS3BASE_FORCE="f216258=1"` still works and is harmless, but it is no longer
+doing anything on the NP path. `PS3BASE_NP_OFFLINE=1` selects the truthful
+signed-out state instead, which is the mode to use when comparing branches.
+
+## What the four parallel tracks established
+
+| Track | Finding | State |
+|---|---|---|
+| 1 -- server loop | `(4J) Server` is **not** stuck: it works actively (memory writes, syscalls advancing). The frozen screen is `(4J) FullscreenProgress`, `(4J) Chunk update` and `(4J) Tile update`, all parked in `sys_event_flag_wait` with `timeout=0` | measured |
+| 1 -- flag addresses | LV2 flag ids are heap-allocated and **differ every run** (0x98066e00, 0x98067700, 0x98068400 across runs). `lr` are stable; a forcing keyed on a flag address cannot survive a relaunch | measured |
+| 2 -- screen loop | The progress screen is a dedicated `(4J) FullscreenProgress` worker (`UIScene_FullscreenProgress`), exit gate `lr=0x6f1f8`, `mode=0x11` (AND + clear), infinite timeout. A thread already inside the syscall cannot be reached by a return-value override | measured |
+| 2 -- two dialogs | A **second identical autosave dialog** appears after the first OK and needs its own press | measured |
+| 3 -- NP | `sceNpManagerGetNpId` was the real leaf; returning 0 for "offline" lied, `f_00216260` tests `r3 < 0`. Real implementation makes forcing #1 a no-op | fixed |
+| 4 -- callbacks | `sceNpManagerRegisterCallback`, `sceNpBasicRegisterHandler` and `cellNetCtlAddHandler` are registered and **never invoked**; the three sysutil slots only ever see event `0x802`, never `0x02`/`0x03`/`0x0801`/`0x0803` | measured |
+| 4 -- savedata | `UserListAutoLoad` ignored the disk **and** our `u0_` prefix broke the title's `dirNamePrefix` query | fixed |
+
+## Still open
+
+`UserListAutoLoad` now lists the saves (`5 savedata match prefix
+'BLES01976--', listing 5`) and the Start Game panel grows to six rows with a
+scroll arrow, but **the rows render blank and pressing Load does nothing**: no
+`savedata: load 'BLES01976--...'` is ever issued. The enumeration reports the
+right count while the entry contents the title reads back are not what it
+expects -- the next thing to check is a byte-level dump of our `CellSaveDataDirList`
+entries against what the title reads at `funcFixed` time.
