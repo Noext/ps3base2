@@ -1,5 +1,6 @@
 #include "runtime/placement.h"
 #include "runtime/cbwatch.h"
+#include "runtime/codewatch.h"
 #include "runtime/host.h"
 #include "runtime/image.h"
 #include "runtime/loader.h"
@@ -198,6 +199,23 @@ int main(int argc, char** argv) {
     session::begin();
     crash::install();
     trace::init();
+    cw::current_context = [] {
+        cw::Context c{0, 0, nullptr};
+        guest::Thread* t = guest::current();
+        if (t) {
+            c.lr = static_cast<uint32_t>(t->ctx.lr);
+            c.cia = static_cast<uint32_t>(t->ctx.cia);
+            c.thread = t->name.c_str();
+        }
+        return c;
+    };
+    {
+        std::vector<uint32_t> entries;
+        entries.reserve(image::function_count);
+        for (uint32_t i = 0; i < image::function_count; i++) entries.push_back(image::functions[i].addr);
+        cw::set_known_entries(entries.data(), static_cast<uint32_t>(entries.size()));
+    }
+    cw::init();
     critpath::init();
     hooks::init();
     host::init_timers();
