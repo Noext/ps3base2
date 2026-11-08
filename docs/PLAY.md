@@ -282,3 +282,18 @@ plus rapide un appui plus court suffit.
 | `world-generation.png` | l'ecran de generation (~250 s), pour reconnaitre l'attente normale d'un blocage |
 | `window-real-display.png` | `play.sh` sur un display **deja present** (`DISPLAY=:91`) : aucun Xvfb lance par le script, fenetre sur le GPU. C'est le chemin d'un vrai bureau. |
 | `evidence.txt` | extraits de log bruts, non retouches, pour chaque affirmation de §7 |
+
+## 9. Antecedents (`grep -Rn ... refs/`)
+
+| Trouvaille | Source (path:line) | S'applique ici ? |
+|---|---|---|
+| `SDL_AttachVirtualJoystick` / manette virtuelle | **aucun match** dans `refs/` (rpcs3, jdc-ps3recomp, project-pyrrhus) | oui -- personne ne l'a fait ; c'est notre ajout |
+| L1/R1 mappes sur `LEFT_SHOULDER`/`RIGHT_SHOULDER`, L2/R2 sur les **gachettes analogiques** avec un seuil | `refs/jdc-ps3recomp/libs/input/cellPad.c:782-785` | oui -- meme forme que notre `poll_pad` (seuil `>30` sur 255). Confirme que L1/R1 et L2/R2 sont deux chemins distincts |
+| Les gachettes PS3 sont des **axes bruts** `((int)byte * 257) - 32768`, donc `-32768` au repos | `refs/project-pyrrhus/port/patches/4010-cellpad-sdl2-gamecontroller-windows.patch:1550-1556` | **oui, decisif** -- c'est exactement la regle que notre premiere version violait : ecrire `0` sur un axe de gachette brut le laisse a mi-course. Corrobore le bug de §7.4 et son correctif |
+| `SDL_GetGamepadButton` utilise pour lire un pad, par bouton nomme | `refs/project-pyrrhus/port/patches/4010-...:144`, `:386` | oui -- c'est le meme chemin de lecture ; notre manette virtuelle passe par la, donc elle est un vrai pad pour le jeu |
+| Garde de focus clavier `SDL_GetKeyboardFocus()` | `refs/jdc-ps3recomp/libs/input/cellPad.c:289` | oui -- meme forme ; d'ou `PS3BASE_ALLOW_UNFOCUSED_INPUT` pour un serveur X sans WM |
+| `xdotool` / `XTestFakeKeyEvent` dans un port | **aucun match** | non -- aucun port ne pilote par evenements X ; notre methode `keydown/sleep/keyup` reste la notre |
+
+Aucun port de `refs/` ne traite la **duree d'appui**, ni la repetition d'un bouton
+tenu pendant que le jeu tourne : la mesure de §7.5 (20 ms = 1 cran, 1 s = 3-5)
+n'a pas d'antecedent. Elle est specifique a ce titre.
