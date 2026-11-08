@@ -247,3 +247,61 @@ crashed, 2 = environment failure.
 **No forcing is passed by default.** `f216258=1` is a proven no-op now that the
 real NP chain returns a signed-in identity (`force: APPLIED ... r3 0x1 -> 0x1`).
 Use `--force SPEC` only to test one deliberately.
+
+## Reaching the world (verified recipe)
+
+`docs/world-on-main.png` is the proof, and it was taken with **no forcing**.
+
+```bash
+cd /root/Dev/ps3base2
+tools/run_world.sh vfs-proof --seconds 1400 --tag proof
+```
+
+Then drive with `/tmp/run-world-proof/input.cmd`. **Screenshot after every press
+and read it** -- the sequence below is what worked, but transitions shift by a
+second or two between runs.
+
+| # | press | what you should see |
+|---|---|---|
+| 1 | `cross` | TERMS OF USE -> Accept |
+| 2 | `cross` | autosave dialog -> OK |
+| 3 | `cross` | main menu (Play Game focused) |
+| 4 | `cross` | Start Game panel, Create New World highlighted |
+| 5 | `down` x6 then `cross` | new-world form, then generation starts |
+| 6 | `cross` every ~20 s | **the autosave dialog recurs; each one eats a press** |
+| 7 | -- | at ~410 s the world renders |
+
+Between the form and the world there is no further choice to make: keep pressing
+`cross` and watching. The world appears behind the last autosave dialog.
+
+### Traps that cost runs
+
+- **The autosave dialog recurs.** Once for the world save, then periodically in
+  game. A blind fixed sequence desynchronises and parks on a dialog forever.
+- **The cursor on the new-world form is on `Difficulty: Easy`, not on
+  `Create New World`.** Pressing `cross` there toggles the difficulty.
+- **`input.cmd` is consumed on read.** A press written during a transition can be
+  lost. Write, wait, screenshot.
+- **Never let two instances share `DISPLAY=:0`.** Both windows accept
+  `xdotool ... | tail -1`, so a press can go to the wrong game. The script uses
+  `setsid` and a process-group kill to prevent this; check
+  `pgrep -c -f 'build/ps3base'` is 1 before blaming the emulator.
+
+### Reading a run
+
+```
+state      : alive / crashed / environment failure
+exit code  : 124 means the budget was reached (good), 139 is a segfault
+crashes    : number of "crash: signal" lines
+flips      : rsx frame flips -- if this is 0 the renderer never ran
+flip span   : first -> last flip, so you can see when it stalled
+world saves : GAMEDATA files in the VFS; 3+ means worlds are being written
+```
+
+### Known remaining defects
+
+- Loading an existing world returns `-2` from the file callback after
+  `METADATA` and `THUMB`, before `GAMEDATA`. `THUMB` is announced as
+  `NORMALFILE` where RPCS3 uses a content type.
+- `f_0064c044` crashes `(4J) Server` (`lr=0x64c0fc`) on long sessions: a
+  corrupted linked-list pointer read as if it were a node.
