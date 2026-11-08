@@ -181,30 +181,59 @@ void fill_stat(const Op& op, uint32_t sg, bool exists) {
     vfs::Psf sfo;
     sfo.load(op.dir + "/PARAM.SFO");
     fill_param(sg + SG_PARAM, sfo);
-    uint32_t n = 0, listed = 0;
+    /* The file list is sorted by name, exactly as firmware does it
+     * (refs/.../cellSaveData.cpp:1613: alphabetical, or the PARAM.SFO
+     * RPCS3_BLIST order for new saves). Our previous raw directory_iterator
+     * order made the truncated list -- fileListMax is only 3 for this title --
+     * keep a *different* subset of files every run, so the title could not
+     * count on which entries it would see and abandoned the load.
+     * The size added to sizeKB is rounded up per file (align(entry.size, 1024),
+     * cellSaveData.cpp:1639), not summed then rounded once. */
+    struct FileEnt {
+        std::string name;
+        std::string host;
+        uint64_t size;
+    };
+    std::vector<FileEnt> files;
     uint64_t total = 0;
     std::error_code ec;
     for (const auto& de : fsys::directory_iterator(op.dir, ec)) {
         if (!de.is_regular_file()) continue;
-        std::string name = de.path().filename().string();
-        uint64_t size = de.file_size();
-        total += size;
+        const std::string name = de.path().filename().string();
+        /* The two system files firmware hides from the list, and only those
+         * (refs/.../cellSaveData.cpp:1603 calls check_filename(name, false,
+         * false), whose PARAM.SFO/PARAM.PFD test is the only exclusion).
+         * Excluding the title's own METADATA was tried and MEASURED to change
+         * nothing: fileNum went 4 -> 3 to match the count in METADATA's own
+         * header, and the title's file callback still returned -2. */
         if (name == "PARAM.SFO" || name == "PARAM.PFD") continue;
+        if (name.size() >= 13) continue;   /* CELL_SAVEDATA_FILENAME_SIZE */
+        files.push_back({name, de.path().string(), de.file_size()});
+    }
+    std::sort(files.begin(), files.end(),
+              [](const FileEnt& a, const FileEnt& b) { return a.name < b.name; });
+
+    uint32_t n = 0, listed = 0;
+    for (const FileEnt& f : files) {
+        total += (f.size + 1023) & ~uint64_t(1023);
         n++;
-        uint32_t e = buf + listed * 0x38;
+        const uint32_t e = buf + listed * 0x38;
         if (listed < list_max && buf && (listed + 1) * 0x38 <= buf_size) {
             std::memset(vm::ptr(e), 0, 0x38);
-            vm::write32(e, content_type(name) == 1 ? 0 : content_type(name));
-            vm::write64(e + 0x8, size);
-            std::string hp = de.path().string();
-            vm::write64(e + 0x10, file_time(hp, 0));
-            vm::write64(e + 0x18, file_time(hp, 1));
-            vm::write64(e + 0x20, file_time(hp, 2));
-            put_str(e + 0x28, name, 13);
+            /* CellSaveDataFileStat.fileType: SECUREFILE is 0, NORMALFILE is 1
+             * (refs/.../cellSaveData.h:103). content_type() returns 1 for an
+             * ordinary file, and the old code turned that into 0 -- it stamped
+             * GAMEDATA, METADATA and THUMB as protected content. */
+            vm::write32(e, content_type(f.name));
+            vm::write64(e + 0x8, f.size);
+            vm::write64(e + 0x10, file_time(f.host, 0));
+            vm::write64(e + 0x18, file_time(f.host, 1));
+            vm::write64(e + 0x20, file_time(f.host, 2));
+            put_str(e + 0x28, f.name, 13);
             listed++;
         }
     }
-    vm::write32(sg + SG_SIZE_KB, static_cast<uint32_t>((total + 1023) / 1024));
+    vm::write32(sg + SG_SIZE_KB, static_cast<uint32_t>(total / 1024));
     vm::write32(sg + SG_SYS_SIZE_KB, 35);
     vm::write32(sg + SG_FILE_NUM, n);
     vm::write32(sg + SG_FILE_LIST_NUM, listed);
@@ -293,12 +322,45 @@ int32_t run_op(Op& op) {
     LOG_INFO("savedata", "%s '%s' (%s) stat result %d setParam 0x%x recreate 0x%x indicator 0x%x needKB %d progress %u", op.save ? "save" : "load", op.dir_name.c_str(), exists ? "existing" : "new", result,
              set_param, vm::read32(ss + 0x4), vm::read32(ss + 0x8), static_cast<int32_t>(vm::read32(cb + 0x8)), vm::read32(cb + 0x4));
     std::memset(vm::ptr(fg), 0, 0x44);
-    while (result == CB_OK_NEXT) {
+    const bool trace_files = std::getenv("PS3BASE_SAVEDATA_TRACE") != nullptr;
+    if (trace_files) {
+        LOG_INFO("savedata",
+                 "  statGet: freeKB %d isNew %u dirName '%s' title '%s' sub '%s' bind %u "
+                 "sizeKB %d sysKB %d fileNum %u fileListNum %u fileList 0x%08x",
+                 static_cast<int32_t>(vm::read32(sg + 0x0)), vm::read32(sg + 0x4),
+                 gstr(sg + 0x8 + 0x18, 32).c_str(), gstr(sg + 0x40, 128).c_str(),
+                 gstr(sg + 0x40 + 0x80, 128).c_str(), vm::read32(sg + 0x650),
+                 static_cast<int32_t>(vm::read32(sg + 0x654)),
+                 static_cast<int32_t>(vm::read32(sg + 0x658)),
+                 vm::read32(sg + 0x65C), vm::read32(sg + 0x660),
+                 vm::read32(sg + 0x664));
+        LOG_INFO("savedata", "    setBuf: dirListMax %u fileListMax %u bufSize 0x%x buf 0x%08x",
+                 vm::read32(op.set_buf + 0x0), vm::read32(op.set_buf + 0x4),
+                 vm::read32(op.set_buf + 0x20), vm::read32(op.set_buf + 0x24));
+        for (uint32_t i = 0; i < vm::read32(sg + 0x660) && i < 12; i++) {
+            const uint32_t e = vm::read32(sg + 0x664) + i * 0x38;
+            LOG_INFO("savedata", "    fileList[%u] type %u size %llu name '%s'", i,
+                     vm::read32(e), static_cast<unsigned long long>(vm::read64(e + 0x8)),
+                     gstr(e + 0x28, 13).c_str());
+        }
+    }
+    for (int iter = 0; result == CB_OK_NEXT && iter < 4096; iter++) {
         std::memset(vm::ptr(cb), 0, 0x20);
         vm::write32(cb + 0x10, op.userdata);
         std::memset(vm::ptr(fs), 0, 0x30);
         call_guest(op.ctx, op.func_file, cb, fg, fs);
         result = static_cast<int32_t>(vm::read32(cb));
+        if (trace_files) {
+            char hex[3 * 0x40 + 1] = {};
+            for (int i = 0; i < 0x40; i++)
+                std::snprintf(hex + i * 3, 4, "%02x ", vm::ptr(fs)[i]);
+            LOG_INFO("savedata", "  fs bytes: %s", hex);
+            LOG_INFO("savedata",
+                     "  filecb #%d -> result %d op 0x%x type %u name '%s' off 0x%x size 0x%x bufSize 0x%x fileTypeIn 0x%x",
+                     iter, result, vm::read32(fs + 0x0), vm::read32(fs + 0x8),
+                     gstr(vm::read32(fs + 0x1C), 13).c_str(), vm::read32(fs + 0x20),
+                     vm::read32(fs + 0x24), vm::read32(fs + 0x28), vm::read32(fs + 0x00));
+        }
         if (result < 0) {
             LOG_WARN("savedata", "'%s' file callback result %d", op.dir_name.c_str(), result);
             return ERR_CBRESULT;
@@ -504,6 +566,71 @@ HLE_FUNC(cellSysutil, cellSaveDataUserAutoSave) {
         force::notify_save_done();
         ret(ctx, rc);
     }
+}
+
+/* cellSaveDataGetListItem(dirName, dir, sysFileParam, bind, sizeKB): read
+ * one entry's metadata back.
+ *
+ * The title walks the dirList we fill in cellSaveDataUserListAutoLoad and calls
+ * this once per entry, passing the dirName field of the CellSaveDataDirList it
+ * was given (measured: r3 equals the first entry's dirName address, r4 the
+ * caller's CellSaveDataDirStat). It was not implemented, so the generic handler
+ * returned 0 with every out-parameter untouched: the enumeration count was
+ * right, the rows rendered blank, and pressing Load found no entry to load.
+ *
+ * Layouts (refs/rpcs3/rpcs3/Emu/Cell/Modules/cellSaveData.h:197-247, 229-238):
+ *   CellSaveDataDirStat          { s64 atime, mtime, ctime; char dirName[32]; }
+ *   CellSaveDataSystemFileParam  { char title[128]; char subTitle[128];
+ *                                  char detail[1024]; u32 attribute;
+ *                                  u32 parental_level; char listParam[8];
+ *                                  char reserved[256]; }        (0x610)
+ * Reference: cellSaveData.cpp:2293 savedata_get_list_item. */
+HLE_FUNC(cellSaveData, cellSaveDataGetListItem) {
+    const uint32_t dir_name_ea = a32(ctx, 0);
+    const uint32_t dir = a32(ctx, 1);
+    const uint32_t sys_file_param = a32(ctx, 2);
+    const uint32_t bind = a32(ctx, 3);
+    const uint32_t size_kb = a32(ctx, 4);
+
+    const std::string name = gstr(dir_name_ea, 32);
+    if (name.empty()) return ret(ctx, static_cast<int32_t>(ERR_PARAM));
+
+    const std::string path = save_root() + "/" + name;
+    std::error_code ec;
+    if (!fsys::is_directory(path, ec)) {
+        LOG_WARN("savedata", "GetListItem '%s' -> no data", name.c_str());
+        return ret(ctx, static_cast<int32_t>(ERR_NODATA));
+    }
+
+    if (dir) {
+        std::memset(vm::ptr(dir), 0, 0x38);
+        vm::write64(dir + 0x0, file_time(path, 0));
+        vm::write64(dir + 0x8, file_time(path, 1));
+        vm::write64(dir + 0x10, file_time(path, 2));
+        put_str(dir + 0x18, name, 32);
+    }
+
+    if (sys_file_param) {
+        vfs::Psf sfo;
+        sfo.load(path + "/PARAM.SFO");
+        fill_param(sys_file_param, sfo);
+        /* fill_param covers title/subTitle/detail/attribute/listParam;
+         * parental_level sits at 0x504 (refs/.../cellSaveData.h:235). */
+        vm::write32(sys_file_param + 0x504, sfo.num("PARENTAL_LEVEL"));
+    }
+
+    if (bind) vm::write32(bind, 0);
+
+    uint32_t kbytes = 0;
+    for (const auto& de : fsys::directory_iterator(path, ec)) {
+        if (!de.is_regular_file()) continue;
+        kbytes += static_cast<uint32_t>((de.file_size() + 1023) / 1024);
+    }
+    if (size_kb) vm::write32(size_kb, kbytes + 35);
+
+    LOG_INFO("savedata", "GetListItem '%s' -> title '%s' size %u kB", name.c_str(),
+             gstr(sys_file_param, 128).c_str(), kbytes + 35);
+    ret(ctx, 0);
 }
 
 /* cellSaveDataEnableOverlay(enable): the autosave indicator. Nothing to draw. */
