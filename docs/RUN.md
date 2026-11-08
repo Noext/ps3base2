@@ -353,13 +353,37 @@ Driven entirely by real X events, no input file and no forcing
 | movement | **works** |
 | breaking a block | **works** (HUD confirms "R2 Mine") |
 | inventory open | **works** (player model, armour slots, 9x3 grid) |
-| placing a block | **not proven** — see below |
+| placing a block | **works, in Survival** (`docs/playability-31/`) |
 
-Placing is blocked by game state, not by input: L2, R2 and R3 all arrive as the
-right bytes, R3 is interpreted (the "Grass Block" tooltip appears), but this
-build's Creative hotbar stays empty, R2 does not add the broken block, and the
-PS3 build has no Creative category tabs to take a block from. Do not read that as
-a broken input path.
+Placing failed in **Creative** for a game reason, not an input reason: the broken
+block vanishes and drops nothing, so the hotbar stays empty and L2 has nothing to
+place. In **Survival** the broken block becomes a pickup that fills slot 1 and L2
+becomes effective.
+
+Verified sequence, keyboard only, no forcing:
+
+```
+z (terms) -> z (autosave) -> z (Play Game) -> z (Create New World)
+-> Down x6, VERIFY the cursor is on Create New World -> z
+-> ~250 s of generation -> Survival world (hearts, hunger, empty hotbar)
+-> g (right stick down, aim at the ground)
+-> hold 3 for 2.5 s   (R2 = mine) -> a one-block hole
+-> i (left stick forward) 1.2 s -> walk onto the drop; dirt fills slot 1
+-> g (look at the ground) -> 1 (L2) 0.4 s -> block placed, slot 1 empty
+```
+
+The HUD is the reliable indicator: it reads `L2 Place` when the hand holds a
+block and `R2 Mine` when it is empty.
+
+**Measured negative:** the D-pad does not change the selected hotbar slot in this
+build (Right x3 and Left x3, the bytes arrive, the hotbar is identical to the
+pixel), and there is no keyboard binding to choose a slot. Not blocking, because
+a pickup lands in slot 1, which is already selected.
+
+**Trap that costs runs:** without keyboard bindings for the right stick, the
+camera cannot turn and L2/R2 have no target. A run was lost concluding "breaking
+does not work" while the pad bytes were perfect. `R/F/T/G` now drive the right
+stick.
 
 **Two limits of this container, stated as limits:**
 
@@ -371,7 +395,4 @@ a broken input path.
   `SDL_AttachVirtualJoystick` is present in the installed SDL3 headers and is the
   clean path later; both paths already converge in `fill()`.
 
-**Trap that costs runs:** without keyboard bindings for the right stick, the
-camera cannot turn and L2/R2 have no target. A run was lost concluding "breaking
-does not work" while the pad bytes were perfect. `R/F/T/G` now drive the right
-stick; anyone testing break or place needs them or will measure a false negative.
+
