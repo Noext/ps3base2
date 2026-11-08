@@ -244,6 +244,10 @@ launch_game() {
 }
 
 launch_game
+# Publish the game's pid so a caller can stop it by process group. Without it
+# the only way to end a run early is to wait out the budget or to kill by
+# name -- and `pkill -f ps3base` has already killed another agent's run once.
+printf '%s' "$GAME_PID" > "$RUN_DIR/gamepid"
 echo "run_world: game pid $GAME_PID, budget ${SECONDS_BUDGET}s"
 
 STOP="$RUN_DIR/stop"

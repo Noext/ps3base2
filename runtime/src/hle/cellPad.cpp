@@ -1,4 +1,5 @@
 #include "common.h"
+#include "runtime/msgdialog.h"
 #include <cstdio>
 #include <deque>
 #include <vector>
@@ -247,6 +248,12 @@ void fill(uint32_t out) {
                      double(ppu::timebase() - g_start) / 80000000.0);
         }
     }
+    /* The system dialog owns the pad while it is open: it edge-detects the
+     * confirm/cancel buttons on the very bytes the title is about to receive,
+     * so it cannot drift from what the title sees. Hooked here rather than in
+     * a separate reader because this is the single place where the pad state
+     * is final (host device + queue + script all applied above). */
+    msgdialog::on_pad(b);
     vm::write32(out, 24);
     for (int i = 0; i < 24; i++) vm::write16(out + 4 + i * 2, b[i]);
 }

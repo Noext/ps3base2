@@ -1,11 +1,13 @@
 #include "common.h"
 #include "runtime/force.h"
+#include "runtime/msgdialog.h"
 #include "runtime/vfs.h"
 #include "runtime/compat.h"
 
 #include <sys/stat.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <filesystem>
 #include <map>
@@ -163,7 +165,13 @@ struct Op {
     uint32_t func_file;
     uint32_t userdata;
     bool save;
+    /* cellSaveData's errDialog argument: 0 NONE, 1 ALWAYS, 2 NOREPEAT
+     * (refs/.../cellSaveData.h:126-128). Read since forever, acted on now. */
+    uint32_t err_dialog = 0;
 };
+
+/* Defined below run_op; declared here so the error paths can report through it. */
+int32_t report_cbresult(const Op& op, int32_t cbresult);
 
 void fill_stat(const Op& op, uint32_t sg, bool exists) {
     std::memset(vm::ptr(sg), 0, SG_SIZE);
@@ -417,6 +425,7 @@ int32_t run_op(Op& op) {
         }
         if (result < 0) {
             LOG_WARN("savedata", "'%s' file callback result %d", op.dir_name.c_str(), result);
+            report_cbresult(op, result);
             return ERR_CBRESULT;
         }
         if (result == CB_OK_LAST || result == CB_OK_LAST_NOCONFIRM) break;
@@ -427,9 +436,54 @@ int32_t run_op(Op& op) {
 
 int32_t auto_op(ppu::Context& ctx, bool save) {
     std::string name = gstr(a32(ctx, 1), 64);
-    Op op{ctx, name, save_root() + "/" + name, a32(ctx, 3), a32(ctx, 4), a32(ctx, 5), a32(ctx, 7), save};
+    /* cellSaveDataAutoSave2/AutoLoad2 take no errDialog argument: there is no
+     * error dialog on the AUTO variants (refs/.../cellSaveData.cpp:2468-2490
+     * passes CELL_SAVEDATA_ERRDIALOG_ALWAYS internally for the USER variants
+     * only). Leave it NONE here. */
+    Op op{ctx, name, save_root() + "/" + name, a32(ctx, 3), a32(ctx, 4), a32(ctx, 5), a32(ctx, 7), save, 0};
     if (name.empty() || !op.set_buf || !op.func_stat || !op.func_file) return ERR_PARAM;
     return run_op(op);
+}
+
+/* --- the errDialog path, which was read and thrown away -------------------
+ *
+ * cellSaveData's errDialog argument decides whether a failure in the title's
+ * stat/file callback is reported to the user through a system dialog
+ * (refs/rpcs3/rpcs3/Emu/Cell/Modules/cellSaveData.cpp:408-453,
+ * display_callback_result_error_message). Values, from
+ * refs/.../cellSaveData.h:126-128:
+ *   CELL_SAVEDATA_ERRDIALOG_NONE = 0, ALWAYS = 1, NOREPEAT = 2.
+ * RPCS3 opens a blocking BUTTON_TYPE_OK dialogue for ALWAYS, and for NOREPEAT
+ * only when the same result was not the last one shown. We were reading the
+ * argument and doing nothing with it, which is why a failing save could look
+ * like a silent no-op.
+ *
+ * This does NOT explain the title's own autosave box: measured, that box is on
+ * screen while no cellSaveData call has failed (no "file callback result" line
+ * exists in any run log). It is implemented because it is the documented
+ * behaviour of the import and because it makes a real failure visible. */
+std::atomic<uint32_t>& last_error_dialog_result() {
+    static std::atomic<uint32_t> last{0xFFFFFFFFu};
+    return last;
+}
+
+/* Return the CBRESULT error after optionally raising the dialog. The caller
+ * keeps its own return value: RPCS3 returns CELL_SAVEDATA_ERROR_CBRESULT
+ * whether or not the dialog was shown. */
+int32_t report_cbresult(const Op& op, int32_t cbresult) {
+    const uint32_t err_dialog = op.err_dialog;
+    if (cbresult >= 0) return cbresult;
+    if (err_dialog == 0) return cbresult;   /* ERRDIALOG_NONE */
+    if (err_dialog == 2 && last_error_dialog_result().load() == static_cast<uint32_t>(cbresult)) {
+        return cbresult;                    /* ERRDIALOG_NOREPEAT, already shown */
+    }
+    last_error_dialog_result().store(static_cast<uint32_t>(cbresult));
+    char buf[128];
+    std::snprintf(buf, sizeof buf, "Saved data could not be saved or loaded. (%d)", cbresult);
+    LOG_WARN("savedata", "'%s' cbresult %d errDialog %u -> system dialog",
+             op.dir_name.c_str(), cbresult, err_dialog);
+    msgdialog::open(2u << 4 /* BUTTON_TYPE_OK */, buf, 0, 0);
+    return cbresult;
 }
 
 }
@@ -633,7 +687,7 @@ HLE_FUNC(cellSysutil, cellSaveDataUserAutoSave) {
     }
     const std::string folded = name;  /* verbatim: RPCS3 path is savedata/<dirName> */
     Op op{ctx, folded, save_root() + "/" + folded, set_buf, func_stat, func_file,
-          userdata, true};
+          userdata, true, err_dialog};
     {
         const int32_t rc = run_op(op);
         force::notify_save_done();
@@ -765,9 +819,9 @@ HLE_FUNC(cellSysutil, cellSaveDataUserAutoLoad) {
     }
     const std::string folded = name;  /* verbatim: RPCS3 path is savedata/<dirName> */
     Op op{ctx, folded, save_root() + "/" + folded, set_buf, func_stat, func_file,
-          userdata, false};
+          userdata, false, err_dialog};
     const int32_t r = run_op(op);
-    LOG_INFO("savedata", "UserAutoLoad user %u '%s' userdata=0x%x -> %d", user, folded.c_str(), userdata, r);
+    LOG_INFO("savedata", "UserAutoLoad user %u '%s' userdata=0x%x errDialog %u -> %d", user, folded.c_str(), userdata, err_dialog, r);
     ret(ctx, r);
 }
 
