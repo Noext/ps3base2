@@ -337,13 +337,13 @@ int main(int argc, char** argv) {
                 hle::sysutil_post([](ppu::Context& c) {
                     for (int slot = 0; slot < 4; slot++) {
                         const uint32_t fn = hle::callback_function(slot);
-                        if (fn) hle::call_guest(c, fn, hle::callback_arg(slot), 0x00000002ull, 0);
+                        if (fn) hle::call_guest(c, fn, 0x0121ull /* DRAWING_BEGIN */, 0, hle::callback_arg(slot));
                     }
                 });
                 hle::sysutil_post([](ppu::Context& c) {
                     for (int slot = 0; slot < 4; slot++) {
                         const uint32_t fn = hle::callback_function(slot);
-                        if (fn) hle::call_guest(c, fn, hle::callback_arg(slot), 0x00000003ull, 0);
+                        if (fn) hle::call_guest(c, fn, 0x0122ull /* DRAWING_END */, 0, hle::callback_arg(slot));
                     }
                 });
             }
