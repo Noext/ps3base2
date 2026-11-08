@@ -169,12 +169,15 @@ xvfb_alive() {
 # ------------------------------------------------------------------ capture --
 game_window() {
     # The title's window. Several Minecraft windows can coexist when other
-    # agents run, so prefer the one whose pid is our own game.
-    DISPLAY=:0 timeout 4 xdotool search --name 'Minecraft' 2>/dev/null | while read -r w; do
-        local p
-        p="$(DISPLAY=:0 timeout 2 xdotool getwindowpid "$w" 2>/dev/null)"
-        if [ "$p" = "${GAME_PID:-}" ]; then echo "$w"; return; fi
-    done | head -1
+    # agents run, so prefer the one whose pid is our own game -- but keep the
+    # search cheap: a window is only resolved once and then reused until it
+    # stops answering.
+    local w p
+    for w in $(DISPLAY=:0 timeout 4 xdotool search --name 'Minecraft' 2>/dev/null); do
+        p="$(DISPLAY=:0 timeout 1 xdotool getwindowpid "$w" 2>/dev/null)"
+        if [ -n "${GAME_PID:-}" ] && [ "$p" = "$GAME_PID" ]; then echo "$w"; return; fi
+    done
+    DISPLAY=:0 timeout 4 xdotool search --name 'Minecraft' 2>/dev/null | tail -1
 }
 
 capture_loop() {
@@ -184,7 +187,6 @@ capture_loop() {
         i=$((i + 1))
         if [ -z "$win" ] || ! DISPLAY=:0 timeout 2 xdotool getwindowname "$win" >/dev/null 2>&1; then
             win="$(game_window)"
-            [ -z "$win" ] && win="$(DISPLAY=:0 timeout 4 xdotool search --name 'Minecraft' 2>/dev/null | tail -1)"
         fi
         if [ -n "$win" ]; then
             DISPLAY=:0 import -window "$win" "$CAP_DIR/cap-$(printf '%03d' "$i").png" 2>/dev/null
