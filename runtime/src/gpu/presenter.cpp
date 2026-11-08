@@ -679,7 +679,13 @@ bool init() {
                 g.resized = true;
                 break;
             case SDL_EVENT_KEY_DOWN:
+                /* Report every key to the pad layer: a tap shorter than one poll
+                 * interval would otherwise be lost (see host::note_key). */
+                host::note_key(static_cast<int>(e.key.scancode), true);
                 if (!e.key.repeat && (e.key.key == SDLK_F11 || (e.key.key == SDLK_RETURN && (e.key.mod & SDL_KMOD_ALT)))) SDL_SetWindowFullscreen(w, !(SDL_GetWindowFlags(w) & SDL_WINDOW_FULLSCREEN));
+                break;
+            case SDL_EVENT_KEY_UP:
+                host::note_key(static_cast<int>(e.key.scancode), false);
                 break;
             case SDL_EVENT_GAMEPAD_ADDED:
                 if (SDL_GetGamepadFromID(e.gdevice.which)) break;

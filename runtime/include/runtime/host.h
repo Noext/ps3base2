@@ -7,6 +7,11 @@
 
 namespace host {
 
+/* Event-level keyboard input. The window thread reports every SDL key event
+ * here, so poll_pad can still see a press that begins and ends inside one poll
+ * interval -- which is exactly what "xdotool key" produces. */
+void note_key(int scancode, bool down);
+
 uint64_t qpc();
 uint64_t qpf();
 uint64_t thread_cycles();
