@@ -209,13 +209,16 @@ launch_game() {
     : > "$ICMD"
     local force_env=()
     [ -n "$FORCE_SPEC" ] && force_env=("PS3BASE_FORCE=$FORCE_SPEC")
+    # env(1) takes the extras explicitly: an empty array expansion in front of a
+    # command can yield one empty word, which bash then treats as the command
+    # name -- "PS3BASE_FOO=1: command not found", exit 127, no run at all.
     ( cd "$TREE" && \
       DISPLAY=:0 XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/0}" \
       PS3BASE_DISC_DIR="$DISC_DIR" \
+      PS3BASE_VFS_DIR="$VFS" \
       PS3BASE_LOG="${PS3BASE_LOG:-info}" \
       PS3BASE_INPUT_CMD="$ICMD" \
-      "${force_env[@]}" \
-      "${EXTRA_ENV[@]}" \
+      env "${force_env[@]}" "${EXTRA_ENV[@]}" \
       timeout "$SECONDS_BUDGET" "$BIN" --no-launcher > "$LOG" 2>&1 ) &
     GAME_PID=$!
 }
