@@ -250,6 +250,14 @@ target_include_directories(memory_map PRIVATE runtime/include)
 target_compile_options(memory_map PRIVATE ${PS3BASE_ARCH_FLAGS})
 target_link_libraries(memory_map PRIVATE ${CMAKE_DL_LIBS} pthread)
 add_test(NAME memory_map COMMAND memory_map)
+
+# Two different blocks at the same LSA: SPU tasks overlay their own code at the
+# same address, so the AOT table must keep both and pick by content.
+add_executable(spu_aot_variants tests/spu_aot_variants.cpp runtime/src/spu/aot.cpp runtime/src/log.cpp runtime/src/host.cpp)
+target_include_directories(spu_aot_variants PRIVATE runtime/include)
+target_compile_options(spu_aot_variants PRIVATE ${PS3BASE_ARCH_FLAGS})
+target_link_libraries(spu_aot_variants PRIVATE pthread)
+add_test(NAME spu_aot_variants COMMAND spu_aot_variants)
 # Cross-processor reservation invalidation: an SPU write must invalidate an
 # active PPU reservation on the same line, or stcx. commits unseen data.
 add_executable(reservation_xproc tests/reservation_xproc.cpp runtime/src/memory.cpp runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/host.cpp runtime/src/log.cpp)
