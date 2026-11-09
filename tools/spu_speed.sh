@@ -21,14 +21,24 @@ MAX_LOAD="${SPU_SPEED_MAX_LOAD:-3.0}"
 mkdir -p "$OUT"
 say() { echo "[$(date +%T)] $*" | tee -a "$OUT/speed.log"; }
 
-others=$(pgrep -f "$BUILD --no-launcher" | wc -l)
+others=$(pgrep -f "$BUILD --no-launcher" | grep -v "^$" | wc -l)
+# pgrep -f matches the shell that runs it; drop any pid that is not the emulator
+others=$(for p in $(pgrep -f "$BUILD --no-launcher" 2>/dev/null); do
+    [ "$(readlink /proc/$p/exe 2>/dev/null)" = "$BUILD" ] && echo "$p"
+done | wc -l)
 if [ "$others" -gt 0 ]; then
     say "REFUSING: $others game instance(s) already running; one at a time means one"
     exit 2
 fi
+# Load average is the wrong gate on this box: the harness' own web server sits
+# near 87% of one core permanently, so the 1-minute average never drops to zero
+# even with nothing of ours running. What actually pollutes a measurement is
+# ANOTHER EMULATOR, so that is what is checked -- plus the load, against a
+# threshold that accounts for the permanent baseline.
 load=$(awk '{print $1}' /proc/loadavg)
 if awk -v l="$load" -v m="$MAX_LOAD" 'BEGIN { exit !(l > m) }'; then
-    say "REFUSING: load average $load exceeds $MAX_LOAD; the machine is not at rest"
+    busy=$(ps -eo pcpu,comm --sort=-pcpu | sed -n '2,4p' | tr '\n' ' ')
+    say "REFUSING: load average $load exceeds $MAX_LOAD (top: $busy)"
     exit 2
 fi
 
@@ -36,6 +46,7 @@ fi
 run_mode() {
     local mode="$1"      # interp | compiled
     local vfs="$ROOT/vfs-speed-$mode"
+    local seed="$SEED"
     local rd="$OUT/$mode"
     mkdir -p "$rd"
     rm -rf "$vfs"
@@ -47,7 +58,6 @@ run_mode() {
         "PS3BASE_VFS_DIR=$vfs"
         "PS3BASE_LOG=info"
         "PS3BASE_ALLOW_UNFOCUSED_INPUT=1"
-        "DRIVE_SEED=$SEED"
     )
     [ "$mode" = "interp" ] && envs+=("GOWA_SPU_NO_AOT=1")
     say "$mode: launching"
@@ -57,7 +67,11 @@ run_mode() {
         DISPLAY="$DISPLAY_NUM" xdotool search --name Minecraft >/dev/null 2>&1 && break
         sleep 2
     done
-    python3 "$ROOT/tools/drive_world.py" "$DISPLAY_NUM" "$rd/game.log" 300 "$rd/shots" > "$rd/drive.txt" 2>&1
+    # DRIVE_SEED belongs to the DRIVER, not to the game. Passing it only in the
+    # game's environment (as the first version did) left the driver with no seed
+    # at all, so both runs built random worlds and the seed check correctly
+    # refused the comparison.
+    DRIVE_SEED="$seed" python3 "$ROOT/tools/drive_world.py" "$DISPLAY_NUM" "$rd/game.log" 300 "$rd/shots" > "$rd/drive.txt" 2>&1
     local drc=$?
     say "$mode: drive exit $drc"
     # Wait for the world to be written (autosave), up to 25 minutes.
