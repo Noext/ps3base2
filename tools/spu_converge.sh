@@ -141,6 +141,15 @@ run_scenario() {
         say "  collected $(stat -c%s "$col") bytes of gaps"
         return 1
     fi
+    # A crash with no collected gap is NOT an SPU coverage problem. Reporting it
+    # as one would send the loop after blocks that do not exist and make it
+    # regenerate an empty set forever. Classify it separately.
+    if grep -q 'crash: signal' "$log" 2>/dev/null; then
+        local where
+        where=$(grep -m1 'crash: signal' "$log" | grep -oE 'thread [^ ]+ [^ ]+' | head -1)
+        say "  NON-SPU FAILURE: crashed ($where) with 0 collected gaps -- not a compiler gap"
+        return 4
+    fi
     say "  scenario passed under strict"
     return 0
 }
@@ -188,16 +197,24 @@ round=1
 while [ "$round" -le "$MAX_ROUNDS" ]; do
     say "=== round $round/$MAX_ROUNDS"
     failed=""
+    nonspu=""
     for entry in "${SCENARIOS[@]}"; do
         read -r name seed mode play load <<< "$entry"
         if [ -n "$ONLY" ] && [ "$name" != "$ONLY" ]; then continue; fi
         say "-- $name (seed=$seed mode=$mode play=${play}s load=$load)"
-        if ! run_scenario "$name" "$seed" "$mode" "$play" "$load" "$round"; then
-            failed="$failed $name"
-        fi
+        run_scenario "$name" "$seed" "$mode" "$play" "$load" "$round"
+        case $? in
+            0) ;;
+            4) nonspu="$nonspu $name" ;;
+            *) failed="$failed $name" ;;
+        esac
     done
+    if [ -n "$nonspu" ]; then
+        say "  failed for non-SPU reasons (not countable here):$nonspu"
+    fi
     if [ -z "$failed" ]; then
-        say "=== CONVERGED after $round round(s): every scenario passed under GOWA_SPU_STRICT=1"
+        say "=== CONVERGED after $round round(s): every SPU-checkable scenario passed under GOWA_SPU_STRICT=1"
+        [ -n "$nonspu" ] && say "=== these could not be judged, they crash for PPU/HLE reasons:$nonspu"
         exit 0
     fi
     say "  scenarios that still need blocks:$failed"
