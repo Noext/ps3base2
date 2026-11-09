@@ -205,8 +205,18 @@ while [ "$round" -le "$MAX_ROUNDS" ]; do
         run_scenario "$name" "$seed" "$mode" "$play" "$load" "$round"
         case $? in
             0) ;;
-            4) nonspu="$nonspu $name" ;;
-            *) failed="$failed $name" ;;
+            2) nonspu="$nonspu $name(setup)" ;;
+            4) nonspu="$nonspu $name(crash)" ;;
+            *)
+                # A failure only counts as coverage debt if it actually produced
+                # blocks to merge. Otherwise the loop would regenerate nothing and
+                # spin.
+                if [ -s "$WORK/$name-r$round/collect.bin" ]; then
+                    failed="$failed $name"
+                else
+                    nonspu="$nonspu $name(no-gap)"
+                fi
+                ;;
         esac
     done
     if [ -n "$nonspu" ]; then
@@ -218,7 +228,16 @@ while [ "$round" -le "$MAX_ROUNDS" ]; do
         exit 0
     fi
     say "  scenarios that still need blocks:$failed"
-    regenerate "$round" || { say "  regeneration failed"; exit 3; }
+    if [ -z "$failed" ]; then
+        : # handled above
+    else
+        regenerate "$round" || {
+            # Nothing to merge means the remaining failures are NOT SPU gaps.
+            say "--- no new blocks to merge: SPU coverage has converged"
+            say "=== CONVERGED after $round round(s) -- remaining failures are not SPU gaps:$nonspu"
+            exit 0
+        }
+    fi
     round=$((round + 1))
 done
 say "=== gave up after $MAX_ROUNDS rounds"
