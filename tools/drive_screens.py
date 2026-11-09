@@ -275,16 +275,17 @@ def form_highlight(path):
     return found[0]
 
 
-def seed_visible(path):
-    """Deprecated heuristic, kept only so old callers do not crash.
+def on_seed_row(y):
+    """True if a focus-ring y-top sits on the Seed row.
 
-    Pixel statistics could not separate an empty Seed row from a filled one
-    across real captures (median luminance ranged 35..208 and the dark-pixel
-    count 43..1299 on the same row depending on the screen behind the dialog).
-    The reliable check is to read RandomSeed back out of the saved world with
-    world_seed() below -- that is a fact, not a threshold.
+    The Seed row's ring was measured at 113 in 680-space, and its detected top
+    drifts to 127/131 between captures, so the band is deliberately wide. What
+    is NOT acceptable -- and caused three invalid seed attempts -- is treating
+    'I pressed Down' as 'the ring is on the row'.
     """
-    return True
+    if y is None:
+        return False
+    return abs(y - FORM_SEED_Y) <= 26
 
 
 def world_seed(gamedata_path):

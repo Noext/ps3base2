@@ -126,33 +126,37 @@ def main():
             seed = os.environ.get("DRIVE_SEED")
             if seed and not seed_done:
                 seed_done = True
-                for _ in range(10):
+                # REQUIRE the ring on the Seed row before typing. The previous
+                # version walked Down up to N times and then pressed z
+                # regardless, so it typed into whatever row the ring happened
+                # to be on -- measured: two runs both told "seed42" produced
+                # RandomSeed 0x2ce9c74b... and 0x9d1d0c87..., i.e. the text
+                # never reached the field.
+                on_seed = False
+                for _ in range(12):
                     if not shot(display, p):
                         break
                     y0 = ds.form_highlight(p)
-                    if y0 is not None and abs(y0 - ds.FORM_SEED_Y) <= ds.FORM_HIGHLIGHT_TOL:
+                    print(f"{time.time()-t0:6.1f}s   seed target y={y0}", flush=True)
+                    if ds.on_seed_row(y0):
+                        on_seed = True
                         break
                     press(display, "Down")
                     time.sleep(0.7)
+                if not on_seed:
+                    # Do NOT type blind, and do NOT confirm: a world built on a
+                    # seed we could not place is not comparable, and pretending
+                    # it is would poison every later hash check.
+                    print(f"{time.time()-t0:6.1f}s   SEED-ROW-UNREACHED", flush=True)
+                    return 3
                 press(display, "z")
                 time.sleep(0.8)
-                # One invocation with a delay, not one call per character: the
-                # host latches on SDL_EVENT_KEY_DOWN, and per-character spawns
-                # were dropped, so the field stayed empty while this code
-                # happily printed "seed set". Verify the field is non-empty
-                # before claiming anything.
                 subprocess.run(["xdotool", "type", "--delay", "120", seed],
                                env={**os.environ, "DISPLAY": display})
                 time.sleep(0.8)
                 press(display, "Escape")
                 time.sleep(0.8)
-                # Read it back: the field renders the seed, so a blank row means
-                # it did not land and we must not pretend it did.
-                if shot(display, p):
-                    landed = ds.seed_visible(p)
-                else:
-                    landed = False
-                print(f"{time.time()-t0:6.1f}s   seed typed '{seed}' visible={landed}",
+                print(f"{time.time()-t0:6.1f}s   seed entered on the Seed row: {seed}",
                       flush=True)
             ok = False
             escaped = 0
