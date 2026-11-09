@@ -123,6 +123,51 @@ def load_blocks(paths):
     return sorted(blocks.keys())
 
 
+# Instructions that end a basic block. Must mirror spu::aot::is_terminator:
+# record() stops the moment it meets one, so a compiled block that runs PAST a
+# terminator can never match the byte sequence the runtime sees, aot::find()
+# rejects it, and the interpreter takes over -- exactly the failure
+# GOWA_SPU_STRICT caught at lsa 0a590 (a 16-word entry with a stop at word 3).
+TERMINATORS = {
+    "op_stop", "op_iret", "op_bisled",
+    "op_br", "op_bra", "op_brsl", "op_brasl",
+    "op_brz", "op_brnz", "op_brhz", "op_brhnz",
+    "op_bi", "op_bisl", "op_biz", "op_binz", "op_bihz", "op_bihnz",
+}
+
+
+def truncate_at_terminator(table, raw):
+    """Cut a block at its first terminator, inclusive.
+
+    A block is a run of instructions the runtime will execute together; the
+    terminator is the last of them. Anything after it belongs to another block
+    and makes the emitted byte sequence longer than what aot::find compares
+    against, so the compiled copy is never selected.
+    """
+    for k, r in enumerate(raw):
+        w = struct.unpack(">I", struct.pack("<I", r))[0]
+        if table[w >> 21] in TERMINATORS:
+            return raw[: k + 1]
+    return raw
+
+
+def usable(table, raw):
+    """A block is worth compiling only if it is SPU code at all.
+
+    The manifest carries entries that decode entirely to op_illegal: they are PPU
+    code that a static scan mistook for SPU. Emitting them cannot help (the
+    runtime never executes them, so the compiled copy is never selected) and it
+    costs table space and code size. 802 of 24657 entries were like this.
+    """
+    if not raw:
+        return False
+    for r in raw:
+        w = struct.unpack(">I", struct.pack("<I", r))[0]
+        if table[w >> 21] != "op_illegal":
+            return True
+    return False
+
+
 def is_pure(table, raw):
     for k, r in enumerate(raw):
         w = struct.unpack(">I", struct.pack("<I", r))[0]
@@ -523,6 +568,18 @@ def main():
         os.remove(old)
     table = decode_table()
     blocks = add_extra_starts(load_blocks(inputs))
+    table_for_trunc = decode_table()
+    blocks = [(lsa, raw) for lsa, raw in blocks if usable(table_for_trunc, raw)]
+    blocks = [(lsa, truncate_at_terminator(table_for_trunc, raw)) for lsa, raw in blocks]
+    seen = set()
+    dedup = []
+    for lsa, raw in blocks:
+        k = (lsa, raw)
+        if k in seen:
+            continue
+        seen.add(k)
+        dedup.append(k)
+    blocks = sorted(dedup)
     files = (len(blocks) + BLOCKS_PER_FILE - 1) // BLOCKS_PER_FILE
     for f in range(files):
         out = ['#include "ops_impl.h"', "", "namespace spu::gen {", ""]

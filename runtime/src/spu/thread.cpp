@@ -1531,14 +1531,26 @@ void SpuThread::exec() {
         return v;
     }();
     const bool aot_on = aot::active();
-    const bool verify = std::getenv("GOWA_SPU_AOT_VERIFY") != nullptr;
+    /* Shadow mode: before trusting a compiled block, run the interpreter on a
+     * copy of the whole SPU state and compare EVERYTHING -- the 128 registers,
+     * the whole 256 KB local store, and the channel/MFC traffic the block
+     * emitted. GOWA_SPU_SHADOW=1 is the alias the campaign asks for;
+     * GOWA_SPU_AOT_VERIFY is the older name and still works. */
+    const bool verify = std::getenv("GOWA_SPU_AOT_VERIFY") != nullptr || std::getenv("GOWA_SPU_SHADOW") != nullptr;
+    static const bool shadow_strict = std::getenv("GOWA_SPU_SHADOW") != nullptr;
+
     bool halted_in_verify = false;
     const bool pure_only = std::getenv("GOWA_SPU_AOT_PURE_ONLY") != nullptr;
     std::vector<uint8_t> verify_ls(verify ? LS_SIZE : 0);
     std::unordered_map<const CompiledBlock*, int> verify_count;
+    /* In shadow mode the cap exists only to keep the run finite: every block is
+     * checked a bounded number of times rather than the sampled 30 the plain
+     * verify mode used, because "zero divergence over a whole generation" means
+     * nothing if most executions were never compared. */
+    static const uint32_t verify_cap = shadow_strict ? 4000 : 30;
     auto verify_block = [&](const CompiledBlock* b) -> bool {
         int& cnt = verify_count[b];
-        if (cnt >= 30) return false;
+        if (cnt >= static_cast<int>(verify_cap)) return false;
         cnt++;
         Context copy = ctx;
         std::memcpy(verify_ls.data(), ls, LS_SIZE);
@@ -1556,6 +1568,7 @@ void SpuThread::exec() {
         if (replay.error.empty() && replay.pos != recorder.events.size()) replay.error = "aot consumed " + std::to_string(replay.pos) + " of " + std::to_string(recorder.events.size()) + " channel ops";
         bool bad = !replay.error.empty() || aot_ok != int_ok || copy.pc != ctx.pc || copy.srr0 != ctx.srr0 || copy.interrupts_enabled != ctx.interrupts_enabled ||
                    std::memcmp(copy.gpr, ctx.gpr, sizeof ctx.gpr) != 0 || std::memcmp(verify_ls.data(), ls, LS_SIZE) != 0;
+        aot::note_shadow_check(bad);
         if (bad) {
             std::string diff;
             for (int r = 0; r < 128; r++) {
@@ -1569,6 +1582,22 @@ void SpuThread::exec() {
                       copy.interrupts_enabled, ctx.interrupts_enabled, std::memcmp(verify_ls.data(), ls, LS_SIZE) ? "differs" : "same", replay.error.c_str(), diff.c_str());
         }
         if (!int_ok) halted_in_verify = true;
+        if (bad && shadow_strict) {
+            /* The campaign's rule: the first divergence stops the run. Continuing
+             * would mix good and bad blocks and make the evidence unusable. */
+            uint64_t h = 1469598103934665603ull ^ start;
+            for (uint32_t k = 0; k < b->words; k++) {
+                uint32_t w = 0;
+                std::memcpy(&w, ls + ((start + k * 4) & PC_MASK), 4);
+                h = (h ^ __builtin_bswap32(w)) * 1099511628211ull;
+            }
+            LOG_ERROR("spushadow", "SHADOW DIVERGENCE at instruction 0x%05x (block lsa %05x words %u hash %016llx) -- stopping",
+                      start, start, b->words, static_cast<unsigned long long>(h));
+            std::fprintf(stderr, "GOWA_SPU_SHADOW: divergence in block lsa %05x hash %016llx\n", start,
+                         static_cast<unsigned long long>(h));
+            std::fflush(stderr);
+            std::_Exit(71);
+        }
         return true;
     };
     using Slot = ExecSlot;

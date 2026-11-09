@@ -152,6 +152,23 @@ uint64_t note_interpreted(const uint8_t* ls, uint32_t pc) {
                  pc, n, static_cast<unsigned long long>(key),
                  static_cast<unsigned long long>(total));
     }
+    /* Collection mode: keep running while the interpreter works, so ONE session
+     * enumerates every gap instead of one per boot. Strict still stops. */
+    static const char* collect_path = std::getenv("GOWA_SPU_COLLECT");
+    if (first && collect_path) {
+        static std::mutex cf_m;
+        std::lock_guard lk3(cf_m);
+        if (FILE* f = std::fopen(collect_path, "ab")) {
+            uint32_t hdr[2] = {pc, n};
+            std::fwrite(hdr, 4, 2, f);
+            for (uint32_t i = 0; i < n; i++) {
+                uint32_t raw;
+                std::memcpy(&raw, ls + ((pc + i * 4) & PC_MASK), 4);
+                std::fwrite(&raw, 4, 1, f);
+            }
+            std::fclose(f);
+        }
+    }
     if (strict && !g_strict_seen.exchange(true)) {
         LOG_ERROR("spujob", "STRICT: the interpreter ran a block (lsa %05x words %u hash %016llx) -- "
                             "100%% compiled is violated, failing the run",
@@ -164,6 +181,18 @@ uint64_t note_interpreted(const uint8_t* ls, uint32_t pc) {
     }
     return total;
 }
+
+namespace {
+std::atomic<uint64_t> g_shadow_checks{0};
+std::atomic<uint64_t> g_shadow_diffs{0};
+}  // namespace
+
+void note_shadow_check(bool diverged) {
+    g_shadow_checks.fetch_add(1, std::memory_order_relaxed);
+    if (diverged) g_shadow_diffs.fetch_add(1, std::memory_order_relaxed);
+}
+uint64_t shadow_checks() { return g_shadow_checks.load(); }
+uint64_t shadow_diffs() { return g_shadow_diffs.load(); }
 
 uint64_t interpreted_blocks() { return g_interpreted_count.load(); }
 uint64_t interpreted_insns_total() { return g_interpreted_insns.load(); }

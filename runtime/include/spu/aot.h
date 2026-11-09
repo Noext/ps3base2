@@ -32,6 +32,9 @@ void record(const uint8_t* ls, uint32_t pc);
 /* Log once per distinct block hash that the interpreter had to run, and abort
  * the run when GOWA_SPU_STRICT=1. Returns the running total. */
 uint64_t note_interpreted(const uint8_t* ls, uint32_t pc);
+void note_shadow_check(bool diverged);
+uint64_t shadow_checks();
+uint64_t shadow_diffs();
 uint64_t interpreted_blocks();
 uint64_t interpreted_insns_total();
 void flush();
