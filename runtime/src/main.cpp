@@ -5,6 +5,7 @@
 #include "runtime/image.h"
 #include "runtime/loader.h"
 #include "runtime/log.h"
+#include "spu/aot.h"
 #include "runtime/sysutil_events.h"
 #include "hle/common.h"
 #include "runtime/trace.h"
@@ -450,6 +451,16 @@ int main(int argc, char** argv) {
         if (main_thread->cv.wait_for(lk, std::chrono::seconds(1), [&] { return main_thread->exited; })) break;
     }
     LOG_INFO("main", "main thread finished");
+    /* The verdict must carry the one number that decides whether "100% compiled"
+     * is true. A run that never says this out loud invites the reader to assume
+     * it, which is exactly the mistake this campaign kept making. */
+    {
+        const uint64_t nb = spu::aot::interpreted_blocks();
+        const uint64_t ni = spu::aot::interpreted_insns_total();
+        LOG_INFO("main", "SPU VERDICT: %llu distinct interpreted blocks, %llu interpreted instructions -- %s",
+                 static_cast<unsigned long long>(nb), static_cast<unsigned long long>(ni),
+                 nb == 0 ? "100% compiled" : "NOT fully compiled");
+    }
     trace::shutdown();
     return 0;
 }

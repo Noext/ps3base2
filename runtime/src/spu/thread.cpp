@@ -1832,6 +1832,12 @@ void SpuThread::exec() {
                 }
             }
             if (rec) aot::record(ls, ctx.pc);
+            /* Loud safety net: announce every distinct block that reaches the
+             * interpreter, once per hash, so a block that was never compiled
+             * cannot slip past unremarked. GOWA_SPU_STRICT=1 turns that into a
+             * hard failure, which is how "100% compiled" is proved rather than
+             * asserted. */
+            aot::note_interpreted(ls, ctx.pc);
             interp_edge = edge_stats && edge::image_loaded(ls);
             if (interp_edge) edge::ovl::note_interp(ctx.pc);
             if (job_log) {

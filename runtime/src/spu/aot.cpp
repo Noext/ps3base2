@@ -1,6 +1,7 @@
 #include "spu/aot.h"
 #include "runtime/log.h"
 
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -114,6 +115,58 @@ void record(const uint8_t* ls, uint32_t pc) {
         LOG_INFO("spu", "recorded %llu SPU blocks", static_cast<unsigned long long>(r.total));
     }
 }
+
+namespace {
+/* Blocks the interpreter has had to run, keyed by content hash so a block seen
+ * at two addresses counts once. Deliberately hash-only: the question this
+ * answers is "which pieces of code were never compiled", not "where". */
+std::unordered_set<uint64_t> g_interpreted_hashes;
+std::mutex g_interpreted_lock;
+std::atomic<uint64_t> g_interpreted_count{0};
+std::atomic<uint64_t> g_interpreted_insns{0};
+std::atomic<bool> g_strict_seen{false};
+}  // namespace
+
+uint64_t note_interpreted(const uint8_t* ls, uint32_t pc) {
+    static const bool strict = std::getenv("GOWA_SPU_STRICT") != nullptr;
+    static const bool loud = strict || std::getenv("GOWA_SPU_LOUD_INTERP") != nullptr;
+    /* Hash the same way record() does, so a capture and a warning name the same
+     * block. Cheap enough at 60 Hz and only on the slow path. */
+    uint32_t n = 0;
+    uint64_t h = 1469598103934665603ull ^ pc;
+    while (n < MAX_BLOCK_WORDS && pc + n * 4 < LS_SIZE) {
+        uint32_t w = load_word(ls, pc + n * 4);
+        h = (h ^ w) * 1099511628211ull;
+        n++;
+        if (is_terminator(w)) break;
+    }
+    const uint64_t key = h ^ (uint64_t(n) << 56);
+    bool first = false;
+    {
+        std::lock_guard lk(g_interpreted_lock);
+        first = g_interpreted_hashes.insert(key).second;
+    }
+    const uint64_t total = g_interpreted_count.fetch_add(first ? 1 : 0) + (first ? 1 : 0);
+    if (first && loud) {
+        LOG_WARN("spujob", "INTERPRETED BLOCK lsa %05x words %u hash %016llx (total distinct %llu)",
+                 pc, n, static_cast<unsigned long long>(key),
+                 static_cast<unsigned long long>(total));
+    }
+    if (strict && !g_strict_seen.exchange(true)) {
+        LOG_ERROR("spujob", "STRICT: the interpreter ran a block (lsa %05x words %u hash %016llx) -- "
+                            "100%% compiled is violated, failing the run",
+                  pc, n, static_cast<unsigned long long>(key));
+        /* A run that needed the interpreter cannot claim 100%. Exit loudly
+         * rather than finish with a number that would be a lie. */
+        std::fprintf(stderr, "GOWA_SPU_STRICT: interpreted block at lsa %05x\n", pc);
+        std::fflush(stderr);
+        std:: _Exit(70);
+    }
+    return total;
+}
+
+uint64_t interpreted_blocks() { return g_interpreted_count.load(); }
+uint64_t interpreted_insns_total() { return g_interpreted_insns.load(); }
 
 void flush() {
     Recorder& r = recorder();
