@@ -121,6 +121,26 @@ LV2_SYSCALL(141, sys_timer_usleep) {
             LOG_INFO("lv2", "usleep histogram <10:%llu <30:%llu <100:%llu <300:%llu <1000:%llu <5000:%llu more:%llu", (unsigned long long)hist[0].load(), (unsigned long long)hist[1].load(), (unsigned long long)hist[2].load(),
                      (unsigned long long)hist[3].load(), (unsigned long long)hist[4].load(), (unsigned long long)hist[5].load(), (unsigned long long)hist[6].load());
     }
+#if defined(PS3BASE_USLEEP_CALLER) && PS3BASE_USLEEP_CALLER
+    {
+        /* Which guest sites actually sleep? 177k usleeps with the known poll
+         * loop at 0x2dc20c ruled out -- the caller addresses say where they come
+         * from, instead of guessing from the one loop I happened to read. */
+        static std::atomic<uint32_t> seen[64]; static std::atomic<int> n{0};
+        const uint32_t lr = static_cast<uint32_t>(ctx.lr);
+        int slot = -1;
+        for (int i = 0; i < 64; i++) {
+            uint32_t cur = seen[i].load(std::memory_order_relaxed);
+            if (cur == lr) { slot = i; break; }
+            if (cur == 0 && seen[i].compare_exchange_strong(cur, lr)) { n.fetch_add(1); slot = i; break; }
+        }
+        static std::atomic<uint64_t> cnt[64];
+        if (slot >= 0) {
+            const uint64_t c = cnt[slot].fetch_add(1) + 1;
+            if ((c % 50000) == 0) LOG_INFO("usleepcall", "lr=0x%08x count %llu", lr, (unsigned long long)c);
+        }
+    }
+#endif
     if (min_us && us < uint64_t(min_us)) us = uint64_t(min_us);
     host::sleep_us(static_cast<uint64_t>(us / ppu::time_scale()));
     return CELL_OK;
