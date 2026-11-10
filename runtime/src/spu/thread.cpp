@@ -136,6 +136,23 @@ bool SpuThread::interrupt_pending() {
 }
 
 void SpuThread::check_interrupt() {
+#if defined(PS3BASE_SPU_WAIT_PROBE) && PS3BASE_SPU_WAIT_PROBE
+    {
+        /* The native run parks its SPUs with events 0x20 (EV_TM, the decrementer
+         * timer) and the wasm run with 0x0. That bit is set by collect_events()
+         * when elapsed > dec_value, so either check_interrupt is not called or the
+         * timer never satisfies. Print the gate values that decide it. */
+        static std::atomic<int> n{0};
+        const int k = n.fetch_add(1, std::memory_order_relaxed);
+        if (k < 20)
+            LOG_INFO("spuint", "slot %d ie=%d mask 0x%x events 0x%x count %d dec_frozen %d "
+                     "dec_value %llu elapsed %llu raddr 0x%08x",
+                     slot, ctx.interrupts_enabled ? 1 : 0, event_mask, events,
+                     event_count ? 1 : 0, dec_frozen ? 1 : 0,
+                     static_cast<unsigned long long>(dec_value),
+                     static_cast<unsigned long long>(timebase_now() - dec_start), raddr);
+    }
+#endif
     if (!ctx.interrupts_enabled) return;
     uint32_t mask = std::atomic_ref<uint32_t>(event_mask).load(std::memory_order_relaxed);
     if (!std::atomic_ref<bool>(event_count).load(std::memory_order_acquire) && !((mask & EV_LR) && raddr)) {
