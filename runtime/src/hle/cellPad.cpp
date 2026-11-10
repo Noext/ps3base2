@@ -105,6 +105,45 @@ bool& cmd_loaded() { static bool l = false; return l; }
 
 void load_command_queue() {
     cmd_loaded() = true;
+#if defined(PS3BASE_INPUT_BUILTIN) && PS3BASE_INPUT_BUILTIN
+    /* getenv is inert in the wasm build, so the native input script can never be
+     * read there: the pad stays neutral and the guest never sees a press. The
+     * native reference run that reaches the world was driven by PS3BASE_INPUT_CMD,
+     * so a wasm build without presses is not running the same experiment.
+     *
+     * This replays the same syntax from a constant: "name [hold_ms] [gap_ms]".
+     * cross accepts the terms screen, start reaches the menu; both are separated
+     * by a generous gap so a slow first frame cannot swallow the press.
+     */
+    {
+        static const char* const script[] = {
+            "cross 120 900",
+            "cross 120 900",
+            "start 120 900",
+            "cross 120 900",
+        };
+        for (const char* line : script) {
+            std::string text(line);
+            std::vector<std::string> parts;
+            size_t p = 0;
+            while (p < text.size()) {
+                size_t e = text.find(' ', p);
+                if (e == std::string::npos) e = text.size();
+                if (e > p) parts.push_back(text.substr(p, e - p));
+                p = e + 1;
+            }
+            if (parts.empty()) continue;
+            Queued q;
+            if (!button_of(parts[0], q.offset, q.mask, q.pressure)) continue;
+            q.hold = parts.size() > 1 ? static_cast<uint32_t>(std::atof(parts[1].c_str()) * 60 / 1000) : 4;
+            q.gap  = parts.size() > 2 ? static_cast<uint32_t>(std::atof(parts[2].c_str()) * 60 / 1000) : 60;
+            if (!q.hold) q.hold = 1;
+            cmd_queue().push_back(q);
+        }
+        LOG_INFO("pad", "queued %zu built-in command(s)", cmd_queue().size());
+        return;
+    }
+#endif
     static const char* path = std::getenv("PS3BASE_INPUT_CMD");
     if (!path) return;
     FILE* f = std::fopen(path, "r");
@@ -204,6 +243,12 @@ void fill(uint32_t out) {
         if (cmd_queue().empty() && !cmd_cooldown()) {
             /* Re-read on demand: appending to the file queues more, so a
              * sequence can be extended while the title is already running. */
+#if defined(PS3BASE_INPUT_BUILTIN) && PS3BASE_INPUT_BUILTIN
+            /* getenv is inert under wasm, so the env-gated initial load never
+             * happens. Trigger the built-in script the first time the queue is
+             * empty instead. */
+            if (!cmd_loaded()) load_command_queue();
+#endif
             static const char* reload_path = std::getenv("PS3BASE_INPUT_CMD");
             if (reload_path) {
                 FILE* probe = std::fopen(reload_path, "r");
@@ -224,7 +269,10 @@ void fill(uint32_t out) {
         {
             static std::atomic<uint64_t> n{0};
             const uint64_t k = n.fetch_add(1) + 1;
-            if (k > 300 && k < 360) b[3] |= 0x08;
+            /* A tap may be missed by a title that polls at frame rate and samples
+             * an edge. Hold START for a long window instead, then release, so both
+             * an edge-sensitive and a level-sensitive consumer see it. */
+            if (k > 300 && k < 3000) b[3] |= 0x08;
         }
 #endif
         if (held_left) {
