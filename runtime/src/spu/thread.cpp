@@ -142,9 +142,11 @@ void SpuThread::check_interrupt() {
          * timer) and the wasm run with 0x0. That bit is set by collect_events()
          * when elapsed > dec_value, so either check_interrupt is not called or the
          * timer never satisfies. Print the gate values that decide it. */
+        /* Sample ACROSS the run, not the first 20 calls: the first-20 window is all
+         * inside the first second and says nothing about the parked state. */
         static std::atomic<int> n{0};
         const int k = n.fetch_add(1, std::memory_order_relaxed);
-        if (k < 20)
+        if ((k % 200000) == 0 && k < 4000000)
             LOG_INFO("spuint", "slot %d ie=%d mask 0x%x events 0x%x count %d dec_frozen %d "
                      "dec_value %llu elapsed %llu raddr 0x%08x",
                      slot, ctx.interrupts_enabled ? 1 : 0, event_mask, events,
@@ -215,10 +217,21 @@ static const bool job_stats = std::getenv("GOWA_SPU_JOBS") != nullptr;
 
 void SpuThread::collect_events() {
     if (!dec_frozen) {
-        uint64_t elapsed = timebase_now() - dec_start;
-        if (elapsed > dec_value) {
-            set_events(EV_TM);
-            dec_start += 0x100000000ull;
+        /* The decrementer is 32-bit and wraps, but dec_start must not simply be
+         * advanced by 2^32: if it ever exceeds timebase_now(), the unsigned
+         * subtraction goes negative and elapsed becomes ~1.8e19 (measured at
+         * t=32s, exactly when events first showed 0x20). Re-base on the current
+         * timebase when the elapsed value has wrapped instead. */
+        const uint64_t now = timebase_now();
+        if (now < dec_start) {
+            /* The rebase overshot: resynchronise rather than compare nonsense. */
+            dec_start = now;
+        } else {
+            const uint64_t elapsed = now - dec_start;
+            if (elapsed > dec_value) {
+                set_events(EV_TM);
+                dec_start = now;
+            }
         }
     }
     if ((event_mask & EV_LR) && raddr && !(events & EV_LR)) {
