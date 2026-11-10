@@ -65,3 +65,40 @@ compare une valeur chargée à des constantes ; il faudrait identifier la source
 
 Le jalon 3 reste ouvert. Ce round **qualifie** le gain du round 65 : les 2 425× d'instructions sont
 du bouclage d'inactivité, pas du travail. Le défaut corrigé était réel ; son effet ne l'est pas.
+
+
+## Correction du même round : ce n'est pas que du bouclage
+
+J'ai qualifié les 7,45 millions d'instructions de « bouclage sur place ». **C'est partiellement
+faux**, et la mesure qui le corrige était déjà dans le log.
+
+Les `putllc` — les écritures SPU vers la mémoire principale — comparent les deux runs :
+
+| | sans park | avec park |
+|---|---|---|
+| `putllc` réussis | 1 648 934 | 1 084 615 |
+| `putllc` échoués | 3 434 000 | 1 034 000 |
+| **taux d'échec** | **67,6 %** | **48,8 %** |
+
+Le nombre d'échecs **tombe de 3,43 millions à 1,03 million** — un facteur 3,3. Et le taux passe de
+67,6 % à 48,8 %.
+
+Donc le park ne fait pas que faire tourner la boucle plus vite : il **réduit massivement les
+échecs de réservation**. Moins de SPU se parquent sur `EV_LR` en perdant leur travail.
+
+Les deux observations sont vraies :
+
+1. Les SPU n'atteignent que deux pc, et une partie des instructions est du bouclage d'inactivité.
+2. Mais le travail d'écriture réel progresse : 2,4 millions d'échecs en moins.
+
+Le park était donc **un gain réel sur les deux axes** : plus d'instructions ET moins d'échecs.
+
+## Ce que ça laisse comme question
+
+Le taux de 48,8 % reste élevé. Et le rendu n'a pas bougé (11 161 → 11 281 frames). Donc :
+
+- les SPU font plus de travail utile ;
+- ce travail ne se traduit pas en contenu affiché.
+
+Le maillon manquant reste **entre** le travail SPU et le rendu — c'est-à-dire le pipeline RSX, dont
+le stub compte sans exécuter.
