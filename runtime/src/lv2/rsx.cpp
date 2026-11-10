@@ -713,12 +713,21 @@ LV2_SYSCALL(670, sys_rsx_context_allocate) {
     vm::write64(u32arg(ctx, 3), g_rsx.reports);
     if (!g_rsx.running.exchange(true)) {
 #if defined(__wasm__) || defined(__EMSCRIPTEN__)
-        /* No renderer and no 32 MB stack request: the browser main thread is the
-         * one that would run the FIFO loop, and pthread_attr_setstacksize of 32 MB
-         * aborts there. The guest can allocate its RSX context and continue; it
-         * simply never gets a draw, which is the documented state of a
-         * no-display build (docs/webassembly/M3-FIRMWARE-FIX.md). */
-        LOG_WARN("rsx", "fifo/vblank threads not started: no renderer in this build");
+        /* The FIFO thread is skipped: it wants a 32 MB pthread stack (the vertex
+         * decompiler builds multi-megabyte strings) and pthread_attr_setstacksize
+         * aborts in the browser.
+         *
+         * The VBLANK thread must still run. It is what increments g_rsx.flips, and
+         * the guest polls that counter through sys_timer_usleep in a loop:
+         *   L_1307a00: sys_timer_usleep(30); if (target != [obj+8]) goto L_1307a00
+         * With no vblank thread the counter never moves and the title waits
+         * forever -- measured: 193k syscalls, 99% of them sys_timer_usleep, 24
+         * modules started and then no progress.
+         *
+         * vblank_thread needs no GPU: it increments a counter and sleeps. Starting
+         * it restores the clock the guest is waiting on. */
+        std::thread(vblank_thread).detach();
+        LOG_WARN("rsx", "fifo thread skipped, vblank thread started (no renderer in this build)");
 #else
         /* A dedicated stack for the FIFO thread: the vertex decompiler builds
          * multi-megabyte GLSL strings, and the default 8 MiB was not enough --
