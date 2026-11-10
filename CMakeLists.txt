@@ -281,6 +281,8 @@ target_include_directories(wgpu_map_obj PRIVATE runtime/include)
 target_compile_options(wgpu_map_obj PRIVATE ${PS3BASE_ARCH_FLAGS})
 
 add_executable(wgpu_map tests/wgpu_map.cpp $<TARGET_OBJECTS:wgpu_map_obj>)
+add_executable(pipeline_key tests/pipeline_key.cpp)
+target_include_directories(pipeline_key PRIVATE runtime/include)
 target_include_directories(wgpu_map PRIVATE runtime/include)
 target_compile_options(wgpu_map PRIVATE ${PS3BASE_ARCH_FLAGS})
 add_test(NAME wgpu_map COMMAND wgpu_map)
@@ -370,7 +372,46 @@ target_compile_options(list_walk_guard PRIVATE ${PS3BASE_ARCH_FLAGS})
 target_link_libraries(list_walk_guard PRIVATE ${CMAKE_DL_LIBS} pthread)
 add_test(NAME list_walk_guard COMMAND list_walk_guard)
 
+# --- the cellGame / cellGameExec / cellSaveData / cellSysutilAvconfExt HLE ----
+# Each target links ONLY what its subject needs: the three header-driven suites
+# are pure host logic (no guest memory, no PPU runtime), and the one that does
+# touch guest memory links the memory map and nothing else. That is what keeps
+# them runnable on a machine with no game, no GPU and no network.
+#
+# cellgame: the PARAM.SFO CATEGORY rules, the parameter-id table and its
+# per-mode permissions, the content-error dialog type set, and the SFO writer
+# round-tripping through a parser. Same header the imports use.
+add_executable(cellgame tests/cellgame.cpp)
+target_include_directories(cellgame PRIVATE runtime/include "${CMAKE_SOURCE_DIR}/runtime/src")
+target_compile_options(cellgame PRIVATE ${PS3BASE_ARCH_FLAGS})
+add_test(NAME cellgame COMMAND cellgame)
 
+# cellgameexec: the module's single import must NEVER return CELL_OK, and must
+# leave the caller's buffer alone. Includes the module and calls the handler.
+add_executable(cellgameexec tests/cellgameexec.cpp
+    runtime/src/memory.cpp runtime/src/regions.cpp runtime/src/mem.cpp
+    runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/backtrace_port.cpp
+    runtime/src/host.cpp runtime/src/log.cpp)
+target_include_directories(cellgameexec PRIVATE runtime/include "${CMAKE_SOURCE_DIR}/runtime/src" "${CMAKE_SOURCE_DIR}/runtime/src/hle")
+target_compile_options(cellgameexec PRIVATE ${PS3BASE_ARCH_FLAGS})
+target_link_libraries(cellgameexec PRIVATE ${CMAKE_DL_LIBS} pthread)
+add_test(NAME cellgameexec COMMAND cellgameexec)
+
+# savedata: the delete-list argument checks (including the fileListMax == 0
+# rule that exists ONLY for delete lists), the prefix and asterisk rules, the
+# listing counts, the sort, and the per-file KiB rounding delete_save does.
+add_executable(savedata tests/savedata.cpp)
+target_include_directories(savedata PRIVATE runtime/include "${CMAKE_SOURCE_DIR}/runtime/src")
+target_compile_options(savedata PRIVATE ${PS3BASE_ARCH_FLAGS})
+add_test(NAME savedata COMMAND savedata)
+
+# avconf: cellVideoOutSetGamma's argument order and its three return codes.
+# The identity case is a true CELL_OK; every other in-range gamma is refused
+# with NOT_IMPLEMENTED rather than a success that changed no pixel.
+add_executable(avconf tests/avconf.cpp)
+target_include_directories(avconf PRIVATE runtime/include "${CMAKE_SOURCE_DIR}/runtime/src")
+target_compile_options(avconf PRIVATE ${PS3BASE_ARCH_FLAGS})
+add_test(NAME avconf COMMAND avconf)
 
 if(EXISTS "${CMAKE_SOURCE_DIR}/out/conformance/tests.cpp")
     add_executable(ppu_conformance tests/ppu_conformance/harness.cpp "${CMAKE_SOURCE_DIR}/out/conformance/tests.cpp")
