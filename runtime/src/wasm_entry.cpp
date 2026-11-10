@@ -18,6 +18,7 @@
 #include "runtime/mem.h"
 #include "runtime/regions.h"
 #include "runtime/thread.h"
+#include "thread.h"  /* spu::status_dump, from runtime/src/spu */
 #include "runtime/hooks.h"
 #include "runtime/codewatch.h"
 #include "ppu/ops.h"
@@ -379,6 +380,7 @@ int main(int argc, char** argv) {
             dumped_threads = true;
             std::printf("ps3base-wasm: --- guest thread dump at t=%ds ---\n", i + 1);
             guest::status_dump();
+            spu::status_dump();
         }
         if (main_thread->exited) {
             std::printf("WASM-GUEST-THREAD-EXITED\n");
