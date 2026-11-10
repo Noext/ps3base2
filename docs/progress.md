@@ -177,3 +177,130 @@ never called, and the SPURS loop looked like it stopped at t=1.3 s. Each cap
 (`n < 60`, `n < 30`) truncated the very evidence that contradicted the guess.
 Sample a counter in time, and never read "the log ends here" as "the title
 stopped".
+
+## Portage d'un second titre -- GTA San Andreas (BLES02219)
+
+Le runtime est générique depuis la phase 0 ; ce qui suit est la mise en service
+d'un **second** disque à côté de Minecraft, et les défauts d'outillage que cela a
+révélés. Recon complète : `docs/recon/gta-sa.md`.
+
+### G-1 -- Le disque se déchiffre et se lifte, isolé de Minecraft -- GREEN
+
+**Critère :** un second titre produit ses propres sources PPU sans toucher à
+`out/` (donc sans recompiler ni casser le premier).
+
+Les clés se **dérivent** de `refs/rpcs3` (elles n'existent nulle part sur le
+disque en tant que fichier) :
+
+```
+$ python3 tools/extract_keys.py refs/rpcs3/rpcs3/Crypto/key_vault.cpp keys/self_keys.json
+89 keys ['APP', 'ISO', 'LDR', 'LV0', 'LV1', 'LV2', 'NPDRM', 'UNK7']
+```
+
+```
+$ python3 tools/setup.py --steps ppu --images recomp/images-gta.json \
+    --elf bin/gta/EBOOT.elf --out-root out-gta --gen-root out-gta/gen --allow-unknown
+[setup] ELF bin/gta/EBOOT.elf: unknown sha256 f8da31bd..., continuing
+[setup] PPU recompilation into out-gta/ppu from recomp/images-gta.json
+gta            functions  20082 files  71 imports  116 exports    0
+total functions 22085 imports 361 exports 781
+unimplemented: []
+```
+
+20 082 fonctions, 116 imports, **zéro import non implementé**, et `out/` intact.
+La ligne d'image générée porte bien l'identité du titre :
+
+```
+{"gta", "bin/gta/EBOOT.elf", false, 0x10200, 0x6fccdc, 0x7855e8, 0x77b718},
+```
+
+**Deux défauts d'outillage corrigés pour y arriver**, tous deux invisibles tant
+qu'un seul titre existait :
+
+| Défaut | Symptôme mesuré | Correction |
+|---|---|---|
+| `tools/decrypt_all.py` ouvrait `EBOOT.BIN` dans **chaque** sous-dossier de `bin/` | ajouter `bin/gta/` faisait échouer le lot sur `bin/mc/EBOOT.BIN` inexistant, donc cassait Minecraft | sauter un dossier sans `EBOOT.BIN` au lieu d'abandonner |
+| `tools/setup.py --elf` ne pilotait **que** les blocs SPU ; le PPU venait toujours de `recomp/images.json` | un lift « de GTA » produisait en réalité 20 682 fonctions **Minecraft**, avec `gta` seulement dans le message | nouveau `--images`, défaut inchangé |
+
+Le second est le plus dangereux : la commande affichait `PPU recompilation into
+out-gta/ppu`, sortait `exit=0` et `unimplemented: []` — mais `out-gta/ppu/table.cpp`
+contenait `{"mc", "bin/mc/mc.elf", ...}`. Un lift réussi en apparence, sur le
+mauvais ELF. C'est la règle « mesurer, pas supposer » appliquée à un outil :
+lire la ligne d'image produite, pas le message de l'outil.
+
+### G-2 -- Ce que le second titre change dans le bilan
+
+Mesuré sur la table d'imports (détail dans la recon) :
+
+| | Minecraft (BLES01976) | GTA SA (BLES02219) |
+|---|---|---|
+| imports | 345 | **116** |
+| `cellSpurs*` | oui, 12 enregistrements | **aucun** |
+| `cellGcmSys` | indirect | **25 imports directs** |
+| `cellSync2` | non | **13 imports, module absent du dépôt** |
+
+Le firmware lifté (`fw/4.91/reloc/`) couvre **52 des 116** imports : tout
+`cellGcmSys`, `sys_fs` et `sysPrxForUser`. Les 64 restants sont du HLE à écrire,
+`cellSync2` en tête (13), puis `cellSysutil` (19) et `cellGame` (11).
+
+`cellSync2` n'existe **nulle part** dans `runtime/` : c'est le premier module
+entièrement neuf que ce port demande.
+
+
+### G-3 -- Le manifeste SPU et la table d'images sont propres a GOWA -- GREEN
+
+**Critere :** un lift de GTA qui ne porte **aucune** adresse de GOWA.
+
+Deux fichiers de `recomp/` sont, a la lecture, uniques au titre d'origine :
+
+| Fichier | Mesure | Consequence |
+|---|---|---|
+| `recomp/images.json` | 1re entree `{"name":"mc", "elf":"../bin/mc/mc.elf"}` | tout lift "GTA" produisait le code de **Minecraft** (voir G-1) |
+| `recomp/spu/block_manifest.txt` | 19 703 lignes, **17 181** nomment `gowa` | `block 04050 out of range in gowa` : les offsets pointent l'ELF de GOWA |
+
+Le manifeste est le plus pernicieux : c'est une liste de blocs SPU avec leur
+**offset dans l'ELF**, donc chaque ligne est un fait sur un fichier precis. Un
+manifeste d'un titre lu contre un autre ELF ne produit pas une erreur de sens,
+il produit soit un depassement (`out of range`), soit des blocs faux.
+
+**Correction :** `recomp/images-gta.json` cree, et pour GTA un manifeste **vide**,
+parce que la mesure dit que ce titre n'a pas de SPU a lifter :
+
+```
+$ python3 tools/setup.py --steps spu --images recomp/images-gta.json --elf bin/gta/EBOOT.elf ...
+[setup] 0 SPU blocks extracted into out-gta/gen/blocks/run_manifest.bin
+[setup] SPU AOT codegen into out-gta/spu
+0 blocks, 0 instructions, 0 files, 0 regions covering 0 blocks
+[setup] 0 native SPU sources in out-gta/gen/spu
+```
+
+Le pipeline accepte **0 bloc** et ecrit quand meme `spu_registry.cpp`, ce qui est
+le comportement correct : `GOWA_SPU_GENERATED_DIR` exige ce fichier, pas des
+blocs. Un titre sans SPU n'a rien a faire interpreter.
+
+La table d'imports corrobore : **aucun `cellSpurs*`**, aucun import SPU. Le
+titre est entierement PPU + RSX.
+
+### G-4 -- L'arbre de build est isolable sans toucher a `out/` -- GREEN
+
+**Critere :** compiler GTA ne recompile ni ne casse Minecraft.
+
+Trois variables CMake suffisent, toutes deja en cache :
+
+```bash
+cmake -S . -B build-gta -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+  -DPS3BASE_GENERATED_DIR=$PWD/out-gta/ppu \
+  -DGOWA_SPU_GENERATED_DIR=$PWD/out-gta/spu \
+  -DPS3BASE_SPU_NATIVE_GEN_DIR=$PWD/out-gta/gen/spu
+```
+
+La detection des dependances de `out-gta/ppu` se fait par `cmake` sur les
+`#include` des sources generees, donc un `out-gta` propre donne un arbre propre.
+`out/` (Minecraft) reste intact : verifie par `ls out/ppu/table.cpp` et par le
+fait que `build/` n'a pas ete recompile.
+
+Ce qui manque et qui n'est **pas** bloquant pour ce titre : `libavcodec` est
+absent de la machine, donc `cellVdec` tombe en LLE. GTA n'importe pas
+`cellVdec`, donc la question ne se pose pas ici.
+

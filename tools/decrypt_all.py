@@ -23,6 +23,13 @@ def main(bin_dir):
     for ver_dir in sorted(glob.glob(os.path.join(bin_dir, "*", ""))):
         ver = os.path.basename(os.path.dirname(ver_dir))
         eboot = os.path.join(ver_dir, "EBOOT.BIN")
+        if not os.path.exists(eboot):
+            # A title already decrypted keeps only its .elf here, and a bin/
+            # holding several titles has one such directory. Skipping it is
+            # what lets a second disc be added without re-breaking the first:
+            # the whole batch used to abort on the first missing EBOOT.BIN.
+            print(f"{ver} {'(no EBOOT.BIN, skipped)':22} {'':>9}")
+            continue
         eboot_elf = Self(eboot).elf()
         open(os.path.join(ver_dir, "EBOOT.elf"), "wb").write(eboot_elf)
         out.append((ver, "EBOOT.elf", eboot_elf, None))

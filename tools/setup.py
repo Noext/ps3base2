@@ -105,8 +105,8 @@ def step_ppu(args):
     out = os.path.join(args.out_root, "ppu")
     if not os.path.exists(args.nid_db):
         raise SystemExit("missing NID database %s (tools/nid_db.py)" % args.nid_db)
-    log("PPU recompilation into %s" % out)
-    run(["recomp/ppu/codegen.py", "recomp/images.json", args.nid_db, out], quiet=False)
+    log("PPU recompilation into %s from %s" % (out, args.images))
+    run(["recomp/ppu/codegen.py", args.images, args.nid_db, out], quiet=False)
 
 
 def step_blocks(args):
@@ -152,6 +152,8 @@ def main():
     ap = argparse.ArgumentParser(description="Generate all game-derived sources from your own game files")
     ap.add_argument("--elf", default=os.path.join(ROOT, "bin", "01.12", "GOWA.patched.elf"), help="patched decrypted GOWA 01.12 ELF")
     ap.add_argument("--fw", default=os.path.join(ROOT, "fw", "4.91"), help="directory with decrypted firmware .prx modules")
+    ap.add_argument("--images", default=os.path.join(ROOT, "recomp", "images.json"),
+                    help="manifest of guest images to lift; replace it to lift a different title")
     ap.add_argument("--nid-db", default=os.path.join(ROOT, "ref", "nid_db.json"))
     ap.add_argument("--out-root", default=os.path.join(ROOT, "out"), help="root for out/ppu and out/spu")
     ap.add_argument("--gen-root", default=os.path.join(ROOT, "out", "gen"), help="root for extracted blocks and generated SPU natives")

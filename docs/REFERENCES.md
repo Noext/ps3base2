@@ -54,6 +54,21 @@ Two consequences worth remembering:
   sub-handle is passed **by value** to ReadHeader/SetParameter/DecodeData/Close.
   Dereferencing it faults at a guest address near zero.
 
+## GTA San Andreas (BLES02219) -- containers
+
+- The four data archives on the disc (`PS3DataMain.obb`, `PS3Data.obb`,
+  `PS3DataText.zip`, `PS3DataText2.zip`) are **plain ZIP archives with
+  compression method 0 (stored)**. Verified by signature (`504b 0304` at offset
+  0) and by `7z l`, which lists 76 files / 708 628 413 bytes for `PS3Data.obb`.
+  Do not reach for a bespoke OBB parser: the runtime only has to serve bytes.
+- The paired `.idx` is a flat index, not code: `u32 count`, then per entry
+  `u32 offset, u32 size, u16 name_len, name`. Offsets are relative to the start
+  of the archive's data area. Confirmed: 76 entries parsed for 76 files listed
+  by 7z, and the second-to-last `off + size` lands exactly on the last offset.
+- Filenames in the archive confirm the PC ancestry: `data/script/mainPS3.scm`
+  (Script Compiler Main), `data/handling.cfg`, `Text/PS3/*.gxt`,
+  `Textures/fonts/*.met`.
+
 ## PPU
 
 - `refs/rpcs3/rpcs3/Emu/Cell/PPUInterpreter.cpp` is the reference for

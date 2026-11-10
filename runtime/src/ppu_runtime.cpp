@@ -213,13 +213,48 @@ void call_indirect(Context& ctx, uint8_t* base, uint32_t addr) {
                  g, o, s1, addr, static_cast<uint32_t>(ctx.ctr),
                  static_cast<unsigned>(ctx.gpr[3]));
     }
+    /* PS3BASE_TOC_TRACE=1: name the image each indirect target belongs to and
+     * report r2 against that image's TOC. r2 is the table-of-contents register;
+     * a global reached through it faults at an address like 0xffff.... when it
+     * holds a return value instead of a TOC. Diluting this into the crash dump
+     * costs a round trip per hypothesis, so it is measured here, at the
+     * transition, while the caller is still on the stack. */
+    if (std::getenv("PS3BASE_TOC_TRACE")) {
+        static std::atomic<uint64_t> n{0};
+        if (n.fetch_add(1) < 4000) {
+            for (uint32_t i = 0; i < image::image_count; i++) {
+                const image::ImageEntry& im = image::images[i];
+                if (addr >= im.text_lo && addr < im.text_hi) {
+                    const uint32_t r2 = static_cast<uint32_t>(ctx.gpr[2]);
+                    LOG_INFO("toc", "call 0x%08x img=%-12s r2=0x%08x img_toc=0x%08x %s lr=0x%08x th=0x%x",
+                             addr, im.name, r2, im.toc, r2 == im.toc ? "OK" : "MISMATCH",
+                             static_cast<uint32_t>(ctx.lr), ctx.thread_id);
+                    break;
+                }
+            }
+        }
+    }
     Func fn = lookup(addr);
     if (!fn) {
         LOG_FATAL("ppu", "unknown indirect target 0x%08x (lr=0x%08llx, thread 0x%x)", addr, static_cast<unsigned long long>(ctx.lr), ctx.thread_id);
     }
     force::on_call(addr);
     const uint32_t saved_lr = static_cast<uint32_t>(ctx.lr);
+    /* PS3BASE_TOC_TRACE=2: bracket every lifted call and report the ones that
+     * change r2. A restored TOC that comes back wrong points at the frame that
+     * saved it, which is the function whose lifting is wrong -- the crash alone
+     * only ever names the reader, never the writer. */
+    static const int toc_depth = std::getenv("PS3BASE_TOC_TRACE")
+        ? std::atoi(std::getenv("PS3BASE_TOC_TRACE")) : 0;
+    const uint32_t toc_in = static_cast<uint32_t>(ctx.gpr[2]);
     fn(ctx, base);
+    if (toc_depth >= 2 && static_cast<uint32_t>(ctx.gpr[2]) != toc_in) {
+        static std::atomic<int> n{0};
+        if (n.fetch_add(1) < 40)
+            LOG_WARN("toc", "call 0x%08x changed r2 0x%08x -> 0x%08x (lr=0x%08x th=0x%x)",
+                     addr, toc_in, static_cast<uint32_t>(ctx.gpr[2]),
+                     saved_lr, ctx.thread_id);
+    }
     force::on_return(addr, saved_lr, ctx.gpr[3]);
 }
 
@@ -233,6 +268,23 @@ void call_import(Context& ctx, uint8_t* base, uint32_t index) {
         slot.state.store(st, std::memory_order_release);
     }
     const image::ImportEntry& imp = image::imports[index];
+    /* PS3BASE_TOC_TRACE=1: report the first import reached with r2 not matching
+     * the caller's image TOC. This is the boundary where the table-of-contents
+     * register goes bad, and it is earlier than any fault it causes. */
+    if (std::getenv("PS3BASE_TOC_TRACE")) {
+        const uint32_t lr = static_cast<uint32_t>(ctx.lr);
+        for (uint32_t i = 0; i < image::image_count; i++) {
+            const image::ImageEntry& im = image::images[i];
+            if (lr >= im.text_lo && lr < im.text_hi && static_cast<uint32_t>(ctx.gpr[2]) != im.toc) {
+                static std::atomic<int> n{0};
+                if (n.fetch_add(1) < 30)
+                    LOG_WARN("toc", "import %s::%s reached with r2=0x%08x but caller img=%-12s toc=0x%08x (lr=0x%08x)",
+                             imp.module, imp.name ? imp.name : "?", static_cast<uint32_t>(ctx.gpr[2]),
+                             im.name, im.toc, lr);
+                break;
+            }
+        }
+    }
     if (trace::on(trace::IMPORT)) {
         static std::atomic<uint32_t> names[16384];
         uint32_t id = names[index & 16383].load(std::memory_order_relaxed);
@@ -265,6 +317,18 @@ void call_import_body(Context& ctx, uint8_t* base, uint32_t index, ImportSlot& s
 }
 
 void call_import_inner(Context& ctx, uint8_t* base, uint32_t index, ImportSlot& slot, int32_t st, const image::ImportEntry& imp) {
+    /* r2 is the caller's table-of-contents register and an import is transparent
+     * to it: on console the callee preserves it and the caller's own
+     * `lwz r2, 40(r1)` reloads the same value. A HLE handler is C++ code that
+     * simply never touches r2, and a LLE callee restores its own image's TOC,
+     * so either way the caller gets back something that is not its own.
+     *
+     * Measured on GTA SA: f_00018490 saves r2, calls cellAudioOutConfigure
+     * (HLE), reloads r2, calls cellAudioInit, reloads again -- and the reload
+     * yields 1, because the HLE path had overwritten the register with the
+     * previous return value. The next global read through r2 faults at
+     * 0x1 + (-30324) = 0xffff898d, five frames away from the import. */
+    const uint64_t caller_toc = ctx.gpr[2];
     /* Arguments must be captured BEFORE the handler runs: afterwards r3 holds
      * the return value, which is how an earlier SPURS probe read 0. */
     if (imp.name && std::strstr(imp.name, "cellSpursInitialize") && std::getenv("PS3BASE_SPURS_TRACE")) {
@@ -393,7 +457,20 @@ void call_import_inner(Context& ctx, uint8_t* base, uint32_t index, ImportSlot& 
     }
     if (st == kHle) {
         LOG_TRACE("import", "%s::%s -> HLE", imp.module, imp.name);
+        /* PS3BASE_TOC_TRACE also watches what a handler does to r2: the TOC
+         * register must survive an import the caller believes is transparent,
+         * and a handler that leaves a scalar in it corrupts the next global
+         * access far from here. */
+        const uint32_t toc_before = static_cast<uint32_t>(ctx.gpr[2]);
         slot.hle(ctx, base);
+        if (std::getenv("PS3BASE_TOC_TRACE") && static_cast<uint32_t>(ctx.gpr[2]) != toc_before) {
+            static std::atomic<int> n{0};
+            if (n.fetch_add(1) < 50)
+                LOG_WARN("toc", "HLE %s::%s changed r2 0x%08x -> 0x%08x (lr=0x%08x th=0x%x)",
+                         imp.module, imp.name ? imp.name : "?", toc_before,
+                         static_cast<uint32_t>(ctx.gpr[2]),
+                         static_cast<uint32_t>(ctx.lr), ctx.thread_id);
+        }
         if (import_thread_match)
             LOG_INFO("impthr", "        -> ret=0x%llx", static_cast<unsigned long long>(ctx.gpr[3]));
         if (slot.log_args) LOG_INFO("import", "%s::%s returned 0x%llx", imp.module, imp.name, static_cast<unsigned long long>(ctx.gpr[3]));

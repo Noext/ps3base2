@@ -19,9 +19,13 @@ binaries, so none of this can be committed by accident.
 ## Getting from a disc to a plain ELF
 
 The tools below need `pycryptodome` (`python3 -m pip install pycryptodome`).
-Measured on this machine: without it, importing `tools/unself.py` fails with
+Without it, importing `tools/unself.py` fails with
 `ModuleNotFoundError: No module named 'Crypto'`, before any file is touched.
-That dependency is not installed here -- the check is worth running first.
+
+**Corrected, measured 2026-11-10:** this section used to claim the dependency was
+not installed here. It is: `python3 -c 'import Crypto; print(Crypto.__version__)'`
+prints `4.4.0` on `/usr/bin/python3`. The claim was true of a different
+interpreter, not of this machine.
 
 The tools exist and are tracked; what is untracked is their **input** (the disc
 image, the update package) and their **output** (`bin/`, `keys/`). This section
