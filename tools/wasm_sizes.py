@@ -24,36 +24,69 @@ def leb(d, i):
 
 
 def sizes(path):
+    """Return (count, sizes, names).
+
+    names maps FUNCTION INDEX to symbol name when a name section is present. The
+    index spaces do NOT line up naively: the name section may list more entries
+    than the code section has bodies, with the extras at the end. Round 154 found
+    this the hard way -- pairing size and name by index reported an 8,964-byte
+    function as 1,316,534 bytes and cost seven rounds of chasing a phantom.
+    """
     d = open(path, 'rb').read()
     i = 8
     n = len(d)
+    out, names = [], {}
+    count = 0
     while i < n:
         sid = d[i]
         i += 1
         r, i = leb(d, i)
         end = i + r
         if sid == 10:
-            cnt, j = leb(d, i)
-            out = []
-            for _ in range(cnt):
+            count, j = leb(d, i)
+            for _ in range(count):
                 ln, j = leb(d, j)
                 out.append(ln)
                 j += ln
-            return cnt, out
+        elif sid == 0:
+            ln, j = leb(d, i)
+            nm = d[j:j + ln].decode('utf8', 'replace')
+            if nm == 'name':
+                k = j + ln
+                while k < end:
+                    sub = d[k]
+                    k += 1
+                    sz, k = leb(d, k)
+                    if sub == 1:
+                        cnt, k2 = leb(d, k)
+                        for _ in range(cnt):
+                            idx, k2 = leb(d, k2)
+                            sl, k2 = leb(d, k2)
+                            names[idx] = d[k2:k2 + sl].decode('utf8', 'replace')
+                            k2 += sl
+                    k += sz
         i = end
-    return 0, []
+    return count, out, names
 
 
 def main():
     for p in sys.argv[1:] or ['/tmp/game.wasm']:
-        cnt, s = sizes(p)
+        cnt, s, names = sizes(p)
         if not s:
             print('%s: no code section' % p)
             continue
         top = max(s)
-        print('%s: %d functions, largest %d bytes, total code %d bytes%s'
-              % (p, cnt, top, sum(s),
+        idx = s.index(top)
+        named = names.get(idx)
+        print('%s: %d functions, largest %d bytes%s, total code %d bytes%s'
+              % (p, cnt, top, (' (%s)' % named) if named else ' (no name section)',
+                 sum(s),
                  '  ** largest function exceeds 1 MB **' if top > 1048576 else ''))
+        if names:
+            # Sanity: the name index space may be longer than the code section.
+            extra = len([k for k in names if k >= cnt])
+            if extra:
+                print('   note: %d name entries have no matching body' % extra)
 
 
 if __name__ == '__main__':
