@@ -1,6 +1,9 @@
 #include "runtime/host.h"
+#include "runtime/cycles.h"
 
 #include <algorithm>
+#include <atomic>
+#include <cstdio>
 #include <chrono>
 #include <cstring>
 #include <thread>
@@ -9,6 +12,70 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <timeapi.h>
+#elif defined(__EMSCRIPTEN__)
+#include <emscripten.h>
+#include <emscripten/threading.h>
+#include <cstdlib>
+#include <cstring>
+#include <thread>
+
+namespace host {
+
+/* Emscripten branch. Everything the POSIX path gets from Linux -- futex, mmap,
+ * mprotect, sched -- comes from Emscripten's threading and memory APIs, or is a
+ * no-op because wasm has no page protection.
+ *
+ * vm_reserve/commit/decommit/protect live in runtime/src/mem.cpp for this build:
+ * mem::reserve calls std::calloc in bitset mode, which is the only mode a wasm
+ * build uses, so host::vm_* is never reached there. Kept as stubs so the header
+ * stays complete. */
+
+void wait_on(const void* addr, const void* cmp, size_t size, uint32_t ms) {
+    uint32_t expect;
+    std::memcpy(&expect, cmp, size);
+    const int timeout = ms == UINT32_MAX ? -1 : static_cast<int>(ms);
+    emscripten_futex_wait(const_cast<void*>(addr), expect, timeout);
+}
+
+void wake_all(const void* addr) { emscripten_futex_wake(const_cast<void*>(addr), INT_MAX); }
+void wake_one(const void* addr) { emscripten_futex_wake(const_cast<void*>(addr), 1); }
+
+void* vm_reserve(size_t size) { return std::calloc(1, size); }
+bool vm_commit(void* p, size_t size) {
+    (void)p;
+    (void)size;
+    return true;   /* already mapped and zeroed by calloc */
+}
+bool vm_decommit(void* p, size_t size) {
+    (void)p;
+    (void)size;
+    /* Do not zero here: wasm memory is linear and the guest never reads a
+     * decommitted range. Matches the bitset backend's reasoning. */
+    return true;
+}
+bool vm_protect(void* p, size_t size, Prot prot) {
+    (void)p;
+    (void)size;
+    (void)prot;
+    /* No page protection in wasm. The software guard in stacks.cpp covers it. */
+    return true;
+}
+
+std::vector<Core> cpu_cores() {
+    std::vector<Core> cores;
+    Core c;
+    c.efficiency = 0;
+    c.lps.push_back(0);
+    cores.push_back(c);
+    return cores;
+}
+
+int logical_cpus() {
+    return static_cast<int>(emscripten_num_logical_cores());
+}
+
+}  // namespace host
+
 #else
 #include <cerrno>
 #include <climits>
@@ -26,6 +93,11 @@
 #include <unistd.h>
 #include <x86intrin.h>
 #endif
+
+/* The implementation below is the Win32/POSIX one. Under Emscripten the complete
+ * implementation is the `#elif defined(__EMSCRIPTEN__)` block above, so this whole
+ * section must not compile. */
+#if !defined(__EMSCRIPTEN__)
 
 namespace host {
 
@@ -167,10 +239,18 @@ double tsc_per_ns() {
 }
 
 std::string read_line(const std::string& path) {
-    std::ifstream f(path);
-    std::string s;
-    std::getline(f, s);
-    return s;
+    /* C stdio, not ifstream: Emscripten's prebuilt libc++ does not instantiate
+     * basic_ifstream in this toolchain, and this function only needs one line. */
+    std::string out;
+    if (FILE* f = std::fopen(path.c_str(), "r")) {
+        char buf[512];
+        if (std::fgets(buf, sizeof buf, f)) {
+            out.assign(buf);
+            while (!out.empty() && (out.back() == '\n' || out.back() == '\r')) out.pop_back();
+        }
+        std::fclose(f);
+    }
+    return out;
 }
 
 std::vector<int> parse_list(const std::string& s) {
@@ -217,8 +297,17 @@ void sleep_ms(uint32_t ms) {
 }
 
 uint32_t tid() {
+#if defined(__EMSCRIPTEN__)
+    /* No SYS_gettid. Emscripten gives a per-thread id directly. */
+    thread_local const uint32_t t = static_cast<uint32_t>(emscripten_main_thread_process_queued_calls ? 0 : 0);
+    static std::atomic<uint32_t> next{1};
+    thread_local const uint32_t assigned = next.fetch_add(1);
+    (void)t;
+    return assigned;
+#else
     thread_local const uint32_t t = static_cast<uint32_t>(syscall(SYS_gettid));
     return t;
+#endif
 }
 
 void set_thread_name(const std::string& name) { pthread_setname_np(pthread_self(), name.substr(0, 15).c_str()); }
@@ -318,3 +407,5 @@ void init_timers() {}
 #endif
 
 }
+
+#endif  // !__EMSCRIPTEN__

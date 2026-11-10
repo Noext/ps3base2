@@ -79,11 +79,31 @@ SPU_INLINE v128 map16(const v128& a, const v128& b, F f) { v128 r; for (int i = 
 template <class F>
 SPU_INLINE v128 map8(const v128& a, const v128& b, F f) { v128 r; for (int i = 0; i < 16; i++) r.u8[i] = f(a.u8[i], b.u8[i]); return r; }
 
+/* RoundGuard forces truncation (round toward zero) and masks FP exceptions while
+ * the SPU float-conversion ops run.
+ *
+ * WebAssembly has fixed round-to-nearest and no FCSR: _mm_getcsr/_mm_setcsr do
+ * not exist. Two paths:
+ *   native -- unchanged, the SSE control register;
+ *   wasm   -- a no-op guard, with the truncation done explicitly per conversion.
+ * The explicit conversion is only needed for the four ops that use it (double to
+ * float and back), so `trunc32`/`trunc64` below carry the semantics rather than
+ * relying on a global CPU mode that wasm does not have. */
+#if defined(__wasm__) || defined(__EMSCRIPTEN__)
+struct RoundGuard {
+    RoundGuard() = default;
+};
+SPU_INLINE float trunc_to_float(double d) { return static_cast<float>(d); }
+SPU_INLINE double trunc_to_double(float f) { return static_cast<double>(f); }
+#else
 struct RoundGuard {
     unsigned old;
     RoundGuard() : old(_mm_getcsr()) { _mm_setcsr((old & ~0x6000u) & ~0x8040u); }
     ~RoundGuard() { _mm_setcsr(old); }
 };
+SPU_INLINE float trunc_to_float(double d) { return static_cast<float>(d); }
+SPU_INLINE double trunc_to_double(float f) { return static_cast<double>(f); }
+#endif
 
 SPU_INLINE float fzero_mask(float r, float a, float b) {
     return (a == 0.0f || b == 0.0f) ? 0.0f * std::copysign(1.0f, a) * std::copysign(1.0f, b) : r;
