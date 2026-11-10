@@ -5,6 +5,11 @@
 # reason for each flag so a change that looks harmless is not silently made.
 set -euo pipefail
 
+# Compiles one file at a time on purpose. This machine is shared and the
+# workspace rules cap any build at -j 8; a sequential script cannot violate that
+# from a shell that does not know the rule. It costs roughly 40 minutes for the
+# 242 translation units and needs no babysitting.
+
 ROOT="${1:-/root/Dev/ps3base2}"
 OUT="${2:-/tmp/wasm-out}"
 EMSDK=${EMSDK:-/root/Dev/ps2-web-recomp/tools/emsdk/upstream}
