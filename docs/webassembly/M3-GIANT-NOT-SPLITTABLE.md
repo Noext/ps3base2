@@ -61,3 +61,35 @@ pas une option locale.
 | module sous 80 Mo | **oui — 49,7 Mo** |
 | plus grosse fonction sous 1 Mo | **non — et non découpable localement** |
 | ligne de log du menu | **oui, corroborée** |
+
+---
+
+# Ce n'est pas un dispatcher non plus
+
+J'ai vérifié l'hypothèse « c'est une table de sauts déguisée, donc transformable ».
+
+| marqueur | valeur |
+|---|---|
+| appels à des fonctions liftées | **2 958** |
+| fonctions distinctes appelées | **15** |
+| tail calls (call; return;) | **0** |
+| marqueurs de dispatch indirect | **0** |
+| affectations de registres | **70 288** |
+| stockages mémoire | **3 873** |
+
+## Ce que ça signifie
+
+Ce n'est pas un aiguillage : c'est **une seule fonction du jeu** qui fait beaucoup de travail.
+
+**Il n'y a pas de structure à exploiter.** Elle est monolithique parce que le jeu l'a écrite ainsi.
+
+## Ce que ça clôt
+
+| piste | verdict |
+|---|---|
+| découpage mécanique aux labels | non — 89 % dans un segment |
+| transformable en dispatcher | non — 0 marqueur |
+| inlining | non — fno-inline ne change rien |
+| fusion du linker | non — taille dans la section code |
+
+**Quatre voies explorées, quatre fermées par la mesure.**
