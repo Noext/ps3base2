@@ -37,12 +37,34 @@ def sizes(path):
     n = len(d)
     out, names = [], {}
     count = 0
+    import_funcs = 0
     while i < n:
         sid = d[i]
         i += 1
         r, i = leb(d, i)
         end = i + r
-        if sid == 10:
+        if sid == 2:
+            cnt, j = leb(d, i)
+            for _ in range(cnt):
+                ln, j = leb(d, j)
+                j += ln                                     # module
+                ln, j = leb(d, j)
+                j += ln                                     # field
+                kind = d[j]
+                j += 1
+                _, j = leb(d, j)                            # type index
+                if kind == 0:
+                    import_funcs += 1
+                elif kind == 1:
+                    j += 1
+                    _, j = leb(d, j)
+                    _, j = leb(d, j)
+                elif kind == 2:
+                    _, j = leb(d, j)
+                    _, j = leb(d, j)
+                elif kind == 3:
+                    j += 2
+        elif sid == 10:
             count, j = leb(d, i)
             for _ in range(count):
                 ln, j = leb(d, j)
@@ -66,27 +88,33 @@ def sizes(path):
                             k2 += sl
                     k += sz
         i = end
-    return count, out, names
+    return count, out, names, import_funcs
 
 
 def main():
     for p in sys.argv[1:] or ['/tmp/game.wasm']:
-        cnt, s, names = sizes(p)
+        cnt, s, names, import_funcs = sizes(p)
         if not s:
             print('%s: no code section' % p)
             continue
         top = max(s)
         idx = s.index(top)
-        named = names.get(idx)
+        # Imported functions occupy indexes 0..import_funcs-1, so the name of the
+        # body at index idx is names[idx + import_funcs]. Round 154 paired them
+        # without that offset and reported a healthy 8,964-byte function as
+        # 1,316,534 bytes.
+        named = names.get(idx + import_funcs)
         print('%s: %d functions, largest %d bytes%s, total code %d bytes%s'
               % (p, cnt, top, (' (%s)' % named) if named else ' (no name section)',
                  sum(s),
                  '  ** largest function exceeds 1 MB **' if top > 1048576 else ''))
         if names:
             # Sanity: the name index space may be longer than the code section.
-            extra = len([k for k in names if k >= cnt])
+            extra = len([k for k in names if k >= cnt + import_funcs])
             if extra:
                 print('   note: %d name entries have no matching body' % extra)
+            if import_funcs:
+                print('   note: %d imported functions precede the bodies' % import_funcs)
 
 
 if __name__ == '__main__':
