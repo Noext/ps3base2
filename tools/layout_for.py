@@ -31,13 +31,25 @@ SLOT = 0x01000000
 # and libsysutil's shared area. Placing firmware modules there would collide with
 # every guest allocation, so modules go ABOVE the allocator's floor, not at it.
 ALLOC_FLOOR = 0x10000000
-# Modules live in the 0x20000000..0x2FFFFFFF band: above the allocator floor,
-# clear of video/stack/spu (0xC/0xD/0xE) in the default layout and of their
-# compact equivalents (0x5/0x6/0x7). Verified free by reading regions.cpp.
-MODULE_BAND = 0x20000000
-MODULE_BAND_END = 0x30000000
+# Modules live at 0x30000000 and up, which is where RPCS3 maps the additional
+# segment for fixed allocations (PPUModule.cpp:2242: vm::map(0x30000000,
+# 0x10000000)). An earlier version used 0x20000000, "above the runtime's slot
+# allocator floor" -- and that floor is exactly the problem: reserve_slot_locked
+# walks UP from 0x10000000 in 0x10000000 steps, so sys_mmapper_allocate_address
+# hands out 0x20000000 for a 0x10000000-byte request and the guest is given the
+# same memory the firmware modules were placed in.
+#
+# Measured on Red Dead Redemption: liblv2 at 0x20000000, libsysmodule at
+# 0x21000000, ... and "mmapper: allocate_address 0x10000000 -> 0x20000000". The
+# module's own data was then written by the guest, module_start parked in
+# sys_cond_wait forever, and the screen stayed black at 0.2% draws.
+MODULE_BAND = 0x30000000
+MODULE_BAND_END = 0x3F000000
 # Where the runtime's own fresh memory begins in the default layout.
 RESERVED_FROM = 0xC0000000
+# The compact layout (PS3BASE_REGIONS=compact, and the only layout wasm has)
+# puts video at 0x50000000, so modules must stay below that.
+COMPACT_VIDEO = 0x50000000
 
 
 def read_elf_extent(path):
@@ -73,6 +85,8 @@ def main():
     ap.add_argument("--elf", required=True, help="the title's decrypted ELF")
     ap.add_argument("--modules", default="recomp/lle_modules.txt",
                     help="one .prx name per line, in placement order")
+    ap.add_argument("--slots-per-band", type=int, default=16,
+                    help="modules per 16 MiB band before moving to the next")
     ap.add_argument("--out", default="", help="write the JSON here; default is stdout")
     args = ap.parse_args()
 
@@ -93,9 +107,10 @@ def main():
         if addr <= text_hi:
             raise SystemExit("slot %d at 0x%08x overlaps the title, which ends at 0x%08x"
                              % (i, addr, text_hi))
-        if addr >= RESERVED_FROM:
-            raise SystemExit("slot %d at 0x%08x reaches the runtime's heap region at 0x%08x"
-                             % (i, addr, RESERVED_FROM))
+        if addr + SLOT > COMPACT_VIDEO:
+            raise SystemExit("slot %d at 0x%08x would reach the compact layout's video "
+                             "region at 0x%08x: too many modules for this band"
+                             % (i, addr, COMPACT_VIDEO))
         layout.append({"file": name, "base": "0x%08X" % addr})
 
     # No two slots may share a range; the spacing guarantees it, but say so.

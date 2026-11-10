@@ -6,157 +6,87 @@
  },
  {
   "name": "liblv2",
-  "elf": "../fw/4.91/reloc/liblv2.elf",
-  "file": "fw/4.91/reloc/liblv2.elf"
+  "elf": "../out-rdr/gen/reloc/liblv2.elf",
+  "file": "out-rdr/gen/reloc/liblv2.elf"
  },
  {
   "name": "libsysmodule",
-  "elf": "../fw/4.91/reloc/libsysmodule.elf",
-  "file": "fw/4.91/reloc/libsysmodule.elf"
+  "elf": "../out-rdr/gen/reloc/libsysmodule.elf",
+  "file": "out-rdr/gen/reloc/libsysmodule.elf"
  },
  {
   "name": "libsre",
-  "elf": "../fw/4.91/reloc/libsre.elf",
-  "file": "fw/4.91/reloc/libsre.elf"
+  "elf": "../out-rdr/gen/reloc/libsre.elf",
+  "file": "out-rdr/gen/reloc/libsre.elf"
  },
  {
   "name": "libgcm_sys",
-  "elf": "../fw/4.91/reloc/libgcm_sys.elf",
-  "file": "fw/4.91/reloc/libgcm_sys.elf"
+  "elf": "../out-rdr/gen/reloc/libgcm_sys.elf",
+  "file": "out-rdr/gen/reloc/libgcm_sys.elf"
  },
  {
   "name": "libfs",
-  "elf": "../fw/4.91/reloc/libfs.elf",
-  "file": "fw/4.91/reloc/libfs.elf"
+  "elf": "../out-rdr/gen/reloc/libfs.elf",
+  "file": "out-rdr/gen/reloc/libfs.elf"
  },
  {
   "name": "libvdec",
-  "elf": "../fw/4.91/reloc/libvdec.elf",
-  "file": "fw/4.91/reloc/libvdec.elf"
+  "elf": "../out-rdr/gen/reloc/libvdec.elf",
+  "file": "out-rdr/gen/reloc/libvdec.elf"
  },
  {
   "name": "libsmvd2",
-  "elf": "../fw/4.91/reloc/libsmvd2.elf",
-  "file": "fw/4.91/reloc/libsmvd2.elf"
- },
- {
-  "name": "libspurs_jq",
-  "elf": "../fw/4.91/reloc/libspurs_jq.elf",
-  "file": "fw/4.91/reloc/libspurs_jq.elf"
- },
- {
-  "name": "libfiber",
-  "elf": "../fw/4.91/reloc/libfiber.elf",
-  "file": "fw/4.91/reloc/libfiber.elf"
+  "elf": "../out-rdr/gen/reloc/libsmvd2.elf",
+  "file": "out-rdr/gen/reloc/libsmvd2.elf"
  },
  {
   "name": "libnet",
-  "elf": "../fw/4.91/reloc/libnet.elf",
-  "file": "fw/4.91/reloc/libnet.elf"
+  "elf": "../out-rdr/gen/reloc/libnet.elf",
+  "file": "out-rdr/gen/reloc/libnet.elf"
  },
  {
-  "name": "libvoice",
-  "elf": "../fw/4.91/reloc/libvoice.elf",
-  "file": "fw/4.91/reloc/libvoice.elf"
- },
- {
-  "name": "libsysutil",
-  "elf": "../fw/4.91/reloc/libsysutil.elf",
-  "file": "fw/4.91/reloc/libsysutil.elf"
- },
- {
-  "name": "libsysutil_np",
-  "elf": "../fw/4.91/reloc/libsysutil_np.elf",
-  "file": "fw/4.91/reloc/libsysutil_np.elf"
- },
- {
-  "name": "libsysutil_np2",
-  "elf": "../fw/4.91/reloc/libsysutil_np2.elf",
-  "file": "fw/4.91/reloc/libsysutil_np2.elf"
- },
- {
-  "name": "libsysutil_np_trophy",
-  "elf": "../fw/4.91/reloc/libsysutil_np_trophy.elf",
-  "file": "fw/4.91/reloc/libsysutil_np_trophy.elf"
- },
- {
-  "name": "libnetctl",
-  "elf": "../fw/4.91/reloc/libnetctl.elf",
-  "file": "fw/4.91/reloc/libnetctl.elf"
- },
- {
-  "name": "libhttp",
-  "elf": "../fw/4.91/reloc/libhttp.elf",
-  "file": "fw/4.91/reloc/libhttp.elf"
+  "name": "libfiber",
+  "elf": "../out-rdr/gen/reloc/libfiber.elf",
+  "file": "out-rdr/gen/reloc/libfiber.elf"
  },
  {
   "name": "libssl",
-  "elf": "../fw/4.91/reloc/libssl.elf",
-  "file": "fw/4.91/reloc/libssl.elf"
+  "elf": "../out-rdr/gen/reloc/libssl.elf",
+  "file": "out-rdr/gen/reloc/libssl.elf"
  },
  {
-  "name": "libaudio",
-  "elf": "../fw/4.91/reloc/libaudio.elf",
-  "file": "fw/4.91/reloc/libaudio.elf"
- },
- {
-  "name": "libio",
-  "elf": "../fw/4.91/reloc/libio.elf",
-  "file": "fw/4.91/reloc/libio.elf"
+  "name": "libhttp",
+  "elf": "../out-rdr/gen/reloc/libhttp.elf",
+  "file": "out-rdr/gen/reloc/libhttp.elf"
  },
  {
   "name": "librtc",
-  "elf": "../fw/4.91/reloc/librtc.elf",
-  "file": "fw/4.91/reloc/librtc.elf"
+  "elf": "../out-rdr/gen/reloc/librtc.elf",
+  "file": "out-rdr/gen/reloc/librtc.elf"
  },
  {
-  "name": "libfont",
-  "elf": "../fw/4.91/reloc/libfont.elf",
-  "file": "fw/4.91/reloc/libfont.elf"
+  "name": "libfiber",
+  "elf": "../out-rdr/gen/reloc/libfiber.elf",
+  "file": "out-rdr/gen/reloc/libfiber.elf"
  },
  {
-  "name": "libfontFT",
-  "elf": "../fw/4.91/reloc/libfontFT.elf",
-  "file": "fw/4.91/reloc/libfontFT.elf"
+  "name": "libnet",
+  "elf": "../out-rdr/gen/reloc/libnet.elf",
+  "file": "out-rdr/gen/reloc/libnet.elf"
  },
  {
-  "name": "libfreetype",
-  "elf": "../fw/4.91/reloc/libfreetype.elf",
-  "file": "fw/4.91/reloc/libfreetype.elf"
+  "name": "libssl",
+  "elf": "../out-rdr/gen/reloc/libssl.elf",
+  "file": "out-rdr/gen/reloc/libssl.elf"
  },
  {
-  "name": "libresc",
-  "elf": "../fw/4.91/reloc/libresc.elf",
-  "file": "fw/4.91/reloc/libresc.elf"
+  "name": "libhttp",
+  "elf": "../out-rdr/gen/reloc/libhttp.elf",
+  "file": "out-rdr/gen/reloc/libhttp.elf"
  },
  {
-  "name": "libsail",
-  "elf": "../fw/4.91/reloc/libsail.elf",
-  "file": "fw/4.91/reloc/libsail.elf"
- },
- {
-  "name": "libl10n",
-  "elf": "../fw/4.91/reloc/libl10n.elf",
-  "file": "fw/4.91/reloc/libl10n.elf"
- },
- {
-  "name": "libavcdec",
-  "elf": "../fw/4.91/reloc/libavcdec.elf",
-  "file": "fw/4.91/reloc/libavcdec.elf"
- },
- {
-  "name": "libdmux",
-  "elf": "../fw/4.91/reloc/libdmux.elf",
-  "file": "fw/4.91/reloc/libdmux.elf"
- },
- {
-  "name": "libgem",
-  "elf": "../fw/4.91/reloc/libgem.elf",
-  "file": "fw/4.91/reloc/libgem.elf"
- },
- {
-  "name": "libusbd",
-  "elf": "../fw/4.91/reloc/libusbd.elf",
-  "file": "fw/4.91/reloc/libusbd.elf"
+  "name": "librtc",
+  "elf": "../out-rdr/gen/reloc/librtc.elf",
+  "file": "out-rdr/gen/reloc/librtc.elf"
  }
 ]

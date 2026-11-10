@@ -1,4 +1,5 @@
 import os
+import struct
 import sys
 
 from analysis import Image, discover, islands, looks_like_function, branch_target, bo_always, sext
@@ -843,6 +844,24 @@ def load_static_seeds(out_dir, image_name, text_lo, text_hi):
     return out
 
 
+def seed_is_stale(addr, images):
+    """True when a recorded seed no longer names an address any image owns.
+
+    A discovery seed is an absolute guest address, and layout_for.py recomputes
+    every module base from the title's text extent: moving the modules moves all
+    of them. Measured, on the run that moved the firmware out of the mmapper
+    range: the seed file still said 0x2b018804 for libsysutil, the module now
+    started at 0x3b000000, and the runtime stopped on "unknown indirect target
+    0x3b0187a8" -- a function the previous lift had produced at the old base.
+
+    Re-basing needs the old base, which the file does not record. Rather than
+    guess it, a stale seed is dropped and logged: the dynamic loop re-discovers
+    it in one run at the right address, and a wrong guess would be worse than a
+    re-run.
+    """
+    return not any(im["text_lo"] <= addr < im["text_hi"] for im in images)
+
+
 def load_seeds(path):
     """Seeds written by a run in discovery mode: one "0xAAAAAAAA name" per line.
 
@@ -912,6 +931,36 @@ def main(manifest_path, nid_db, out_dir, chunk_bytes="0x19000"):
     imports = []
     exports = []
     unimpl = {}
+    # The code range of every image, so a seed can be checked against all of them
+    # before the loop starts. Cheap: the ELF header is all it reads.
+    image_spans = []
+    for spec in manifest:
+        path = os.path.join(root, spec["elf"])
+        if not os.path.exists(path):
+            continue
+        try:
+            d = open(path, "rb").read(0x400)
+            phoff, = struct.unpack(">Q", d[0x20:0x28])
+            phes, phn = struct.unpack(">HH", d[0x36:0x3A])
+            lo = hi = None
+            for i in range(phn):
+                o = phoff + i * phes
+                t, fl = struct.unpack(">II", d[o:o + 8])
+                va, = struct.unpack(">Q", d[o + 0x10:o + 0x18])
+                msz, = struct.unpack(">Q", d[o + 0x28:o + 0x30])
+                if t != 1 or not (fl & 1) or not msz:
+                    continue
+                lo = va if lo is None else min(lo, va)
+                hi = va + msz if hi is None else max(hi, va + msz)
+            if lo is not None:
+                image_spans.append({"name": spec["name"], "text_lo": lo, "text_hi": hi})
+        except Exception:
+            continue
+    if seed_addrs and image_spans:
+        for a in seed_addrs:
+            if not any(m["text_lo"] <= a < m["text_hi"] for m in image_spans):
+                print("dynamic seed 0x%08x names no current image -- stale (the modules "
+                      "moved); the discovery loop re-records it at the right base" % a)
     for idx, spec in enumerate(manifest):
         img = Image(os.path.join(root, spec["elf"]), nids)
         # A seed belongs to the image whose code range contains it, not to the
@@ -921,8 +970,8 @@ def main(manifest_path, nid_db, out_dir, chunk_bytes="0x19000"):
         static_seeds = []
         if os.environ.get("PS3BASE_STATIC_SEEDS", "1") != "0":
             static_seeds = load_static_seeds(out_dir, spec["name"], img.text_lo, img.text_hi)
-        mine = [a for a in seed_addrs if img.text_lo <= a < img.text_hi] + static_seeds
-        mine = sorted(set(mine))
+        mine = [a for a in seed_addrs if img.text_lo <= a < img.text_hi]
+        mine = sorted(set(mine + static_seeds))
         if static_seeds:
             print("%-16s %6d static seed(s), %d dynamic" % (spec["name"], len(static_seeds), len(seed_addrs)))
         rejected = [0]

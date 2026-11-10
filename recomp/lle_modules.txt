@@ -1,6 +1,10 @@
-# Firmware modules to place, in order. One per line.
-# Each gets its own 16 MiB slot above the title's text.
-# Source: the firmware PUP at docs/FIRMWARE.md, decrypted by tools/unself.py.
+# The PROVEN list, then only SELF-CONTAINED libraries.
+#
+# Rule (docs/decisions.md D-008): a new title starts from exactly the seven
+# modules Minecraft and GTA run on, and adds only libraries that provide
+# functions and own no dispatcher state. Never libsysutil or its family (np,
+# np2, np_trophy), savedata, the dialogs, NP, the pad or the audio: those hold
+# state the HLE already owns, and lifting them gives it two writers.
 liblv2.prx
 libsysmodule.prx
 libsre.prx
@@ -8,27 +12,16 @@ libgcm_sys.prx
 libfs.prx
 libvdec.prx
 libsmvd2.prx
-libspurs_jq.prx
+# Autonomous additions for this title, each measured to provide imported NIDs:
+libnet.prx
+libfiber.prx
+libssl.prx
+libhttp.prx
+librtc.prx
+# Autonomous additions for Red Dead Redemption, each measured to provide NIDs the
+# proven seven do not:
 libfiber.prx
 libnet.prx
-libvoice.prx
-libsysutil.prx
-libsysutil_np.prx
-libsysutil_np2.prx
-libsysutil_np_trophy.prx
-libnetctl.prx
-libhttp.prx
 libssl.prx
-libaudio.prx
-libio.prx
+libhttp.prx
 librtc.prx
-libfont.prx
-libfontFT.prx
-libfreetype.prx
-libresc.prx
-libsail.prx
-libl10n.prx
-libavcdec.prx
-libdmux.prx
-libgem.prx
-libusbd.prx
