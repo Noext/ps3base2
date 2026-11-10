@@ -347,6 +347,13 @@ LV2_SYSCALL(808, sys_fs_stat) {
     if (int64_t e = resolve(u32arg(ctx, 0), guest, host)) return e;
     struct _stat64 st;
     if (host_stat(host, st)) {
+#if defined(PS3BASE_FS_PROBE) && PS3BASE_FS_PROBE
+        /* The boot freezes at a sys_fs_stat call site; LOG_DEBUG is invisible in the
+         * wasm run, so name the path that is failing. */
+        static std::atomic<int> n{0};
+        if (n.fetch_add(1) < 25)
+            LOG_WARN("fsprobe", "stat '%s' -> ENOENT (host '%s')", guest.c_str(), host.c_str());
+#endif
         LOG_DEBUG("fs", "stat '%s' -> ENOENT", guest.c_str());
         return CELL_ENOENT;
     }
