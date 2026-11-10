@@ -1,7 +1,11 @@
 # Everything below is derived from the user's own disc or firmware and is never
 # tracked. The pre-commit hook refuses binaries; this list keeps them out of
 # the index in the first place.
+# Derived game sources, one tree per title. "out-GTA" used to slip past this
+# rule: the pattern was anchored and named only the default directory, so a
+# second title's lifted code (22 MB of generated C++) showed up as untracked.
 /out/
+/out-*/
 /bin/
 /fw/
 /keys/

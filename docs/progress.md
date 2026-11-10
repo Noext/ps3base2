@@ -304,3 +304,66 @@ Ce qui manque et qui n'est **pas** bloquant pour ce titre : `libavcodec` est
 absent de la machine, donc `cellVdec` tombe en LLE. GTA n'importe pas
 `cellVdec`, donc la question ne se pose pas ici.
 
+
+## GTA San Andreas : le jeu tourne
+
+**Etat mesure, capture a l'appui :** ecran-titre -> cinematique d'intro (CJ au
+poste de police) -> **en jeu a Grove Street**, avec HUD complet : heure 07:05,
+argent $350, barre de vie, radar en bas a gauche, un BMX devant le joueur.
+11 a 26 fps selon la scene. Aucun forcage actif.
+
+```
+I  131.451837 rsx: flip 2821 (buffer 0) worst 154.9 ms, >50ms 60, >100ms 16
+I  89.991625 gpu: window closed, exiting      <- ce n'etait pas un crash
+```
+
+### Ce qui a rendu cela possible, dans l'ordre
+
+1. **Le `std r2` des stubs d'import** (commit `1e1c5f5`). Le lifter remplace le
+   stub entier par un appel a `call_import`, donc le `std r2, 0x28(r1)` que le
+   stub executait sur console doit etre refait par nous. Le chemin LLE le
+   faisait, le HLE non. Apres correction : premiere image presentee, et le jeu
+   sort de son ecran-titre.
+2. **`cellSync2`** (`runtime/src/hle/cellSync2.cpp`), 13 imports, module absent
+   du depot. Implemente avec de vrais `std::mutex`/`condition_variable` et un
+   semaphore compteur par objet invite -- PAS des stubs `CELL_OK`, parce que
+   D-002 interdit de dire a un titre que son mutex existe quand il n'existe pas.
+   RPCS3 lui-meme est en `todo()` + `CELL_OK` sur ce module, donc il ne pouvait
+   pas servir d'oracle de comportement ; seules ses signatures et ses tailles de
+   structures ont ete reprises (`cellSync2.h`).
+
+Apres ces deux corrections il ne reste que **3 imports non implementes**, tous
+sur des chemins non bloquants a ce stade :
+`cellSysutil::cellVideoOutGetNumberOfDevice`,
+`cellGame::cellGameGetParamInt`, `cellAudio::cellAudioAddData`.
+
+### Deux erreurs de methode, mesurees et corrigees
+
+**1. Mon compteur de "nonblack" etait faux, et j'en ai conclu que le jeu ne
+rendait rien.** Les PPM dumps sortaient a `nonblack 0/921600` alors que l'ecran
+affichait un menu lisible a 53 fps. Le dump part du principe que le presentateur
+est sur le GPU reel ; sous Xvfb avec `PS3BASE_DUMP_FRAMES` il ne l'est pas. La
+lecon est celle deja ecrite dans `docs/RUN.md` (« une frame noire sous ce
+variable veut dire pas de renderer, pas rien de dessine ») : j'ai lu un nombre
+sans verifier ce qu'il mesurait. **Le seul juge qui vaut ici est une capture de
+la fenetre.**
+
+**2. J'ai lance chaque run avec `timeout N`, et cela a ferme la fenetre pendant
+que l'operateur jouait.** La trace est explicite : `gpu: window closed, exiting`
+a 74,99 s et 89,99 s, exactement les deux budgets. Un run qu'on veut mesurer se
+borne en temps ; un run qu'on veut *regarder* ne se borne pas. Desormais :
+`nohup setsid ... & disown`, sans `timeout`, et on tue par groupe de processus
+avec `kill -9 -- -$PID` quand c'est fini.
+
+### Ce qui reste
+
+- 3 imports non implementes (voir ci-dessus), aucun fatal pour l'instant.
+- Les textures de shaders ne sont pas sur le disque : le titre demande
+  `Shaders/*.vert` et `*.pix` en ENOENT ; ils ne sont ni dans l'arbre du disque
+  ni dans les deux `.obb` (les index listent 76 + 244 entrees, aucune n'est un
+  shader). Le jeu tourne quand meme, donc ce chemin est soit inactif, soit
+  reimplemente par le titre.
+- Un artefact bleu triangulaire visible pres du BMX sur la capture : a
+  instruire, probablement une cible de rendu ou un marqueur de mission.
+- Vitesse : 11-26 fps selon la scene. Non mesure sur GPU reel hors Xvfb.
+
