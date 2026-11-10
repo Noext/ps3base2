@@ -1,5 +1,6 @@
 #include "runtime/critpath.h"
 #include "runtime/host.h"
+#include "runtime/regions.h"
 #include "runtime/placement.h"
 #include "runtime/hostsleep.h"
 #include "event.h"
@@ -41,7 +42,9 @@ namespace lv2 {
 namespace {
 
 constexpr uint32_t CONTEXT_ID = 0x55555555;
-constexpr uint32_t LOCAL_BASE = 0xC0000000;
+/* Now taken from the region table: PS3BASE_MEMORY=compact moves video memory
+ * down to close the 1792 MB hole, and every RSX access resolves through this. */
+const uint32_t LOCAL_BASE = vm::region_bases().video;
 
 struct RsxState {
     std::mutex m;

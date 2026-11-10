@@ -1,6 +1,7 @@
 #include <atomic>
 #include "runtime/memory.h"
 #include "runtime/mem.h"
+#include "runtime/regions.h"
 #include "runtime/log.h"
 
 #include <algorithm>
@@ -30,22 +31,32 @@ struct RegionInfo {
     uint32_t page;
 };
 
-RegionInfo kRegions[] = {
-    {0x00010000, 0x0FFF0000, 0x10000},
-    {0, 0x10000000, 0x10000},
-    {0, 0x10000000, 0x100000},
-    {0, 0x10000000, 0x100000},
-    {0xC0000000, 0x10000000, 0x100000},
-    {0xD0000000, 0x10000000, 0x10000},
-    {0xE0000000, 0x20000000, 0x10000},
-};
+/* Built from vm::region_bases() so a wasm build can compact the map without
+ * editing this table. The sparse default keeps the native path identical. */
+RegionInfo* region_table() {
+    static RegionInfo t[7] = {};
+    static bool init = false;
+    if (!init) {
+        const vm::RegionBases& b = vm::region_bases();
+        t[0] = {0x00010000, 0x0FFF0000, 0x10000};
+        t[1] = {0, 0x10000000, 0x10000};
+        t[2] = {0, 0x10000000, 0x100000};
+        t[3] = {0, 0x10000000, 0x100000};
+        t[4] = {b.video, 0x10000000, 0x100000};
+        t[5] = {b.stack, 0x10000000, 0x10000};
+        t[6] = {b.spu, b.spu_size, 0x10000};
+        init = true;
+    }
+    return t;
+}
+#define kRegions region_table()
 
 std::mutex g_lock;
 std::map<uint32_t, uint32_t> g_slots = {{0x00000000, 0x10000000}};
 
 uint32_t reserve_slot_locked(uint32_t size, uint32_t align) {
     if (!align) align = 0x10000000;
-    for (uint64_t a = 0x10000000; a + size <= 0xC0000000; a += align) {
+    for (uint64_t a = 0x10000000; a + size <= vm::region_bases().user_bound; a += align) {
         bool clash = false;
         for (auto& [b, n] : g_slots) {
             if (a < uint64_t(b) + n && b < a + size) {

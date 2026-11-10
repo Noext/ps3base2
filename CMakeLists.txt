@@ -41,12 +41,12 @@ set(PS3BASE_ARCH_FLAGS ${PS3BASE_CLANG}-march=x86-64-v3 ${PS3BASE_CLANG}-ffp-con
 # codewatch.cpp is the write-side guard that rsv::store_range calls into. It has
 # to live in the same library: the small test binaries link reservation.cpp and
 # would otherwise see an undefined reference to the guard's entry point.
-add_library(ps3base_ppu_ops STATIC runtime/src/ppu_ops.cpp runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/memory.cpp runtime/src/mem.cpp runtime/src/log.cpp runtime/src/host.cpp)
+add_library(ps3base_ppu_ops STATIC runtime/src/ppu_ops.cpp runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/memory.cpp runtime/src/regions.cpp runtime/src/mem.cpp runtime/src/log.cpp runtime/src/host.cpp)
 target_include_directories(ps3base_ppu_ops PUBLIC runtime/include "${CMAKE_SOURCE_DIR}/out/include")
 target_compile_options(ps3base_ppu_ops PRIVATE ${PS3BASE_ARCH_FLAGS} ${PS3BASE_EH})
 
 file(GLOB GOWA_RUNTIME_SOURCES CONFIGURE_DEPENDS runtime/src/*.cpp runtime/src/lv2/*.cpp runtime/src/hle/*.cpp runtime/src/media/*.cpp runtime/src/spu/*.cpp runtime/src/spu/edge/*.cpp runtime/src/spu/renjob/*.cpp runtime/src/spu/scream/*.cpp runtime/src/spu/cloth/*.cpp runtime/src/spu/shadows/*.cpp runtime/src/spu/meshprep/*.cpp runtime/src/spu/pm/*.cpp runtime/src/spu/edgejob/*.cpp runtime/src/spu/meshhier/*.cpp runtime/src/spu/anim/*.cpp runtime/src/spu/tasks/*.cpp runtime/src/spu/mpjob/*.cpp runtime/src/jobsys/*.cpp runtime/src/rsx/*.cpp runtime/src/gpu/*.cpp)
-list(REMOVE_ITEM GOWA_RUNTIME_SOURCES "${CMAKE_SOURCE_DIR}/runtime/src/ppu_ops.cpp" "${CMAKE_SOURCE_DIR}/runtime/src/main.cpp" "${CMAKE_SOURCE_DIR}/runtime/src/reservation.cpp" "${CMAKE_SOURCE_DIR}/runtime/src/memory.cpp runtime/src/mem.cpp" "${CMAKE_SOURCE_DIR}/runtime/src/log.cpp" "${CMAKE_SOURCE_DIR}/runtime/src/host.cpp")
+list(REMOVE_ITEM GOWA_RUNTIME_SOURCES "${CMAKE_SOURCE_DIR}/runtime/src/ppu_ops.cpp" "${CMAKE_SOURCE_DIR}/runtime/src/main.cpp" "${CMAKE_SOURCE_DIR}/runtime/src/reservation.cpp" "${CMAKE_SOURCE_DIR}/runtime/src/memory.cpp runtime/src/regions.cpp runtime/src/mem.cpp" "${CMAKE_SOURCE_DIR}/runtime/src/log.cpp" "${CMAKE_SOURCE_DIR}/runtime/src/host.cpp")
 
 set(PS3BASE_SPU_NATIVE_GEN_DIR "${CMAKE_SOURCE_DIR}/out/gen/spu" CACHE PATH "Directory with generated native SPU sources (tools/setup.py)")
 set(GOWA_SPU_ROUNDING_SUBDIRS edge renjob scream cloth shadows meshprep jwhole)
@@ -245,7 +245,7 @@ add_test(NAME lv2_enosys COMMAND lv2_enosys)
 # memory_map calls vm::write32, which goes through rsv::store_range, so it has to
 # link reservation.cpp. It was missing, and the target did not build on main
 # either -- found while checking this branch's own tests.
-add_executable(memory_map tests/memory_map.cpp runtime/src/memory.cpp runtime/src/mem.cpp runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/host.cpp runtime/src/log.cpp)
+add_executable(memory_map tests/memory_map.cpp runtime/src/memory.cpp runtime/src/regions.cpp runtime/src/mem.cpp runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/host.cpp runtime/src/log.cpp)
 target_include_directories(memory_map PRIVATE runtime/include)
 target_compile_options(memory_map PRIVATE ${PS3BASE_ARCH_FLAGS})
 target_link_libraries(memory_map PRIVATE ${CMAKE_DL_LIBS} pthread)
@@ -272,7 +272,7 @@ add_test(NAME wgpu_map COMMAND wgpu_map)
 
 # How much guest address space a real session needs: the number that decides
 # whether wasm32 can hold the map or wasm64 is required.
-add_executable(memspace tests/memspace.cpp runtime/src/memory.cpp runtime/src/mem.cpp runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/host.cpp runtime/src/log.cpp runtime/src/cycles.cpp)
+add_executable(memspace tests/memspace.cpp runtime/src/memory.cpp runtime/src/regions.cpp runtime/src/mem.cpp runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/host.cpp runtime/src/log.cpp runtime/src/cycles.cpp)
 target_include_directories(memspace PRIVATE runtime/include)
 target_compile_options(memspace PRIVATE ${PS3BASE_ARCH_FLAGS})
 target_link_libraries(memspace PRIVATE pthread)
@@ -294,7 +294,7 @@ if(EXISTS "${WGPU_DIR}/lib/libwgpu_native.so")
 endif()
 # Cross-processor reservation invalidation: an SPU write must invalidate an
 # active PPU reservation on the same line, or stcx. commits unseen data.
-add_executable(reservation_xproc tests/reservation_xproc.cpp runtime/src/memory.cpp runtime/src/mem.cpp runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/host.cpp runtime/src/log.cpp)
+add_executable(reservation_xproc tests/reservation_xproc.cpp runtime/src/memory.cpp runtime/src/regions.cpp runtime/src/mem.cpp runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/host.cpp runtime/src/log.cpp)
 target_include_directories(reservation_xproc PRIVATE runtime/include)
 target_compile_options(reservation_xproc PRIVATE ${PS3BASE_ARCH_FLAGS})
 target_link_libraries(reservation_xproc PRIVATE ${CMAKE_DL_LIBS} pthread)
@@ -302,7 +302,7 @@ add_test(NAME reservation_xproc COMMAND reservation_xproc)
 
 # Two guest threads, one shared counter, one million increments each. A lost
 # update proves the reservation fast path is broken.
-add_executable(lock_counter tests/lock_counter.cpp runtime/src/memory.cpp runtime/src/mem.cpp runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/host.cpp runtime/src/log.cpp)
+add_executable(lock_counter tests/lock_counter.cpp runtime/src/memory.cpp runtime/src/regions.cpp runtime/src/mem.cpp runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/host.cpp runtime/src/log.cpp)
 target_include_directories(lock_counter PRIVATE runtime/include "${CMAKE_SOURCE_DIR}/runtime/src")
 target_compile_options(lock_counter PRIVATE ${PS3BASE_ARCH_FLAGS})
 target_link_libraries(lock_counter PRIVATE ${CMAKE_DL_LIBS} pthread)
@@ -311,31 +311,31 @@ add_test(NAME lock_counter COMMAND lock_counter)
 # The title's OWN spinlock (lwarx/stwcx in lifted code), through the same
 # ppu::lwarx / ppu::stwcx entry points the guest calls. A lost update here is
 # two threads inside one critical section -- the shape of the 0x64c044 crash.
-add_executable(guest_spinlock tests/guest_spinlock.cpp runtime/src/ppu_ops.cpp runtime/src/memory.cpp runtime/src/mem.cpp runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/host.cpp runtime/src/log.cpp)
+add_executable(guest_spinlock tests/guest_spinlock.cpp runtime/src/ppu_ops.cpp runtime/src/memory.cpp runtime/src/regions.cpp runtime/src/mem.cpp runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/host.cpp runtime/src/log.cpp)
 target_include_directories(guest_spinlock PRIVATE runtime/include "${CMAKE_SOURCE_DIR}/runtime/src")
 target_compile_options(guest_spinlock PRIVATE ${PS3BASE_ARCH_FLAGS})
 target_link_libraries(guest_spinlock PRIVATE ${CMAKE_DL_LIBS} pthread)
 add_test(NAME guest_spinlock COMMAND guest_spinlock)
 
-add_executable(reservation_increment tests/reservation_increment.cpp runtime/src/ppu_ops.cpp runtime/src/memory.cpp runtime/src/mem.cpp runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/host.cpp runtime/src/log.cpp)
+add_executable(reservation_increment tests/reservation_increment.cpp runtime/src/ppu_ops.cpp runtime/src/memory.cpp runtime/src/regions.cpp runtime/src/mem.cpp runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/host.cpp runtime/src/log.cpp)
 target_include_directories(reservation_increment PRIVATE runtime/include "${CMAKE_SOURCE_DIR}/runtime/src")
 target_compile_options(reservation_increment PRIVATE ${PS3BASE_ARCH_FLAGS})
 target_link_libraries(reservation_increment PRIVATE ${CMAKE_DL_LIBS} pthread)
 add_test(NAME reservation_increment COMMAND reservation_increment)
 
-add_executable(lwmutex_contention tests/lwmutex_contention.cpp runtime/src/lv2/lwmutex.cpp runtime/src/lv2/object.cpp runtime/src/ppu_ops.cpp runtime/src/memory.cpp runtime/src/mem.cpp runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/host.cpp runtime/src/log.cpp)
+add_executable(lwmutex_contention tests/lwmutex_contention.cpp runtime/src/lv2/lwmutex.cpp runtime/src/lv2/object.cpp runtime/src/ppu_ops.cpp runtime/src/memory.cpp runtime/src/regions.cpp runtime/src/mem.cpp runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/host.cpp runtime/src/log.cpp)
 target_include_directories(lwmutex_contention PRIVATE runtime/include "${CMAKE_SOURCE_DIR}/runtime/src")
 target_compile_options(lwmutex_contention PRIVATE ${PS3BASE_ARCH_FLAGS})
 target_link_libraries(lwmutex_contention PRIVATE ${CMAKE_DL_LIBS} pthread)
 add_test(NAME lwmutex_contention COMMAND lwmutex_contention)
 
-add_executable(lwmutex_hle tests/lwmutex_hle.cpp runtime/src/memory.cpp runtime/src/mem.cpp runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/host.cpp runtime/src/log.cpp)
+add_executable(lwmutex_hle tests/lwmutex_hle.cpp runtime/src/memory.cpp runtime/src/regions.cpp runtime/src/mem.cpp runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/host.cpp runtime/src/log.cpp)
 target_include_directories(lwmutex_hle PRIVATE runtime/include "${CMAKE_SOURCE_DIR}/runtime/src" "${CMAKE_SOURCE_DIR}/runtime/src/hle")
 target_compile_options(lwmutex_hle PRIVATE ${PS3BASE_ARCH_FLAGS})
 target_link_libraries(lwmutex_hle PRIVATE ${CMAKE_DL_LIBS} pthread)
 add_test(NAME lwmutex_hle COMMAND lwmutex_hle)
 
-add_executable(list_walk_guard tests/list_walk_guard.cpp runtime/src/memory.cpp runtime/src/mem.cpp runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/host.cpp runtime/src/log.cpp)
+add_executable(list_walk_guard tests/list_walk_guard.cpp runtime/src/memory.cpp runtime/src/regions.cpp runtime/src/mem.cpp runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/host.cpp runtime/src/log.cpp)
 target_include_directories(list_walk_guard PRIVATE runtime/include "${CMAKE_SOURCE_DIR}/runtime/src")
 target_compile_options(list_walk_guard PRIVATE ${PS3BASE_ARCH_FLAGS})
 target_link_libraries(list_walk_guard PRIVATE ${CMAKE_DL_LIBS} pthread)

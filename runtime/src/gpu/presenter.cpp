@@ -8,6 +8,7 @@
 #include "dlssnr.h"
 #include "osd.h"
 #include "runtime/log.h"
+#include "runtime/regions.h"
 #include "runtime/memory.h"
 #include "runtime/hooks.h"
 
@@ -31,7 +32,8 @@ namespace gpu {
 
 namespace {
 
-constexpr uint32_t LOCAL_BASE = 0xC0000000;
+/* Same base as the region table, so compacting the map moves the presenter too. */
+const uint32_t LOCAL_BASE = vm::region_bases().video;
 
 struct DisplayBuffer {
     uint32_t offset = 0;

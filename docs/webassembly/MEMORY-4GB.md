@@ -104,3 +104,39 @@ The map can be compacted from 4.0 GiB to 2.25 GiB, leaving 1.75 GiB for the
 runtime inside wasm32, with no address translation and no Memory64. The work is
 six sites in four files, and the guest never observes the move because it never
 names those addresses itself.
+
+## The compaction, implemented and proven
+
+`PS3BASE_REGIONS=compact` is now a selectable layout, separate from
+`PS3BASE_MEMORY` which selects the memory backend — the two fought over one
+variable name on the first attempt, which would have made `compact` silently fall
+back to the sparse map.
+
+Measured by `tests/memspace.cpp`, which was changed to read `vm::region_bases()`
+instead of a copy of the numbers (a test with its own table reports the same
+figures whatever the runtime does, which is the exact failure mode it exists to
+catch):
+
+| layout | highest address | wasm32 headroom |
+|---|---|---|
+| sparse (default) | `0x100000000` | **0 MB** |
+| compact | `0x90000000` | **1792 MB** |
+
+A real session with `PS3BASE_REGIONS=compact`:
+
+- boots, 0 crashes;
+- reaches `WORLD-MAPPED`;
+- generates, saves (**1 world, 2 autosaves**), renders — jungle, hearts, hunger,
+  hotbar, HUD, 30 fps (capture: `docs/webassembly/m6-compact-world.png`);
+- the RSX framebuffer resolves correctly through the moved base, which is the part
+  that could have broken silently: `get_address()` case 0 is
+  `LOCAL_BASE + offset` and now follows the region table.
+
+All 11 test suites pass in **both** layouts.
+
+## What this establishes
+
+The 4 GiB blocker is gone as a design question: the guest map fits wasm32 with
+1792 MB to spare, no address translation layer, no Memory64, no raised browser
+floor. The guest never observes the move — it only ever reaches these regions
+through pointers the runtime gave it.

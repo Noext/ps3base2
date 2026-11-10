@@ -15,6 +15,7 @@
 #include "runtime/log.h"
 #include "runtime/trace.h"
 #include "runtime/memory.h"
+#include "runtime/regions.h"
 #include "fp_decompiler.h"
 #include "ring.h"
 #include "edge_compute.h"
@@ -1650,9 +1651,9 @@ Texture* memory_texture(const TextureRegs& t, uint32_t ea) {
             const uint32_t loc_var = (t.format & 3) - 1;
             LOG_INFO("texloc",
                      "off 0x%x fmt 0x%08x raw %u decoded %d (0=local,1=main) our_loc %u "
-                     "-> ea 0xc0000000+off=0x%08x(ea_used 0x%08x) io_to_ea=0x%08x",
+                     "-> ea video+off=0x%08x(ea_used 0x%08x) io_to_ea=0x%08x",
                      t.offset, t.format, raw, decoded, loc_var,
-                     0xC0000000u + t.offset, ea, lv2::rsx_io_to_ea(t.offset));
+                     vm::region_bases().video + t.offset, ea, lv2::rsx_io_to_ea(t.offset));
         }
     }
     const uint8_t* src = vm::ptr(ea);
@@ -4359,7 +4360,7 @@ static void dump_presented(uint32_t buffer_id, uint64_t n)
     uint32_t offset = 0, pitch = 0, width = 0, height = 0;
     if (!display_buffer(buffer_id, offset, pitch, width, height)) return;
     if (!width || !height || !pitch) return;
-    const uint32_t base = 0xC0000000u;
+    const uint32_t base = vm::region_bases().video;
     std::vector<uint8_t> rgb(size_t(width) * height * 3);
     uint64_t nonblack = 0;
     for (uint32_t y = 0; y < height; y++) {
@@ -4419,7 +4420,7 @@ bool present(uint32_t buffer_id) {
                               (unsigned long long)k);
                 RingAlloc a;
                 if (ring_alloc(uint64_t(w) * h * 4, 16, a)) {
-                    const uint32_t base = 0xC0000000u + off;
+                    const uint32_t base = vm::region_bases().video + off;
                     if (vm::range_mapped(base, uint64_t(pit) * h)) {
                         for (uint32_t y = 0; y < h; y++) {
                             for (uint32_t x = 0; x < w; x++) {

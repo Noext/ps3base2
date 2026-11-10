@@ -10,6 +10,7 @@
  * touched address, which is the number the port must fit.
  */
 #include "runtime/memory.h"
+#include "runtime/regions.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -34,15 +35,20 @@ int main(int argc, char** argv) {
 
     /* Replay the regions the title actually declares. The values are the ones a
      * real session logs; they are the guest's own requests, not our choice. */
+    /* Read the ACTUAL bases, not a copy of them: a test with its own hardcoded
+     * table would report the same numbers whatever the runtime does, which is
+     * exactly the failure mode it exists to catch. */
+    const vm::RegionBases& rb = vm::region_bases();
+    std::printf("region layout: %s\n", rb.compact ? "compact" : "sparse");
     struct Req { uint32_t addr; uint32_t size; const char* what; };
     const Req reqs[] = {
         {0x00010000u, 0x0FFF0000u, "main RAM region"},
         {0x10000000u, 0x30000000u, "user64k region"},
         {0x30000000u, 0x30000000u, "user1m region"},
         {0x40000000u, 0x10000000u, "rsx context"},
-        {0xC0000000u, 0x10000000u, "video"},
-        {0xD0000000u, 0x10000000u, "stack"},
-        {0xE0000000u, 0x20000000u, "spu"},
+        {rb.video, 0x10000000u, "video"},
+        {rb.stack, 0x10000000u, "stack"},
+        {rb.spu, rb.spu_size, "spu"},
     };
 
     uint64_t highest = 0;
