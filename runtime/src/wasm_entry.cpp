@@ -21,6 +21,8 @@ void framebuffer_stats(uint64_t*, uint64_t*, uint32_t*, uint32_t*);
 uint32_t bound_texture_mask();
 uint32_t texture_field_writes(uint32_t, uint32_t);
 void draw_shape_stats(uint32_t*, uint32_t*);
+void surface_reg_stats(uint32_t*);
+void low_reg_stats(uint32_t*);
 } }
 #include "runtime/image.h"
 #include "runtime/loader.h"
@@ -345,6 +347,17 @@ int main(int argc, char** argv) {
             const uint32_t texmask = gpu::rsx::bound_texture_mask();
             /* Which (unit, field) actually receives writes? A zero mask with
              * non-zero field counts means the hook range was wrong, not the guest. */
+            if ((i % 40) == 39) {
+                uint32_t sr[8] = {};
+                gpu::rsx::surface_reg_stats(sr);
+                std::printf("ps3base-wasm: surface regs clipH=%u clipV=%u fmt=%u caoff=%u zoff=%u\n",
+                            sr[0], sr[1], sr[2], sr[4], sr[5]);
+                uint32_t lr[64] = {};
+                gpu::rsx::low_reg_stats(lr);
+                std::printf("ps3base-wasm: low regs:");
+                for (int k = 0; k < 64; k++) if (lr[k]) std::printf(" 0x%02x=%u", k * 4, lr[k]);
+                std::printf("\n");
+            }
             if ((i % 40) == 39) {
                 uint32_t prims[8] = {}, fmts[4] = {};
                 gpu::rsx::draw_shape_stats(prims, fmts);
