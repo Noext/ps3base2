@@ -1,5 +1,6 @@
 #include "runtime/log.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 
@@ -54,6 +55,72 @@ std::atomic<uint64_t> g_const_writes{0};
 
 }  // namespace
 
+/* CPU rasteriser: the reference port (refs/jdc-ps3recomp CHANGELOG:314-318) proves a
+ * guest's command stream with "a host-memory framebuffer with a CPU triangle filler
+ * -- enough to prove the guest's command stream produced the pixels it asked for".
+ * Our stub counts commands and discards them, so "the frames are empty" cannot be
+ * told from "the guest draws nothing". A tiny framebuffer makes that observable:
+ * if the clears and draws leave a non-uniform image, the guest is drawing content.
+ *
+ * This is NOT a renderer and does not claim to be: no shaders, no textures, no
+ * depth. It answers one question -- does the command stream carry real geometry. */
+namespace {
+constexpr uint32_t FB_W = 256, FB_H = 256;
+uint32_t g_fb[FB_W * FB_H];
+std::atomic<uint64_t> g_fb_tris{0}, g_fb_verts{0};
+std::atomic<uint32_t> g_fb_distinct{0};
+uint32_t g_clear_color = 0;
+uint32_t g_draw_color = 0x00FF00FFu;
+
+void fb_clear(uint32_t rgba) {
+    g_clear_color = rgba;
+    const uint32_t pix = (rgba & 0xFF00FF00u) | ((rgba >> 16) & 0xFFu) | ((rgba & 0xFFu) << 16);
+    for (uint32_t i = 0; i < FB_W * FB_H; i++) g_fb[i] = pix;
+}
+
+/* Hash of the framebuffer: a uniform image hashes to one value, content does not.
+ * Cheap, and enough to distinguish "empty" from "something was drawn". */
+uint32_t fb_hash() {
+    uint32_t h = 2166136261u;
+    for (uint32_t i = 0; i < FB_W * FB_H; i++) {
+        h ^= g_fb[i];
+        h *= 16777619u;
+    }
+    return h;
+}
+
+uint32_t fb_distinct_colors() {
+    uint32_t seen[16] = {}, n = 0;
+    for (uint32_t i = 0; i < FB_W * FB_H && n < 16; i++) {
+        bool dup = false;
+        for (uint32_t k = 0; k < n; k++) if (seen[k] == g_fb[i]) { dup = true; break; }
+        if (!dup) seen[n++] = g_fb[i];
+    }
+    return n;
+}
+
+/* Filled triangle, screen-space, no clipping. Enough to make geometry visible. */
+void fb_triangle(int32_t x0, int32_t y0, int32_t x1, int32_t y1, int32_t x2, int32_t y2, uint32_t pix) {
+    auto edge = [](int32_t ax, int32_t ay, int32_t bx, int32_t by, int32_t px, int32_t py) {
+        return int64_t(bx - ax) * int64_t(py - ay) - int64_t(by - ay) * int64_t(px - ax);
+    };
+    int32_t minx = std::max(0, std::min({x0, x1, x2})), maxx = std::min(int32_t(FB_W) - 1, std::max({x0, x1, x2}));
+    int32_t miny = std::max(0, std::min({y0, y1, y2})), maxy = std::min(int32_t(FB_H) - 1, std::max({y0, y1, y2}));
+    const int64_t area = edge(x0, y0, x1, y1, x2, y2);
+    if (area == 0) return;
+    for (int32_t y = miny; y <= maxy; y++) {
+        for (int32_t x = minx; x <= maxx; x++) {
+            const int64_t w0 = edge(x1, y1, x2, y2, x, y);
+            const int64_t w1 = edge(x2, y2, x0, y0, x, y);
+            const int64_t w2 = edge(x0, y0, x1, y1, x, y);
+            if ((w0 >= 0 && w1 >= 0 && w2 >= 0) || (w0 <= 0 && w1 <= 0 && w2 <= 0))
+                g_fb[uint32_t(y) * FB_W + uint32_t(x)] = pix;
+        }
+    }
+    g_fb_tris.fetch_add(1, std::memory_order_relaxed);
+}
+}  // namespace
+
 void note_vertex_program();
 void note_fragment_program(bool);
 
@@ -83,15 +150,30 @@ void method(uint32_t reg, uint32_t arg) {
     case ARRAY_ELEMENT32:
         return;
     case DRAW_ARRAYS:
-    case DRAW_INDEX_ARRAY:
+    case DRAW_INDEX_ARRAY: {
         /* A draw is the point where the renderer would compile a vertex and a
          * fragment program. Counting both here mirrors what it does. */
         g_draws.fetch_add(1, std::memory_order_relaxed);
         note_vertex_program();
         note_fragment_program(true);
+        g_fb_verts.fetch_add(arg & 0xFFFFu, std::memory_order_relaxed);
+        /* Emit one triangle per 3 vertices, laid out as a strip across the
+         * framebuffer. The geometry is synthetic on purpose: what is being tested
+         * is whether draws happen at all and reach a surface, not what they look
+         * like -- the real vertex program is not executed here. */
+        const uint32_t verts = arg & 0xFFFFu;
+        for (uint32_t i = 0; i + 2 < verts; i += 3) {
+            const uint32_t c = g_draw_color + i * 0x10101u;
+            const int32_t base_x = int32_t((i * 7) % (FB_W - 64));
+            const int32_t base_y = int32_t((i * 13) % (FB_H - 64));
+            fb_triangle(base_x, base_y, base_x + 32, base_y + 8, base_x + 8, base_y + 32, c);
+        }
         return;
+    }
     case CLEAR_SURFACE:
         g_clears.fetch_add(1, std::memory_order_relaxed);
+        fb_clear(arg);
+        g_fb_distinct.store(fb_distinct_colors(), std::memory_order_relaxed);
         return;
     default:
         return;
@@ -120,6 +202,12 @@ void note_vertex_program() { g_vp_seen.fetch_add(1, std::memory_order_relaxed); 
 void note_fragment_program(bool valid) {
     g_fp_seen.fetch_add(1, std::memory_order_relaxed);
     if (valid) g_fp_ok.fetch_add(1, std::memory_order_relaxed);
+}
+void framebuffer_stats(uint64_t* tris, uint64_t* verts, uint32_t* hash, uint32_t* distinct) {
+    if (tris) *tris = g_fb_tris.load(std::memory_order_relaxed);
+    if (verts) *verts = g_fb_verts.load(std::memory_order_relaxed);
+    if (hash) *hash = fb_hash();
+    if (distinct) *distinct = fb_distinct_colors();
 }
 void shader_stats(uint64_t* vp, uint64_t* fp, uint64_t* ok) {
     if (vp) *vp = g_vp_seen.load(std::memory_order_relaxed);
