@@ -19,6 +19,7 @@
 #include "runtime/thread.h"
 
 #include <cstdio>
+#include <cstring>
 #include <cstdlib>
 
 /* Only the wasm link provides this entry point; the native binary has main.cpp. */
@@ -62,6 +63,116 @@ int main(int argc, char** argv) {
     std::printf("WASM-RUNTIME-UP\n");
     std::printf("WASM-GUEST-CODE-RAN\n");
 
+        /* The page will serve these over HTTP Range. Here they are mounted at
+         * /game by --preload-file, so the provider rewrites the loader's relative
+         * path to that mount. This is the whole browser story in eight lines. */
+        files::set_provider([](const std::string& path, std::vector<uint8_t>& out) {
+            std::string p = path;
+            if (p.rfind("./", 0) == 0) p = p.substr(2);
+            std::string full = "/game/" + p;
+            FILE* f = std::fopen(full.c_str(), "rb");
+            if (!f) return false;
+            std::fseek(f, 0, SEEK_END);
+            const long n = std::ftell(f);
+            std::fseek(f, 0, SEEK_SET);
+            if (n <= 0) { std::fclose(f); return false; }
+            out.resize(static_cast<size_t>(n));
+            const size_t got = std::fread(out.data(), 1, out.size(), f);
+            std::fclose(f);
+            if (got != out.size()) { out.clear(); return false; }
+            return true;
+        });
+
+    /* The LV2 boot, ported from main.cpp:253-316. This is the step that separates
+     * "lifted code runs" from "the title starts": load the two images the boot
+     * needs, create the main guest thread on liblv2's entry, build the CRT argv on
+     * that thread's stack, and start it. */
+    const int game = loader::find_image("mc");
+    const int lv2 = loader::find_image("liblv2");
+    std::printf("ps3base-wasm: images mc=%d liblv2=%d of %u\n", game, lv2, image::image_count);
+    if (game < 0 || lv2 < 0) {
+        std::printf("ps3base-wasm: image table incomplete\n");
+        return 1;
+    }
+    if (!loader::load_image(game) || !loader::load_image(lv2)) {
+        std::printf("WASM-BOOT-NO-IMAGES\n");
+        std::printf("ps3base-wasm: loader could not load the images (no disc source)\n");
+        return 0;
+    }
+    std::printf("WASM-BOOT-IMAGES-LOADED\n");
+
+    const loader::ProcessInfo& pi = loader::g_process;
+    std::printf("ps3base-wasm: sdk 0x%x prio %d stack 0x%x entry 0x%x\n", pi.sdk_version, pi.primary_prio,
+                pi.primary_stacksize, pi.entry_opd);
+
+    /* Stack size mapping, identical to main.cpp so the guest sees the same value. */
+    uint32_t stack_size = pi.primary_stacksize;
+    switch (stack_size) {
+    case 0x10: stack_size = 32 * 1024; break;
+    case 0x20: stack_size = 64 * 1024; break;
+    case 0x30: stack_size = 96 * 1024; break;
+    case 0x40: stack_size = 128 * 1024; break;
+    case 0x50: stack_size = 256 * 1024; break;
+    case 0x60: stack_size = 512 * 1024; break;
+    case 0x70: stack_size = 1024 * 1024; break;
+    default: stack_size = std::max<uint32_t>(0x10000, (stack_size + 0xFFF) & ~0xFFFu); break;
+    }
+
+    auto main_thread = guest::create("main_thread", image::images[lv2].entry, 0, 0, pi.primary_prio,
+                                     stack_size, 0, true);
+    if (!main_thread) {
+        std::printf("ps3base-wasm: guest::create failed\n");
+        return 1;
+    }
+    std::printf("ps3base-wasm: main thread 0x%x stack 0x%08x..0x%08x\n", main_thread->id,
+                main_thread->stack_addr, main_thread->stack_addr + main_thread->stack_size);
+
+    /* argv[0]: the same path the native boot builds, so the CRT takes the same
+     * branch. No disc means no TITLE_ID, so the generic form is used. */
+    uint32_t sp = main_thread->stack_addr + main_thread->stack_size;
+    auto push_strings = [](uint32_t& sp, const char* const* list, int count) {
+        std::vector<uint32_t> addrs;
+        for (int i = 0; i < count; i++) {
+            uint32_t len = static_cast<uint32_t>(std::strlen(list[i])) + 1;
+            sp -= (len + 15) & ~15u;
+            std::memcpy(vm::ptr(sp), list[i], len);
+            addrs.push_back(sp);
+        }
+        sp -= static_cast<uint32_t>((addrs.size() + 1) * 8 + 15) & ~15u;
+        const uint32_t ptrs = sp;
+        for (size_t i = 0; i < addrs.size(); i++)
+            vm::write64(ptrs + static_cast<uint32_t>(i) * 8, addrs[i]);
+        vm::write64(ptrs + static_cast<uint32_t>(addrs.size()) * 8, 0);
+        return ptrs;
+    };
+    const char* argv0 = "/dev_bdvd/PS3_GAME/USRDIR/EBOOT.SELF";
+    const char* args[] = {argv0};
+    const uint32_t argv_addr = push_strings(sp, args, 1);
+    const uint32_t envp_addr = push_strings(sp, nullptr, 0);
+
+    ppu::Context& c = main_thread->ctx;
+    c.gpr[1] = (sp - 0x70) & ~15u;
+    c.gpr[3] = 1;                       /* argc */
+    c.gpr[4] = argv_addr;
+    c.gpr[5] = envp_addr;
+    c.gpr[6] = 0;
+    c.gpr[7] = main_thread->id;
+    c.gpr[8] = pi.tls_vaddr;
+    c.gpr[9] = pi.tls_filesz;
+    c.gpr[10] = pi.tls_memsz;
+    c.gpr[11] = pi.entry_opd;
+    c.gpr[12] = pi.malloc_pagesize;
+    std::printf("ps3base-wasm: CRT args sp=0x%08x argv=0x%08x envp=0x%08x\n", (uint32_t)c.gpr[1], argv_addr,
+                envp_addr);
+
+    std::printf("ps3base-wasm: starting the LV2 entry...\n");
+    try {
+        guest::start(main_thread);
+        std::printf("WASM-BOOT-STARTED\n");
+    } catch (const std::exception& e) {
+        std::printf("ps3base-wasm: guest start threw: %s\n", e.what());
+    }
+
     /* The boot path, as far as it can go without the disc: find the images the
      * loader will need and report whether their data is reachable. In a browser
      * the provider serves them over HTTP Range; here it reports absence, which is
@@ -71,14 +182,6 @@ int main(int argc, char** argv) {
          * which is exactly what the page will do with a fetch. The real disc is
          * not present in this build, so the provider serves a synthesised ELF
          * header to show the loader reads through the hook rather than fopen. */
-        files::set_provider([](const std::string& path, std::vector<uint8_t>& out) {
-            if (path.find("mc.elf") == std::string::npos) return false;
-            out.assign(64, 0);
-            out[0] = 0x7f; out[1] = 'E'; out[2] = 'L'; out[3] = 'F';
-            out[4] = 2;   /* ELF64 */
-            out[5] = 2;   /* big endian, as the PS3 is */
-            return true;
-        });
         std::printf("ps3base-wasm: %u images in the table, provider %s\n", image::image_count,
                     files::has_provider() ? "installed" : "absent");
         const int game = loader::find_image("mc");
