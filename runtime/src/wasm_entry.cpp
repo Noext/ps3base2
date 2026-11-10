@@ -273,6 +273,21 @@ int main(int argc, char** argv) {
             return false;
         });
     }
+    /* The seven functions that write offset 1796. f_002dc29c sits inside the
+     * poll loop's own region and is the likely setter for the flag that loop
+     * reads. If none of them runs, the flag cannot change and the loop is
+     * eternal -- a causal chain testable with these guards. */
+    for (uint32_t a : {0x2dc29cu, 0x2da6f0u, 0x203c54u, 0xceb30u, 0xcf01cu, 0x65f414u, 0x66fbb0u}) {
+        hooks::add_guard(a, [](ppu::Context& c) {
+            static std::atomic<int> n{0};
+            const int k = n.fetch_add(1);
+            if (k < 4)
+                std::fprintf(stderr, "[setter] pc=0x%08x lr=0x%llx\n",
+                             static_cast<unsigned>(c.cia),
+                             static_cast<unsigned long long>(c.lr));
+            return false;
+        });
+    }
     hooks::add_guard(0x21c178, [](ppu::Context& c) {
         static std::atomic<int> n{0};
         const int k = n.fetch_add(1);
