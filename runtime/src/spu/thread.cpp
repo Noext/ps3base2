@@ -1487,7 +1487,11 @@ void SpuThread::run() {
         if (stride > 0) host::set_affinity({static_cast<int>((slot * stride) % 12)});
     }
     placement::apply("spu" + std::to_string(slot));
+    /* WebAssembly has no FCSR: rounding is fixed and there are no FP exception
+     * flags, so the flush-to-zero setup has no counterpart (runtime/cycles.h). */
+#if !defined(__wasm__) && !defined(__EMSCRIPTEN__)
     _mm_setcsr((_mm_getcsr() & ~0x6000u) | 0x6000u | 0x8040u);
+#endif
     LOG_INFO("spu", "thread 0x%x '%s' start pc 0x%05x args 0x%llx 0x%llx", id, name.c_str(), ctx.pc,
              static_cast<unsigned long long>(args[0]), static_cast<unsigned long long>(args[1]));
     if (!native) {

@@ -4,6 +4,7 @@
 #include "thread.h"
 
 #include "runtime/log.h"
+#include <bit>
 #include "runtime/memory.h"
 #include "runtime/reservation.h"
 
@@ -249,7 +250,7 @@ static bool aux_has_work(uint32_t spu) {
     const uint32_t flag = (uint32_t(b[0x6C]) << 24) | (uint32_t(b[0x6D]) << 16) | (uint32_t(b[0x6E]) << 8) | b[0x6F];
     uint32_t allowed = g_allowed.load(std::memory_order_acquire);
     while (allowed) {
-        uint32_t w = static_cast<uint32_t>(_tzcnt_u32(allowed));
+        uint32_t w = static_cast<uint32_t>(std::countr_zero(static_cast<uint32_t>(allowed)));
         allowed &= allowed - 1;
         uint32_t j = w & 15;
         uint32_t cur = w < 16 ? b[0x20 + j] & 15 : b[0x20 + j] >> 4;

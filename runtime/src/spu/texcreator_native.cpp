@@ -615,8 +615,13 @@ void slice_row_simd(float* acc, const float* wx, const float* wy, const float* w
 
 struct CsrGuard {
     unsigned old;
+#if defined(__wasm__) || defined(__EMSCRIPTEN__)
+    /* No FCSR in WebAssembly (runtime/cycles.h). */
+    CsrGuard() {}
+#else
     CsrGuard() : old(_mm_getcsr()) { _mm_setcsr((old & ~0x6000u) | 0x6000u | 0x8040u); }
     ~CsrGuard() { _mm_setcsr(old); }
+#endif
 };
 
 }

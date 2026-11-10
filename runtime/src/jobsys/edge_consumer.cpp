@@ -532,7 +532,12 @@ void worker_main(int k) {
     host::set_thread_name("SPU edge worker " + std::to_string(k));
     if (k < static_cast<int>(cfg().cpus.size()) && cfg().cpus[k] >= 0 && cfg().cpus[k] < 64) host::set_affinity({cfg().cpus[k]});
     if (cfg().prio_set) host::set_priority(cfg().prio);
+    /* Flush-to-zero and the exception masks for the edge worker. WebAssembly has
+     * no FCSR: rounding is fixed and there are no FP exception flags, so the whole
+     * call is a no-op there. */
+#if !defined(__wasm__) && !defined(__EMSCRIPTEN__)
     _mm_setcsr((_mm_getcsr() & ~0x6000u) | 0x6000u | 0x8040u);
+#endif
     spu::hle::install_builtin();
     if (k == 0 && std::getenv("GOWA_JOBSYS_EDGE_PROFILE")) {
         crash::profile_thread(host::current_native(), "edge worker 0");
@@ -930,8 +935,13 @@ bool (*g_prev_guard)(ppu::Context&) = nullptr;
 
 struct CsrScope {
     unsigned saved;
+    /* WebAssembly has no FCSR (see runtime/cycles.h). */
+#if defined(__wasm__) || defined(__EMSCRIPTEN__)
+    CsrScope() {}
+#else
     CsrScope() : saved(_mm_getcsr()) { _mm_setcsr((saved & ~0x6000u) | 0x6000u | 0x8040u); }
     ~CsrScope() { _mm_setcsr(saved); }
+#endif
 };
 
 #ifdef JSEDGE_CORE
@@ -1025,7 +1035,9 @@ bool on_wait_previous(ppu::Context& ctx) {
     unsigned saved = _mm_getcsr();
     if (!csr) spu::hle::install_builtin();
     csr = true;
+#if !defined(__wasm__) && !defined(__EMSCRIPTEN__)
     _mm_setcsr((saved & ~0x6000u) | 0x6000u | 0x8040u);
+#endif
     for (uint32_t i = 0; vm::read16(counter); i++) {
         uint64_t before = g_st.edge.load(std::memory_order_relaxed);
         if (work_once()) {

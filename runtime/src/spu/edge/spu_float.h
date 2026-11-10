@@ -28,10 +28,17 @@ inline const bool g_glue_disp = g_avx2 && glue_disp_env();
 
 inline bool glue_disp_on() { return g_glue_disp; }
 
+/* Flush-to-zero and the exception masks. WebAssembly has no FCSR: rounding is
+ * fixed to nearest and there are no FP exception flags, so the guard is inert
+ * there (see runtime/cycles.h and the milestone docs). */
 struct CsrGuard {
+#if defined(__wasm__) || defined(__EMSCRIPTEN__)
+    CsrGuard() {}
+#else
     unsigned old;
     CsrGuard() : old(_mm_getcsr()) { _mm_setcsr((old & ~0x6000u) | 0x6000u | 0x8040u); }
     ~CsrGuard() { _mm_setcsr(old); }
+#endif
 };
 
 inline uint32_t bits(float f) { return std::bit_cast<uint32_t>(f); }

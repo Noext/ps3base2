@@ -1,5 +1,27 @@
 #pragma once
 
+/* WebAssembly has no FCSR: rounding is fixed and there are no FP exception flags.
+ * These helpers keep the save/modify/restore pattern compiling and make the wasm
+ * divergence explicit rather than scattering #ifdefs through the body. */
+#include <cstdint>
+#if !defined(__wasm__) && !defined(__EMSCRIPTEN__)
+#include <immintrin.h>
+#endif
+inline unsigned gowa_csr_read() {
+#if defined(__wasm__) || defined(__EMSCRIPTEN__)
+    return 0u;
+#else
+    return _mm_getcsr();
+#endif
+}
+inline void gowa_csr_write(unsigned v) {
+#if defined(__wasm__) || defined(__EMSCRIPTEN__)
+    (void)v;
+#else
+    _mm_setcsr(v);
+#endif
+}
+
 #include "renjob_ops.h"
 #include "runtime/jobsys.h"
 #include "spu/context.h"
@@ -24,8 +46,8 @@ struct Frame {
     renjob::xo::Ctl ctl;
     renjob::xo::V* R;
     spu::Context* prev;
-    Frame(uint8_t*, spu::Context& c, renjob::ChanHost& h) : old(_mm_getcsr()), R(reinterpret_cast<renjob::xo::V*>(c.gpr)), prev(t_ctx) {
-        if ((old & kWant) != kWant) _mm_setcsr(old | kWant);
+    Frame(uint8_t*, spu::Context& c, renjob::ChanHost& h) : old(gowa_csr_read()), R(reinterpret_cast<renjob::xo::V*>(c.gpr)), prev(t_ctx) {
+        if ((old & kWant) != kWant) gowa_csr_write(old | kWant);
         ctl.host = &h;
         ctl.ie = &c.interrupts_enabled;
         t_ctx = &c;
@@ -35,7 +57,7 @@ struct Frame {
             ctl.fail = true;
             ctl.fail_pc = renjob::xo::pref(R[0]) & 0x3fffc;
         }
-        if ((old & kWant) != kWant) _mm_setcsr(old);
+        if ((old & kWant) != kWant) gowa_csr_write(old);
         t_ctx = prev;
         jobsys::WholeResult r;
         r.done = !ctl.fail;
