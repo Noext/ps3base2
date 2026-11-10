@@ -3,9 +3,12 @@
 #include "runtime/host.h"
 #include "runtime/log.h"
 #include "runtime/memory.h"
+#include "runtime/hooks.h"
+#include "runtime/thread.h"
 #include "runtime/mem.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <mutex>
 #include <vector>
@@ -73,10 +76,38 @@ void remove(uint32_t id) {
 
 void note_sp(uint32_t id, uint32_t r1) {
     if (!r1) return;
-    std::lock_guard lk(g_m);
-    if (Entry* e = find_locked(id)) {
+    uint32_t guard_start = 0;
+    bool overflowed = false;
+    {
+        std::lock_guard lk(g_m);
+        Entry* e = find_locked(id);
+        if (!e) return;
         e->calls++;
         if (r1 < e->r1_min) e->r1_min = r1;
+        /* A stack grows DOWN. r1 below the usable bottom means the guest is
+         * writing into the guard, which in os mode the CPU would fault on and in
+         * bitset mode nothing would. Report it with the same information the
+         * fault handler gives: thread, r1, lr, and the lifted function. */
+        if (r1 < e->lo) {
+            overflowed = true;
+            guard_start = e->lo;
+        }
+    }
+    if (overflowed) {
+        static std::atomic<int> reported{0};
+        if (reported.fetch_add(1) < 8) {
+            char name[48] = {0};
+            uint32_t lr = 0;
+            if (auto t = guest::find(id)) {
+                std::snprintf(name, sizeof name, "%s", t->name.c_str());
+                lr = static_cast<uint32_t>(t->ctx.lr);
+            }
+            const std::string& fn = hooks::name_of(lr);
+            LOG_ERROR("stacks",
+                      "STACK GUARD OVERRUN: thread '%s' (id %u) r1 0x%08x below stack base 0x%08x lr 0x%08x (%s) -- "
+                      "a downward overflow; no CPU fault would have caught this in bitset mode",
+                      name[0] ? name : "?", id, r1, guard_start, lr, fn.c_str());
+        }
     }
 }
 

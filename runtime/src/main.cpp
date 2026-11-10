@@ -395,6 +395,21 @@ int main(int argc, char** argv) {
             q = *end ? end + 1 : end;
         }
     }
+    /* Stack margins on their own schedule, independent of the census: this is
+     * the number that says how close a thread came to its guard, and it has to
+     * be readable while the run is still alive. */
+    if (const char* iv = std::getenv("PS3BASE_STACK_DUMP")) {
+        const double every = std::atof(iv);
+        if (every > 0) {
+            std::thread([every] {
+                host::set_thread_name("stack dump");
+                for (;;) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(every * 1000)));
+                    stacks::dump();
+                }
+            }).detach();
+        }
+    }
     int cb_dump_at = std::getenv("PS3BASE_CENSUS_AT") ? std::atoi(std::getenv("PS3BASE_CENSUS_AT")) : 30;
     if (std::getenv("PS3BASE_CENSUS") && cb_dump_at > 0) {
         /* Periodic, not at exit: a run stopped by "timeout" gets SIGTERM and

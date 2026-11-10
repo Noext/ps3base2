@@ -67,16 +67,41 @@ path's "decommitted pages read as zero". That was wrong twice: it costs time on
 every `dealloc`, and it is unnecessary because the flat buffer starts zeroed and
 a recommit never rewrites it. Removed, with the reasoning left in the code.
 
+### The software guard check, and the margins made observable
+
+The prompt asks that the bitset mode replace the CPU's page protection with a
+software check that logs **thread, r1, lr and the lifted function**. That is now
+in `stacks::note_sp`: a stack grows down, so `r1 < stack base` is an overrun into
+the guard, and the report carries the thread name, `r1`, the stack base, `lr` and
+`hooks::name_of(lr)`.
+
+Measured on a real bitset run: **0 guard overruns**, so no false positives.
+
+The margins themselves were being collected but never printed, because
+`status_dump` runs on a path a killed process never reaches -- the same gap I
+recorded two rounds ago and had not closed. `PS3BASE_STACK_DUMP=<seconds>` now
+dumps the inventory from its own thread:
+
+    'main_thread'          r1_min 0xd0018640  margin 34368 bytes
+    'MinecraftSpursHdlr1'  r1_min 0xd0037d60  margin 32096 bytes
+    'MinecraftSpursHdlr0'  r1_min 0xd0053ec0  margin 16064 bytes
+    '_gcm_intr_thread'     r1_min 0xd0073ec0  margin 16064 bytes
+
+**90 such lines in 60 s.** Every thread keeps 15-34 KB of headroom, which is the
+first hard evidence that no guest thread in normal play comes near its guard.
+
+I placed that dump inside the `PS3BASE_CENSUS` block on the first attempt, so it
+only ran when the census was enabled; it now has its own thread. Caught by
+measuring, not by reading the diff.
+
 ### What is not yet true
 
 - `crash::install()` is skipped at **runtime**, not compiled out. For a real wasm
   build the crash reporter must leave the link line entirely; that is milestone 3
-  work, and the prompt's criterion ("symbols no longer referenced") is met today
-  only in the sense that the code path does not run.
-- Guard enforcement in bitset mode is a *registered range*, not yet consulted by
-  the PPU store path. The prompt asks for a software check that logs thread, r1,
-  lr and the lifted function; wiring that check is still open and is the first
-  task of the next round.
+  work.
+- The guard check samples at syscall entry, not on every store. A stack that
+  overruns and returns within one call would be missed. Acceptable for this
+  milestone (the failure it hunts is a persistent corruption), but stated.
 
 ---
 
