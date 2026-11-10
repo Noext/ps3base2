@@ -6,6 +6,7 @@
 #include "runtime/loader.h"
 #include "runtime/log.h"
 #include "spu/aot.h"
+#include "runtime/stacks.h"
 #include "runtime/sysutil_events.h"
 #include "hle/common.h"
 #include "runtime/trace.h"
@@ -460,6 +461,11 @@ int main(int argc, char** argv) {
         LOG_INFO("main", "SPU VERDICT: %llu distinct interpreted blocks, %llu interpreted instructions -- %s",
                  static_cast<unsigned long long>(nb), static_cast<unsigned long long>(ni),
                  nb == 0 ? "100% compiled" : "NOT fully compiled");
+        /* Always print the stack inventory at the end of a run: the margin
+         * between the lowest r1 and the guard is the number that says whether
+         * any thread came close to overrunning, and a measurement nobody prints
+         * is a measurement nobody can act on. */
+        stacks::dump();
         if (const uint64_t sc = spu::aot::shadow_checks(); sc || spu::aot::shadow_diffs())
             LOG_INFO("main", "SPU SHADOW: %llu block executions mirrored, %llu divergences -- %s",
                      static_cast<unsigned long long>(sc), static_cast<unsigned long long>(spu::aot::shadow_diffs()),
