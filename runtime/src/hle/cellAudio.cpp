@@ -17,7 +17,9 @@
 #include <audioclient.h>
 #pragma comment(lib, "ole32.lib")
 #else
+#if !defined(__wasm__) && !defined(__EMSCRIPTEN__)
 #include <SDL3/SDL.h>
+#endif
 #endif
 #include <algorithm>
 #include <cstdio>
@@ -101,6 +103,18 @@ struct Output {
         if (FAILED(render->GetBuffer(n, &dst))) return;
         std::memcpy(dst, stereo, size_t(n) * 8);
         render->ReleaseBuffer(n, 0);
+    }
+};
+#elif defined(__wasm__) || defined(__EMSCRIPTEN__)
+/* The browser has no SDL audio device. Every other part of the HLE -- port
+ * allocation, the index area, the block/offset protocol -- is device-independent,
+ * and a title that receives a valid port config proceeds. Only the playback sink
+ * is dropped; milestone 4 attaches an AudioWorklet to this same seam. */
+struct Output {
+    bool open() { return false; }
+    uint64_t underruns = 0;
+    void write(const float* stereo, uint32_t n) {
+        (void)stereo; (void)n;
     }
 };
 #else
