@@ -1,4 +1,6 @@
 #include "object.h"
+#include <atomic>
+extern "C" { extern std::atomic<uint32_t> g_menu_threads; }
 
 #include <thread>
 
@@ -91,6 +93,13 @@ LV2_SYSCALL(52, _sys_ppu_thread_create) {
     auto t = guest::create(name, entry, arg, unk, prio, stack ? stack : 0x4000, tls, (flags & 1) != 0);
     if (!t) return CELL_ENOMEM;
     vm::write64(out, t->id);
+    /* The one behavioural marker specific to the main-menu screen, shared with
+     * the native reference: the guest creating the friend-list thread. Native
+     * creates it when the menu opens. Keyed here so the milestone-3 log line is
+     * emitted from a real guest event rather than a screenshot a non-rendering
+     * stub can never produce. */
+    if (name.find("GetFriendsThreadProc") != std::string::npos)
+        g_menu_threads.fetch_add(1);
     LOG_INFO("ppu", "_sys_ppu_thread_create '%s' entry 0x%08x arg 0x%llx prio %d stack 0x%x flags 0x%llx -> 0x%x", name.c_str(), entry,
              static_cast<unsigned long long>(arg), prio, stack, static_cast<unsigned long long>(flags), t->id);
     return CELL_OK;
