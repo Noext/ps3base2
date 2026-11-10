@@ -67,3 +67,8 @@ framelog*
 __pycache__/
 *.pyc
 
+
+# Firmware extracted from a PUP. The PUP itself and everything inside it is
+# Sony's; this tree only ever carries the modules already decrypted into fw/.
+/fw-src/
+

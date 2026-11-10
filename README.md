@@ -106,6 +106,7 @@ higher values make it unusable for anything else.
 | `docs/decisions.md` | why the structure is this way (D-001 to D-006), and the abandon criterion |
 | `docs/RUN.md` | the exact command that launches a run, and how to judge one |
 | `docs/setup.md` | discs, firmware and key material -> liftable sources |
+| `docs/FIRMWARE.md` | where the firmware lives, how to extract it, and why a missing module looks like a black screen |
 | `docs/REFERENCES.md` | where a fact comes from: the file that answers a question |
 | `docs/forcings.md` | every active forcing, as a debt to be replaced |
 | `docs/PLAY.md`, `docs/recon/` | the Minecraft and GTA San Andreas tracks |
