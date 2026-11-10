@@ -194,6 +194,20 @@ int main(int argc, char** argv) {
                          static_cast<unsigned long long>(c.gpr[1]));
         return false;
     });
+    /* f_0021da50 is the polled predicate: gpr[3] is the index, and it returns
+     * ld8(0xCE5AA0 + index). Print the index and the byte so the wait is read
+     * rather than inferred. */
+    hooks::add_guard(0x21da50, [](ppu::Context& c) {
+        static std::atomic<int> n{0};
+        const int k = n.fetch_add(1);
+        if (k < 5) {
+            const uint32_t idx = static_cast<uint32_t>(c.gpr[3]);
+            const uint32_t ea = 0x00CE0000u + 23200u + idx;
+            std::fprintf(stderr, "[pollprobe] #%d idx=0x%x ea=0x%08x byte=%u\n", k, idx, ea,
+                         vm::range_mapped(ea, 1) ? vm::ptr(ea)[0] : 255);
+        }
+        return false;
+    });
     hooks::add_guard(0x5d2b44, [](ppu::Context& c) {
         static std::atomic<int> n{0};
         const int k = n.fetch_add(1);
@@ -328,6 +342,20 @@ int main(int argc, char** argv) {
                         if (!back || back <= sp || back > 0x10000000) break;
                         sp = back;
                     }
+                }
+            }
+            /* The guest sits at 0x3a18b0 for the whole window. That address is
+             * inside f_003a1884, whose two exits are usleep (141) and yield (43).
+             * Count both so "stuck in the loop" and "looping normally" can be
+             * told apart. */
+            {
+                static uint32_t last43 = 0, last141 = 0;
+                const uint32_t c43 = main_thread->syscall_hist[43];
+                const uint32_t c141 = main_thread->syscall_hist[141];
+                if (c43 != last43 || c141 != last141) {
+                    std::printf("ps3base-wasm: hist yield43=%u usleep141=%u\n", c43, c141);
+                    last43 = c43;
+                    last141 = c141;
                 }
             }
             if (main_thread->ctx.cia == 0x1307a08u) {
