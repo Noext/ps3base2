@@ -236,7 +236,15 @@ void call_indirect(Context& ctx, uint8_t* base, uint32_t addr) {
     }
     Func fn = lookup(addr);
     if (!fn) {
-        LOG_FATAL("ppu", "unknown indirect target 0x%08x (lr=0x%08llx, thread 0x%x)", addr, static_cast<unsigned long long>(ctx.lr), ctx.thread_id);
+        /* Name the object the vtable came from: the null is a field of a structure
+         * the guest never initialised, and the register holding it says which. */
+        LOG_FATAL("ppu",
+                  "unknown indirect target 0x%08x (lr=0x%08llx, thread 0x%x) r3=0x%llx r4=0x%llx "
+                  "r9=0x%llx r31=0x%llx ctr=0x%llx",
+                  addr, static_cast<unsigned long long>(ctx.lr), ctx.thread_id,
+                  static_cast<unsigned long long>(ctx.gpr[3]), static_cast<unsigned long long>(ctx.gpr[4]),
+                  static_cast<unsigned long long>(ctx.gpr[9]), static_cast<unsigned long long>(ctx.gpr[31]),
+                  static_cast<unsigned long long>(ctx.ctr));
     }
     force::on_call(addr);
     const uint32_t saved_lr = static_cast<uint32_t>(ctx.lr);
