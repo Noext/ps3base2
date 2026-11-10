@@ -1,5 +1,8 @@
 #include "object.h"
 
+#include "runtime/image.h"
+#include "runtime/log.h"
+
 #include <vector>
 
 namespace lv2 {
@@ -42,6 +45,30 @@ LV2_SYSCALL(330, sys_mmapper_allocate_address) {
     std::lock_guard lk(g_lock);
     uint32_t a = vm::reserve_slot(static_cast<uint32_t>(size), static_cast<uint32_t>(align));
     if (!a) return CELL_ENOMEM;
+    /* An mmapper area that contains a guest image corrupts that image.
+     *
+     * Measured on Red Dead Redemption: layout_for.py placed the firmware modules
+     * at 0x20000000 and up, sys_mmapper_allocate_address handed the guest
+     * 0x10000000 bytes starting at exactly 0x20000000, and the guest wrote over
+     * liblv2. module_start then parked in sys_cond_wait for a wakeup nobody was
+     * left to send: black screen, 0.2% draws, no crash, no unimplemented import.
+     *
+     * reserve_slot cannot see the image table (vm does not depend on it), so the
+     * check lives here, where the runtime knows both. RPCS3 places modules at
+     * 0x30000000 for the same reason (PPUModule.cpp:2242). */
+    for (uint32_t i = 0; i < image::image_count; i++) {
+        const image::ImageEntry& im = image::images[i];
+        const uint64_t area_lo = a, area_hi = uint64_t(a) + size;
+        const uint64_t img_lo = im.text_lo, img_hi = uint64_t(im.text_hi) + 0x1000000;
+        if (area_lo < img_hi && img_lo < area_hi) {
+            LOG_ERROR("mmapper", "allocate_address 0x%llx -> 0x%08x..0x%08x OVERLAPS image "
+                      "'%s' (0x%08x..0x%08x); refusing",
+                      static_cast<unsigned long long>(size), a, uint32_t(area_hi),
+                      im.name, im.text_lo, im.text_hi);
+            vm::release_slot(a);
+            return CELL_ENOMEM;
+        }
+    }
     g_areas[a] = {a, static_cast<uint32_t>(size), (flags & 0xF00) == 0x200 ? 0x10000u : 0x100000u};
     vm::write32(out, a);
     LOG_INFO("mmapper", "allocate_address 0x%llx -> 0x%08x", static_cast<unsigned long long>(size), a);

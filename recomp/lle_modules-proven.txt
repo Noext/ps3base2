@@ -1,0 +1,8 @@
+liblv2.prx
+libsysmodule.prx
+libsre.prx
+libgcm_sys.prx
+libfs.prx
+libvdec.prx
+libsmvd2.prx
+libspurs_jq.prx

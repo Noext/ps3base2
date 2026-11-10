@@ -6,42 +6,42 @@
  },
  {
   "name": "liblv2",
-  "elf": "../fw/4.91/reloc/liblv2.elf",
-  "file": "fw/4.91/reloc/liblv2.elf"
+  "elf": "../out-mc/gen/reloc/liblv2.elf",
+  "file": "out-mc/gen/reloc/liblv2.elf"
  },
  {
   "name": "libsysmodule",
-  "elf": "../fw/4.91/reloc/libsysmodule.elf",
-  "file": "fw/4.91/reloc/libsysmodule.elf"
+  "elf": "../out-mc/gen/reloc/libsysmodule.elf",
+  "file": "out-mc/gen/reloc/libsysmodule.elf"
  },
  {
   "name": "libsre",
-  "elf": "../fw/4.91/reloc/libsre.elf",
-  "file": "fw/4.91/reloc/libsre.elf"
+  "elf": "../out-mc/gen/reloc/libsre.elf",
+  "file": "out-mc/gen/reloc/libsre.elf"
  },
  {
   "name": "libgcm_sys",
-  "elf": "../fw/4.91/reloc/libgcm_sys.elf",
-  "file": "fw/4.91/reloc/libgcm_sys.elf"
+  "elf": "../out-mc/gen/reloc/libgcm_sys.elf",
+  "file": "out-mc/gen/reloc/libgcm_sys.elf"
  },
  {
   "name": "libfs",
-  "elf": "../fw/4.91/reloc/libfs.elf",
-  "file": "fw/4.91/reloc/libfs.elf"
+  "elf": "../out-mc/gen/reloc/libfs.elf",
+  "file": "out-mc/gen/reloc/libfs.elf"
  },
  {
   "name": "libvdec",
-  "elf": "../fw/4.91/reloc/libvdec.elf",
-  "file": "fw/4.91/reloc/libvdec.elf"
+  "elf": "../out-mc/gen/reloc/libvdec.elf",
+  "file": "out-mc/gen/reloc/libvdec.elf"
  },
  {
   "name": "libsmvd2",
-  "elf": "../fw/4.91/reloc/libsmvd2.elf",
-  "file": "fw/4.91/reloc/libsmvd2.elf"
+  "elf": "../out-mc/gen/reloc/libsmvd2.elf",
+  "file": "out-mc/gen/reloc/libsmvd2.elf"
  },
  {
   "name": "libspurs_jq",
-  "elf": "../fw/4.91/reloc/libspurs_jq.elf",
-  "file": "fw/4.91/reloc/libspurs_jq.elf"
+  "elf": "../out-mc/gen/reloc/libspurs_jq.elf",
+  "file": "out-mc/gen/reloc/libspurs_jq.elf"
  }
 ]

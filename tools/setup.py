@@ -103,7 +103,12 @@ def step_reloc(args):
     been worse at run time (lookup() returns the first range containing an
     address, so every liblv2 call would have run the game's code).
     """
-    reloc = os.path.join(args.fw, "reloc")
+    # A reloc directory PER OUTPUT TREE, not one under fw/. Every title's lift
+    # records the module bases it was built against, so a shared fw/<ver>/reloc
+    # serves the last title lifted and breaks the others at run time: after
+    # relocating Red Dead's modules to 0x30000000, Minecraft and GTA both faulted
+    # at guest 0x20013bd8 -- the liblv2 OPD address they were built to expect.
+    reloc = os.path.join(args.gen_root, "reloc")
     os.makedirs(reloc, exist_ok=True)
     layout = os.path.join(args.gen_root, "lle_layout.json")
     os.makedirs(args.gen_root, exist_ok=True)

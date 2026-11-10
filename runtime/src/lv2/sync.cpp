@@ -230,6 +230,21 @@ LV2_SYSCALL(106, sys_cond_destroy) {
 LV2_SYSCALL(107, sys_cond_wait) {
     auto c = get<Cond>(u32arg(ctx, 0));
     if (!c) return CELL_ESRCH;
+    /* PS3BASE_COND_TRACE: name the cond, its mutex owner and the timeout. A
+     * guest that waits forever on a cond nobody signals hangs without a crash,
+     * without an unimplemented import and without a discovery target, which is
+     * exactly the shape of the Red Dead Redemption freeze. Counting signals and
+     * waits by cond id is what tells "never signalled" from "signalled on the
+     * wrong object". */
+    static const bool ctrace = std::getenv("PS3BASE_COND_TRACE") != nullptr;
+    if (ctrace) {
+        static std::atomic<int> n{0};
+        if (n.fetch_add(1) < 200)
+            LOG_INFO("cond", "wait id=0x%08x mutex=0x%08x owner=0x%x timeout=%llu lr=0x%08x",
+                     u32arg(ctx, 0), u32arg(ctx, 1), c->mutex->owner,
+                     static_cast<unsigned long long>(u64arg(ctx, 1)),
+                     static_cast<uint32_t>(ctx.lr));
+    }
     auto& m = *c->mutex;
     uint32_t me = current_thread_id();
     std::unique_lock lk(m.m);
@@ -251,6 +266,12 @@ LV2_SYSCALL(107, sys_cond_wait) {
 LV2_SYSCALL(108, sys_cond_signal) {
     auto c = get<Cond>(u32arg(ctx, 0));
     if (!c) return CELL_ESRCH;
+    if (std::getenv("PS3BASE_COND_TRACE")) {
+        static std::atomic<int> n{0};
+        if (n.fetch_add(1) < 200)
+            LOG_INFO("cond", "signal id=0x%08x waiters=%zu lr=0x%08x",
+                     u32arg(ctx, 0), c->waiters.size(), static_cast<uint32_t>(ctx.lr));
+    }
     std::lock_guard lk(c->mutex->m);
     if (!c->waiters.empty()) {
         c->waiters.front()->woken = true;

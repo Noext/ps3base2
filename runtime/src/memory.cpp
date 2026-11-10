@@ -1,5 +1,6 @@
 #include <atomic>
 #include "runtime/memory.h"
+#include "runtime/image.h"
 #include "runtime/mem.h"
 #include "runtime/regions.h"
 #include "runtime/log.h"
@@ -54,8 +55,37 @@ RegionInfo* region_table() {
 std::mutex g_lock;
 std::map<uint32_t, uint32_t> g_slots = {{0x00000000, 0x10000000}};
 
+/* Every guest image's code range, as a slot, so the allocator never hands the
+ * guest memory a firmware module already occupies.
+ *
+ * Measured on Red Dead Redemption: layout_for.py placed the modules from
+ * 0x30000000 up (where RPCS3 maps its fixed segment), and sys_vm_memory_map then
+ * asked for 181 MB and got "region 2 placed at 0x30000000" -- straight over
+ * liblv2. The title reported "final heap alloc failed, code 80010004" and then
+ * faulted writing into the module.
+ *
+ * The image table is the authority on what is occupied, so it seeds g_slots once,
+ * before any allocation. Lazy because the table is generated per title and this
+ * file is linked whether or not a title is being built.
+ */
+static void seed_image_slots_locked() {
+    static bool done = false;
+    if (done) return;
+    done = true;
+    for (uint32_t i = 0; i < image::image_count; i++) {
+        const image::ImageEntry& im = image::images[i];
+        if (!im.text_hi) continue;
+        /* Round out to the 16 MiB slot the modules are placed in, so the data
+         * segment above the code is covered too. */
+        const uint32_t lo = im.text_lo & ~0xFFFFFFu;
+        const uint32_t hi = (im.text_hi + 0xFFFFFFu) & ~0xFFFFFFu;
+        if (hi > lo) g_slots[lo] = hi - lo;
+    }
+}
+
 uint32_t reserve_slot_locked(uint32_t size, uint32_t align) {
     if (!align) align = 0x10000000;
+    seed_image_slots_locked();
     for (uint64_t a = 0x10000000; a + size <= vm::region_bases().user_bound; a += align) {
         bool clash = false;
         for (auto& [b, n] : g_slots) {

@@ -80,3 +80,80 @@ weeks** or **thirty recorded attempts** on the same wall, and two of these three
 hold -- no new syscall implemented in a week, no flip count increase in a week,
 the blocking defect reproduces identically after three distinct diagnoses --
 then stop and document the wall rather than continuing.
+
+---
+
+## D-007 -- A system module that owns dispatcher state runs in HLE, not LLE
+
+`libsysutil` is forced to HLE by a `ModuleOverride`, against the general rule of
+D-001 (lift Sony's libraries, rewrite only the kernel).
+
+**Why, measured.** With `libsysutil.sprx` lifted and loaded as LLE, Red Dead
+Redemption's main thread parks on a futex before it calls a single import: the log
+stops right after `mmapper: allocate_address`, no syscall is issued, no import is
+reached, and the process sits at 18% CPU with **zero frame flips** for the whole
+run. The same binary with the module on the HLE path presents **2341 frames in
+40 seconds**.
+
+The module is the `cellSysutil` dispatcher. Its lifted code drives callback and
+event state that the HLE handlers already own, so running both gives one state
+two writers and the guest waits for a wakeup the other side never sends. D-001
+assumes the lifted module is the only writer; where that is false, the choice is
+between deleting the HLE handlers or not lifting the module, and the HLE handlers
+are what the other two titles use.
+
+**Consequence.** `hle/support.cpp` registers the override with the measurement in
+its comment. A module belongs on this list when its lifted code and an HLE
+handler would each believe they own the same state. It is not a way to paper over
+a broken lift: the LLE attempt is what proved it deadlocks.
+
+
+---
+
+## D-008 -- Always start from the proven LLE list; add only self-contained libraries
+
+A new title begins with **exactly** the modules Minecraft and GTA run on:
+
+    liblv2  libsysmodule  libsre  libgcm_sys  libfs  libvdec  libsmvd2
+
+Everything else goes through the existing HLE until the count says otherwise. Then,
+and only then, a module may be added to LLE if it is **self-contained**: it
+provides functions and owns no dispatcher state.
+
+**Never in LLE:** `libsysutil` and its family (`libsysutil_np`, `_np2`,
+`_np_trophy`), savedata, the dialogs, NP, the pad, the audio. Those hold state the
+HLE already holds, so lifting them gives that state two writers.
+
+**Why, measured twice.**
+
+1. `libsysutil` as LLE parks Red Dead Redemption's main thread in
+   `sys_cond_wait` forever: `PS3BASE_COND_TRACE` shows one wait on cond
+   `0x86001400`, `timeout=0`, and **zero signals**. Only one PPU thread exists, so
+   nothing can signal. Black screen, 0.2% draws, no crash, no unimplemented import.
+2. `libsysutil` as HLE flips (2341 frames in 40 s) but the title calls 230 exported
+   C++ symbols the HLE does not provide (`cxml::Document`,
+   `sysutil_cxmlutil::FixedMemory`, `cellSysutilPacketBegin`), so it renders
+   nothing. It is a library of 230 exports, not a dispatcher a handler can replace.
+
+So the module belongs to neither list, and the title needs its HLE surface written
+instead. That is the work D-006 measures.
+
+**Consequence.** `recomp/lle_modules.txt` carries the seven and a marked section
+of additions, each with the measurement that justified it. Red Dead Redemption
+adds `libnet`, `libfiber`, `libssl`, `libhttp`, `librtc`: 153 of its 343 imports
+are covered, leaving **190 for HLE**.
+
+## D-009 -- Firmware modules live above every region the runtime allocates
+
+`layout_for.py` places modules from the title's text extent upward, in the band
+`0x30000000..0x3F000000` -- where RPCS3 maps its fixed segment
+(`PPUModule.cpp:2242`).
+
+**Why, measured.** An earlier band at `0x20000000` was chosen as "above the slot
+allocator's floor", and that floor is the problem: `reserve_slot_locked` walks up
+from `0x10000000` in `0x10000000` steps, so `sys_mmapper_allocate_address` handed
+the guest `0x20000000` for a 256 MB request -- the same memory eight modules were
+placed in. `mmapper.cpp` now refuses and logs any allocation that overlaps an
+image, and the layout is asserted against the video, stack and SPU regions,
+including the compact layout's `0x50000000`.
+
