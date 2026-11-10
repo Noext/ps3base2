@@ -405,20 +405,17 @@ int main(int argc, char** argv) {
                  * DO run (round 130), so the question is now whether they touch
                  * this base at all. Print every non-zero byte in the window. */
                 {
-                    /* Is the polled word a COUNTER (rises) or a PARITY (0/1)? A
-                     * counter that stalls proves the frame loop is stuck; a parity
-                     * that flips proves it is running. Sample every 20 ms for two
-                     * seconds and report first, last, and how often it changed. */
-                    uint32_t first = vm::read32(0x00be0704u), prev = first, changes = 0, maxv = first;
-                    for (int k = 0; k < 100; k++) {
-                        const uint32_t now = vm::read32(0x00be0704u);
-                        if (now != prev) changes++;
-                        if (now > maxv) maxv = now;
+                    /* The word changes once (1 -> 0) between two of my one-second
+                     * samples. Catch the transition itself: poll every loop turn
+                     * and print the exact second it moves, so the log around that
+                     * second can be read for what caused it. */
+                    static uint32_t prev = vm::read32(0x00be0704u);
+                    const uint32_t now = vm::read32(0x00be0704u);
+                    if (now != prev) {
+                        std::fprintf(stderr, "[transition] t=%ds 0xbe0704 %u -> %u (flips=%llu)\n",
+                                     i, prev, now);
                         prev = now;
-                        host::yield();
                     }
-                    std::fprintf(stderr, "[counter] t=%ds first=%u last=%u max=%u changes_in_100=%u\n",
-                                 i, first, prev, maxv, changes);
                 }
             }
             if ((i % 40) == 39) {
