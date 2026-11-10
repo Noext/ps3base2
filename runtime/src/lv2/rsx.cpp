@@ -43,6 +43,12 @@ namespace rdcapture { void maybe_capture(uint64_t flips); }
 namespace lv2 {
 
 namespace {
+#if defined(PS3BASE_RSX_METHOD_TRACE) && PS3BASE_RSX_METHOD_TRACE
+std::atomic<uint32_t> g_texunit_writes[64];
+std::atomic<uint32_t> g_tex_first_reg{0};
+std::atomic<int> g_tex_first_count{0};
+#endif
+
 
 constexpr uint32_t CONTEXT_ID = 0x55555555;
 /* Now taken from the region table: PS3BASE_MEMORY=compact moves video memory
@@ -253,6 +259,36 @@ void execute(uint32_t reg, uint32_t arg) {
         double now = logging::uptime();
         if (now >= trace_at && now < trace_end) LOG_INFO("rsxm", "0x%04x 0x%08x", reg, arg);
     }
+#if defined(PS3BASE_RSX_METHOD_TRACE) && PS3BASE_RSX_METHOD_TRACE
+    if (reg >= 0x1A00 && reg < 0x2000) {
+        const uint32_t k = (reg - 0x1A00) / 0x20;
+        if (k < 64) g_texunit_writes[k].fetch_add(1, std::memory_order_relaxed);
+        /* Record the first few EXACT registers: "1A00-1FFF has writes" does not say
+         * which unit or which field, and the stub hooks on field 0 only. */
+        if (g_tex_first_count.load(std::memory_order_relaxed) < 12) {
+            const int n = g_tex_first_count.fetch_add(1, std::memory_order_relaxed);
+            if (n < 12) LOG_INFO("texreg", "first write 0x%04x = 0x%08x (unit %u field 0x%x)",
+                                 reg, arg, k, (reg - 0x1A00) % 0x20);
+        }
+    }
+#endif
+#if defined(PS3BASE_TEXSTAT) && PS3BASE_TEXSTAT
+    /* Does the guest write a TEXTURE-UNIT register (0x1A00 + unit*0x20, field 0)
+     * at all? Two instruments agreed on zero for wasm; this counts it in the same
+     * place the writable registers are handled, so a native run can be compared
+     * with identical instrumentation. */
+    {
+        static std::atomic<uint32_t> hits{0}, total{0};
+        total.fetch_add(1, std::memory_order_relaxed);
+        if (reg >= 0x1A00 && reg < 0x1C00 && ((reg - 0x1A00) % 0x20) == 0) {
+            const uint32_t n = hits.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (n <= 5) LOG_INFO("texstat", "TEXTURE-UNIT write #%u reg 0x%04x arg 0x%08x", n, reg, arg);
+        }
+        const uint32_t t = total.load(std::memory_order_relaxed);
+        if (t && (t % 500000) == 0)
+            LOG_INFO("texstat", "methods %u, texture-unit writes %u", t, hits.load());
+    }
+#endif
     if (reg < 0xE000) gpu::rsx::method(reg, arg);
     switch (reg) {
     case 0x50: case 0x68: case 0x6C: case 0x1D70: case 0x1D74: case 0x1800:
