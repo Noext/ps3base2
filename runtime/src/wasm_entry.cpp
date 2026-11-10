@@ -18,6 +18,7 @@
 #include "runtime/regions.h"
 #include "runtime/thread.h"
 #include "runtime/hooks.h"
+#include "runtime/codewatch.h"
 #include "ppu/ops.h"
 
 #include <atomic>
@@ -196,6 +197,13 @@ int main(int argc, char** argv) {
     std::printf("ps3base-wasm: entry probe on f_005d2b44 (flags=%u, impl=%d)\n",
                 static_cast<unsigned>(ppu::hook_flags[0x5d2b44 >> 2]),
                 ppu::hook_impl ? 1 : 0);
+
+    /* Watch the line containing the global that is never written. Every store
+     * through rsv::store_range reports its caller, so the writer is read out of
+     * the machine rather than guessed. PS3BASE_CODEWATCH_NOTE cannot be used:
+     * getenv is inert in wasm. */
+    cw::note_line(0x00D6E800);
+    std::printf("ps3base-wasm: write watch armed on 0x00d6e800\n");
 #endif
 
     std::printf("ps3base-wasm: starting the LV2 entry...\n");
