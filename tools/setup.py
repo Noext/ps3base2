@@ -1,5 +1,6 @@
 import argparse
 import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -116,8 +117,38 @@ def step_ppu(args):
     out = os.path.join(args.out_root, "ppu")
     if not os.path.exists(args.nid_db):
         raise SystemExit("missing NID database %s (tools/nid_db.py)" % args.nid_db)
+    # Static seeds first: relocation targets and function descriptors the binary
+    # already names. They cost nothing at run time and shrink the dynamic loop to
+    # what neither source reaches.
+    seeds_dir = os.path.join(args.gen_root, "seeds")
+    os.makedirs(seeds_dir, exist_ok=True)
+    manifest = json.load(open(args.images))
+    root = os.path.dirname(os.path.abspath(args.images))
+    for spec in manifest:
+        elf = os.path.join(root, spec["elf"])
+        if not os.path.exists(elf):
+            continue
+        dst = os.path.join(seeds_dir, spec["name"] + ".txt")
+        r = run(["tools/static_seeds.py", "--elf", elf, "--name", spec["name"], "--out", dst], quiet=False)
     log("PPU recompilation into %s from %s" % (out, args.images))
-    run(["recomp/ppu/codegen.py", args.images, args.nid_db, out], quiet=False)
+    if not try_ppu(args, out, use_static_seeds=True):
+        # One image's static seeds can produce code that does not compile (a
+        # seed inside an already-explored function used to split it and leave a
+        # goto to a label the generator never emitted). Rather than block the
+        # whole lift, retry without them and say so: the dynamic loop is the
+        # safety net, and a lift that builds beats a lift that is "complete".
+        log("PPU recompilation FAILED with static seeds; retrying without them")
+        if not try_ppu(args, out, use_static_seeds=False):
+            raise SystemExit("PPU recompilation failed with and without static seeds")
+
+
+def try_ppu(args, out, use_static_seeds):
+    env = dict(os.environ)
+    env["PS3BASE_STATIC_SEEDS"] = "1" if use_static_seeds else "0"
+    import subprocess
+    r = subprocess.run([sys.executable, "recomp/ppu/codegen.py", args.images, args.nid_db, out],
+                       cwd=ROOT, env=env, text=True)
+    return r.returncode == 0
 
 
 def step_blocks(args):
