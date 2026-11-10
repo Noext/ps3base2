@@ -196,6 +196,22 @@ int main(int argc, char** argv) {
      * this and with what". */
     /* Who asks f_0021c178 for the 69-hour sleep? Guard its entry and record the
      * caller and argument. */
+    /* Every sys_event_flag_set site in the lifted binary sits in libsre, at three
+     * addresses. Guard each so "the setter is never reached" can be told from "the
+     * setter runs and the pose is wrong" -- the two hypotheses from round 53. */
+    for (uint32_t a : {0x12116dcu, 0x12117dcu, 0x1211aacu}) {
+        hooks::add_guard(a, [](ppu::Context& c) {
+            static std::atomic<int> n{0};
+            const int k = n.fetch_add(1);
+            if (k < 12)
+                std::fprintf(stderr, "[setsite] pc=0x%08x r3=0x%llx r4=0x%llx lr=0x%llx\n",
+                             static_cast<unsigned>(c.cia),
+                             static_cast<unsigned long long>(c.gpr[3]),
+                             static_cast<unsigned long long>(c.gpr[4]),
+                             static_cast<unsigned long long>(c.lr));
+            return false;
+        });
+    }
     hooks::add_guard(0x21c178, [](ppu::Context& c) {
         static std::atomic<int> n{0};
         const int k = n.fetch_add(1);
