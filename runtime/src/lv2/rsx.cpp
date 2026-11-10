@@ -712,6 +712,14 @@ LV2_SYSCALL(670, sys_rsx_context_allocate) {
     vm::write64(u32arg(ctx, 2), g_rsx.driver_info);
     vm::write64(u32arg(ctx, 3), g_rsx.reports);
     if (!g_rsx.running.exchange(true)) {
+#if defined(__wasm__) || defined(__EMSCRIPTEN__)
+        /* No renderer and no 32 MB stack request: the browser main thread is the
+         * one that would run the FIFO loop, and pthread_attr_setstacksize of 32 MB
+         * aborts there. The guest can allocate its RSX context and continue; it
+         * simply never gets a draw, which is the documented state of a
+         * no-display build (docs/webassembly/M3-FIRMWARE-FIX.md). */
+        LOG_WARN("rsx", "fifo/vblank threads not started: no renderer in this build");
+#else
         /* A dedicated stack for the FIFO thread: the vertex decompiler builds
          * multi-megabyte GLSL strings, and the default 8 MiB was not enough --
          * the overflow corrupted an ostream and surfaced as a crash inside
@@ -727,6 +735,7 @@ LV2_SYSCALL(670, sys_rsx_context_allocate) {
         });
         t.detach();
         std::thread(vblank_thread).detach();
+#endif
     }
     LOG_INFO("rsx", "context at 0x%08x (driver 0x%08x reports 0x%08x queue 0x%x)", area, g_rsx.driver_info, g_rsx.reports, g_rsx.queue_id);
     return CELL_OK;

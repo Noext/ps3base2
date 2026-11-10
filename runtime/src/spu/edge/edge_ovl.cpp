@@ -106,6 +106,10 @@ void start_logger() {
 
 }
 
+/* stats_on() also exists in edge_ovl_probe.cpp for the build with no edge codegen
+ * (the wasm one). This file provides it when compiled normally, so the two never
+ * collide. */
+#if !defined(PS3BASE_EDGE_NO_CODEGEN)
 bool stats_on() {
     static const bool on = [] {
         const char* e = std::getenv("GOWA_EDGE_STATS");
@@ -113,6 +117,7 @@ bool stats_on() {
     }();
     return on;
 }
+#endif
 
 const Entry* find(const uint8_t* ls, uint32_t pc) {
     if ((pc & 3) || pc + 8 > spu::LS_SIZE) return nullptr;
