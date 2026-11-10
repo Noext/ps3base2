@@ -727,7 +727,16 @@ LV2_SYSCALL(670, sys_rsx_context_allocate) {
          * vblank_thread needs no GPU: it increments a counter and sleeps. Starting
          * it restores the clock the guest is waiting on. */
         std::thread(vblank_thread).detach();
-        LOG_WARN("rsx", "fifo thread skipped, vblank thread started (no renderer in this build)");
+        /* The FIFO thread is what the guest actually waits on: it advances the
+         * RSX-context field the title polls. It was skipped because it asks for a
+         * 32 MB stack, which aborts in the browser.
+         *
+         * A plain std::thread gets the default stack (Emscripten's
+         * -sSTACK_SIZE, 5 MB unless raised) and that is enough for the decompiler
+         * as long as its GLSL buffer is bounded -- which it is by
+         * kGlslCap below. So start it without the pthread_attr dance. */
+        std::thread(fifo_thread).detach();
+        LOG_WARN("rsx", "fifo and vblank threads started with default stacks");
 #else
         /* A dedicated stack for the FIFO thread: the vertex decompiler builds
          * multi-megabyte GLSL strings, and the default 8 MiB was not enough --
