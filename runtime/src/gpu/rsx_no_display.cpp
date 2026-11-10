@@ -208,6 +208,15 @@ void method(uint32_t reg, uint32_t arg) {
         if (field == 0 && unit < 16) note_texture_unit(unit, arg & 0x7FFFFFFF);
         return;
     }
+    /* Record the ORDER of surface/texture register writes in the first window: a
+     * routine that sets a surface writes format, clip, offset together. Seeing
+     * which of them appear, and in what order, shows where the game stops. */
+    if ((reg >= 0x200 && reg <= 0x220) || (reg >= 0x1A00 && reg < 0x1C00)) {
+        static std::atomic<int> n{0};
+        const int k = n.fetch_add(1);
+        if (k < 14)
+            LOG_INFO("surfseq", "#%d reg 0x%03x = 0x%08x", k, reg, arg);
+    }
     switch (reg) {
     case INLINE_ARRAY:
     case ARRAY_ELEMENT16:
