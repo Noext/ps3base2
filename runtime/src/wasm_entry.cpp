@@ -11,6 +11,9 @@
 #include "runtime/host.h"
 #include "runtime/log.h"
 #include "runtime/memory.h"
+#include "runtime/files.h"
+#include "runtime/image.h"
+#include "runtime/loader.h"
 #include "runtime/mem.h"
 #include "runtime/regions.h"
 #include "runtime/thread.h"
@@ -58,6 +61,39 @@ int main(int argc, char** argv) {
     }
     std::printf("WASM-RUNTIME-UP\n");
     std::printf("WASM-GUEST-CODE-RAN\n");
+
+    /* The boot path, as far as it can go without the disc: find the images the
+     * loader will need and report whether their data is reachable. In a browser
+     * the provider serves them over HTTP Range; here it reports absence, which is
+     * the honest state of a build with no disc attached. */
+    {
+        /* Prove the seam works: install a provider that answers one known path,
+         * which is exactly what the page will do with a fetch. The real disc is
+         * not present in this build, so the provider serves a synthesised ELF
+         * header to show the loader reads through the hook rather than fopen. */
+        files::set_provider([](const std::string& path, std::vector<uint8_t>& out) {
+            if (path.find("mc.elf") == std::string::npos) return false;
+            out.assign(64, 0);
+            out[0] = 0x7f; out[1] = 'E'; out[2] = 'L'; out[3] = 'F';
+            out[4] = 2;   /* ELF64 */
+            out[5] = 2;   /* big endian, as the PS3 is */
+            return true;
+        });
+        std::printf("ps3base-wasm: %u images in the table, provider %s\n", image::image_count,
+                    files::has_provider() ? "installed" : "absent");
+        const int game = loader::find_image("mc");
+        const int lv2 = loader::find_image("liblv2");
+        std::printf("ps3base-wasm: mc=%d liblv2=%d\n", game, lv2);
+        if (game >= 0) {
+            std::vector<uint8_t> data = files::read(loader::host_path(image::images[game].file));
+            std::printf("ps3base-wasm: mc data %zu bytes\n", data.size());
+            if (data.size() >= 64 && data[0] == 0x7f && data[1] == 'E' && data[2] == 'L' && data[3] == 'F') {
+                std::printf("WASM-FILE-PROVIDER-DRIVES-LOADER\n");
+            } else {
+                std::printf("ps3base-wasm: loader read %zu bytes and did not see an ELF\n", data.size());
+            }
+        }
+    }
     return 0;
 }
 

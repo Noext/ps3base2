@@ -1,5 +1,6 @@
 #include "runtime/loader.h"
 #include "runtime/image.h"
+#include "runtime/files.h"
 #include "runtime/log.h"
 #include "runtime/memory.h"
 
@@ -23,15 +24,10 @@ uint32_t be32(const uint8_t* p) { uint32_t v; std::memcpy(&v, p, 4); return __bu
 uint16_t be16(const uint8_t* p) { uint16_t v; std::memcpy(&v, p, 2); return __builtin_bswap16(v); }
 
 std::vector<uint8_t> read_file(const std::string& path) {
-    std::vector<uint8_t> v;
-    FILE* f = std::fopen(path.c_str(), "rb");
-    if (!f) return v;
-    std::fseek(f, 0, SEEK_END);
-    v.resize(static_cast<size_t>(std::ftell(f)));
-    std::fseek(f, 0, SEEK_SET);
-    if (std::fread(v.data(), 1, v.size(), f) != v.size()) v.clear();
-    std::fclose(f);
-    return v;
+    /* files::read tries the installed provider first, then the filesystem. That is
+     * what lets a browser serve the executable and the disc over the network
+     * without changing this call site. */
+    return files::read(path);
 }
 
 }
