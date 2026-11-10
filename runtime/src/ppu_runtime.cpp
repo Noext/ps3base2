@@ -1,6 +1,9 @@
 #include "ppu/ops.h"
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
+#include <mutex>
+#include <set>
 #include "runtime/critpath.h"
 #include "runtime/hle.h"
 #include "runtime/image.h"
@@ -104,7 +107,12 @@ Tap find_tap(const char* module, const char* name) {
 
 }
 
+extern "C" { std::atomic<uint32_t> g_menu_threads{0}; }
 namespace ppu {
+/* How many times the guest created the main-menu screen thread. It is the one
+ * behavioural marker specific to the menu and shared with the native reference,
+ * which is why the milestone-3 log line is keyed on it. */
+std::atomic<uint32_t> g_menu_threads{0};
 
 namespace {
 
@@ -299,6 +307,58 @@ void call_indirect(Context& ctx, uint8_t* base, uint32_t addr) {
         std::fprintf(stderr, "\n");
     }
     if (!fn) {
+        /* A target the lifter never produced. Two ways to be wrong here, and the
+         * wrong one was the default for too long:
+         *
+         *   - aborting. Correct for a player, useless for a port in progress: the
+         *     one address needed to make progress is the one address nobody
+         *     records, so every discovery costs a hand-driven diagnosis.
+         *   - returning silently. That tells the caller its call happened when it
+         *     did not, and the failure surfaces later, somewhere else.
+         *
+         * PS3BASE_DISCOVERY=<file> takes the third road: write the address down
+         * once, stop the run cleanly (exit code 3, which says 'discovery' and not
+         * 'crash'), and let the lifter seed the next lift from that file. The
+         * loop is lift -> run -> seeds until a run adds nothing.
+         *
+         * The seed is only ever added for an address that lies inside a known
+         * image's code range: an address outside every image is not a missed
+         * function, it is a corrupted pointer, and recording it would send the
+         * lifter chasing nonsense. */
+        const char* disc = std::getenv("PS3BASE_DISCOVERY");
+        uint32_t img_lo = 0, img_hi = 0;
+        bool in_image = false;
+        for (uint32_t i = 0; i < image::image_count; i++) {
+            const image::ImageEntry& im = image::images[i];
+            if (addr >= im.text_lo && addr < im.text_hi) {
+                img_lo = im.text_lo;
+                img_hi = im.text_hi;
+                in_image = true;
+                break;
+            }
+        }
+        if (disc && *disc && in_image) {
+            /* Once per address across the whole process: the same miss fires on
+             * every visit, and a file with thousands of duplicate lines is one
+             * nobody reads. */
+            static std::mutex m;
+            static std::set<uint32_t> seen;
+            bool fresh = false;
+            {
+                std::lock_guard lk(m);
+                fresh = seen.insert(addr).second;
+            }
+            if (fresh) {
+                if (FILE* f = std::fopen(disc, "a")) {
+                    std::fprintf(f, "0x%08x %s\n", addr, image::images[0].name);
+                    std::fclose(f);
+                }
+                LOG_WARN("ppu", "discovery: indirect target 0x%08x in [0x%08x,0x%08x) recorded to %s (lr=0x%08llx)",
+                         addr, img_lo, img_hi, disc, static_cast<unsigned long long>(ctx.lr));
+            }
+            LOG_WARN("ppu", "discovery: stopping so the lift can add 0x%08x", addr);
+            std::exit(3);
+        }
         /* Name the object the vtable came from: the null is a field of a structure
          * the guest never initialised, and the register holding it says which. */
         LOG_FATAL("ppu",
