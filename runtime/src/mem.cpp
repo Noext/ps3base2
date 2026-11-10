@@ -15,6 +15,11 @@ namespace {
 constexpr size_t PAGE = 0x1000;
 
 Mode g_mode = [] {
+#if defined(__wasm__) || defined(__EMSCRIPTEN__)
+    /* os mode needs mmap/mprotect, which wasm does not have. bitset is the only
+     * backend that can work there, so it is not a preference but a requirement. */
+    return Mode::Bitset;
+#endif
     const char* e = std::getenv("PS3BASE_MEMORY");
     if (e && std::strcmp(e, "bitset") == 0) return Mode::Bitset;
     if (e && std::strcmp(e, "os") != 0 && e[0])

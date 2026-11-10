@@ -38,7 +38,26 @@ int main(int argc, char** argv) {
      * few instructions of a real lifted function.
      */
     std::printf("ps3base-wasm: guest machine up, %d cpus\n", host::logical_cpus());
+
+    /* Prove the guest EXECUTES lifted code, not just that memory exists: call a
+     * real lifted PPU function and check that it wrote guest memory. This is the
+     * milestone's actual claim -- the game's own machine code runs inside wasm. */
+    {
+        const uint32_t ea = 0x00100000;   /* inside main RAM */
+        vm::write32(ea, 0x11223344u);
+        extern void f_0048f628(ppu::Context&, uint8_t*);
+        ppu::Context c{};
+        c.gpr[3] = ea;
+        f_0048f628(c, vm::g_base);
+        const uint32_t after = vm::read32(ea);
+        std::printf("psx-wasm: f_0048f628 ran, guest word at 0x%x is now 0x%08x (was 0x11223344)\n", ea, after);
+        if (after == 0x11223344u) {
+            std::printf("WASM-GUEST-CODE-FAILED\n");
+            return 1;
+        }
+    }
     std::printf("WASM-RUNTIME-UP\n");
+    std::printf("WASM-GUEST-CODE-RAN\n");
     return 0;
 }
 

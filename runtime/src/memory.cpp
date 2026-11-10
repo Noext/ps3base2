@@ -269,7 +269,19 @@ void refresh_pages_locked(uint32_t addr, uint64_t size) {
 bool init() {
     /* 8 GB of address space, reserved through the backend so a WebAssembly build
      * can use a flat bitmap instead of mmap+mprotect. */
-    void* p = mem::reserve(0x200000000ull);
+    /* Ask for what the map can actually reach, not a fixed 8 GiB. Under
+     * PS3BASE_REGIONS=compact that is 2.25 GiB, which fits wasm32; the sparse map
+     * would ask for 4 GiB and leave nothing for code and stack.
+     * mem::reserve rounds up, and the region placement below is what uses it. */
+    /* Under wasm the reservation must be exactly what the map spans: linear memory
+     * cannot promise 8 GiB when the wasm32 ceiling is 4, and the compact map only
+     * needs 2.25 GiB. On the native path keep the generous 8 GiB as before. */
+#if defined(__wasm__) || defined(__EMSCRIPTEN__)
+    const uint64_t need = vm::map_span();
+#else
+    const uint64_t need = std::max<uint64_t>(vm::map_span(), 0x200000000ull);
+#endif
+    void* p = mem::reserve(need);
     if (!p) {
         LOG_ERROR("vm", "failed to reserve guest address space");
         return false;

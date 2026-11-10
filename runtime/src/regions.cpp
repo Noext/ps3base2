@@ -14,6 +14,12 @@ RegionBases choose() {
      * the region LAYOUT is a separate concern and must not fight over one name. */
     const char* e = std::getenv("PS3BASE_REGIONS");
     RegionBases b{};
+#if defined(__wasm__) || defined(__EMSCRIPTEN__)
+    /* The sparse map spans exactly 4 GiB, which leaves no room for code, stack or
+     * tables in wasm32 linear memory. Compact is mandatory there. */
+    if (!e || std::strcmp(e, "compact") != 0)
+        e = "compact";
+#endif
     if (e && std::strcmp(e, "compact") == 0) {
         /* Close the 1792 MB hole: video/stack/spu follow the user regions. */
         b.video = 0x50000000u;
