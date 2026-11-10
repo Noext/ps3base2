@@ -274,7 +274,9 @@ int main(int argc, char** argv) {
      * shuts the runtime down when it does, killing the guest before it executes an
      * instruction. Wait and report what the guest does. */
     std::printf("ps3base-wasm: waiting for guest activity...\n");
-    for (int i = 0; i < 30; i++) {
+    /* The native run needs 86 s to reach the world. A 30 s window cannot tell
+     * "stalled" from "not there yet", so give the guest the same budget. */
+    for (int i = 0; i < 200; i++) {
         host::sleep_ms(1000);
         const uint32_t pc = main_thread->ctx.cia ? main_thread->ctx.cia : static_cast<uint32_t>(main_thread->ctx.lr);
         /* Throughput: how much SPU work per second of wall clock. This is the
