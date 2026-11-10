@@ -213,6 +213,18 @@ int main(int argc, char** argv) {
             return false;
         });
     }
+    /* The main thread ends up at 0x2dc20c (sys_timer_usleep inside f_002dc1e4).
+     * Guard the function entry so the CALLER is named, not guessed: a poll loop
+     * shows one caller returning repeatedly. */
+    hooks::add_guard(0x2dc1e4, [](ppu::Context& c) {
+        static std::atomic<int> n{0};
+        const int k = n.fetch_add(1);
+        if (k < 10)
+            std::fprintf(stderr, "[acc] #%d entry lr=0x%llx r1=0x%llx\n", k,
+                         static_cast<unsigned long long>(c.lr),
+                         static_cast<unsigned long long>(c.gpr[1]));
+        return false;
+    });
     hooks::add_guard(0x21c178, [](ppu::Context& c) {
         static std::atomic<int> n{0};
         const int k = n.fetch_add(1);
