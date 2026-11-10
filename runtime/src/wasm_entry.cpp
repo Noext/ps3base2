@@ -18,6 +18,7 @@ namespace spu { void rsv_lost_stats(uint64_t*, uint64_t*); }
 namespace gpu { namespace rsx {
 void shader_stats(uint64_t*, uint64_t*, uint64_t*);
 void framebuffer_stats(uint64_t*, uint64_t*, uint32_t*, uint32_t*);
+uint32_t bound_texture_mask();
 } }
 #include "runtime/image.h"
 #include "runtime/loader.h"
@@ -339,10 +340,11 @@ int main(int argc, char** argv) {
             uint64_t tris = 0, verts = 0;
             uint32_t hash = 0, distinct = 0;
             gpu::rsx::framebuffer_stats(&tris, &verts, &hash, &distinct);
+            const uint32_t texmask = gpu::rsx::bound_texture_mask();
             if ((i % 10) == 9)
-                std::printf("ps3base-wasm: shaders vp=%llu fp=%llu | fb tris=%llu verts=%llu "
+                std::printf("ps3base-wasm: texmask=0x%x shaders vp=%llu fp=%llu | fb tris=%llu verts=%llu "
                             "hash=%08x colors=%u\n",
-                            (unsigned long long)vp, (unsigned long long)fp,
+                            texmask, (unsigned long long)vp, (unsigned long long)fp,
                             (unsigned long long)tris, (unsigned long long)verts,
                             hash, distinct);
         }
