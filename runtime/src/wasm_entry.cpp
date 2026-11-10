@@ -292,6 +292,20 @@ int main(int argc, char** argv) {
     for (int i = 0; i < 30; i++) {
         host::sleep_ms(1000);
         const uint32_t pc = main_thread->ctx.cia ? main_thread->ctx.cia : static_cast<uint32_t>(main_thread->ctx.lr);
+        /* Throughput: how much SPU work per second of wall clock. This is the
+         * measurement the last round said was needed -- the SPUs are healthy and
+         * early, so what matters is rate, not state. */
+        /* Throughput: the last round established the SPUs are healthy and early,
+         * so the question is rate. The guest clock is ppu::timebase() at 80 MHz,
+         * so its delta per wall second IS the emulated speed. */
+        {
+            static uint64_t last_tb = 0;
+            const uint64_t tb = ppu::timebase();
+            const uint64_t delta = tb - last_tb;
+            last_tb = tb;
+            std::printf("ps3base-wasm: guest clock +%llu ticks/s (%.1f%% of 80MHz realtime)\n",
+                        static_cast<unsigned long long>(delta), 100.0 * double(delta) / 8.0e7);
+        }
         std::printf("ps3base-wasm: t=%ds pc=0x%08x syscalls=%llu exited=%d\n", i + 1, pc,
                     static_cast<unsigned long long>(main_thread->syscalls.load()),
                     main_thread->exited ? 1 : 0);
