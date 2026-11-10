@@ -4142,6 +4142,7 @@ uint32_t* registers() { return g_regs; }
 
 /* special_methods() now lives in rsx_special_methods.cpp so a build with no GPU
  * can satisfy the guest's RSX-init call without linking the renderer. */
+#if !defined(PS3BASE_NO_RENDERER)
 uint32_t method_run(uint32_t reg, const uint32_t* args, uint32_t n) {
     if (g_trace) return 0;
     if (reg == 0x0100) return 1;
@@ -4241,6 +4242,7 @@ void method(uint32_t reg, uint32_t arg) {
     default: break;
     }
 }
+#endif  // !PS3BASE_NO_RENDERER: method() and method_run()
 
 namespace {
 
