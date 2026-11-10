@@ -623,11 +623,22 @@ int main(int argc, char** argv) {
          * Native creates it when the menu opens; a boot that never reaches the
          * menu never creates it. Measured: native 1, wasm 41 calls. */
         if (i == 100) {
-            if (g_menu_thread_creations.load() > 0)
-                std::printf("ps3base-wasm: MAIN MENU REACHED -- guest created the main-menu screen thread (%u times)\n",
-                            g_menu_thread_creations.load());
-            else
-                std::printf("ps3base-wasm: main menu NOT reached -- no menu screen thread\n");
+            /* A single marker is weak evidence. The menu screen is corroborated
+             * by the other interface threads the native reference creates when
+             * its menu opens: the save-list readers and the option loader. Require
+             * the friend-list thread AND at least two of those, so the line
+             * cannot fire from a stray call. */
+            {
+                extern std::atomic<uint32_t> g_menu_thread_creations;
+                extern std::atomic<uint32_t> g_ui_thread_creations;
+                const uint32_t menu = g_menu_thread_creations.load();
+                const uint32_t ui = g_ui_thread_creations.load();
+                if (menu > 0 && ui >= 2)
+                    std::printf("ps3base-wasm: MAIN MENU REACHED -- menu screen thread %u times, "
+                                "%u interface threads corroborate\n", menu, ui);
+                else
+                    std::printf("ps3base-wasm: main menu NOT reached -- menu %u, ui %u\n", menu, ui);
+            }
         }
 #if defined(PS3BASE_COVERAGE) && PS3BASE_COVERAGE
         if (i == 100 || i == 180) ppu::coverage_report();
