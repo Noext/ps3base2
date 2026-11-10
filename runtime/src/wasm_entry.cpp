@@ -16,6 +16,7 @@
 
 namespace gpu { namespace rsx {
 void shader_stats(uint64_t*, uint64_t*, uint64_t*);
+void framebuffer_stats(uint64_t*, uint64_t*, uint32_t*, uint32_t*);
 } }
 #include "runtime/image.h"
 #include "runtime/loader.h"
@@ -293,9 +294,15 @@ int main(int argc, char** argv) {
         {
             uint64_t vp = 0, fp = 0, fp_ok = 0;
             gpu::rsx::shader_stats(&vp, &fp, &fp_ok);
+            uint64_t tris = 0, verts = 0;
+            uint32_t hash = 0, distinct = 0;
+            gpu::rsx::framebuffer_stats(&tris, &verts, &hash, &distinct);
             if ((i % 10) == 9)
-                std::printf("ps3base-wasm: shaders vp=%llu fp=%llu fp_ok=%llu\n",
-                            (unsigned long long)vp, (unsigned long long)fp, (unsigned long long)fp_ok);
+                std::printf("ps3base-wasm: shaders vp=%llu fp=%llu | fb tris=%llu verts=%llu "
+                            "hash=%08x colors=%u\n",
+                            (unsigned long long)vp, (unsigned long long)fp,
+                            (unsigned long long)tris, (unsigned long long)verts,
+                            hash, distinct);
         }
         /* Throughput: the last round established the SPUs are healthy and early,
          * so the question is rate. The guest clock is ppu::timebase() at 80 MHz,
