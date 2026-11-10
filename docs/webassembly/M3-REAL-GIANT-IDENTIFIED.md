@@ -44,12 +44,24 @@ Le découpage serait donc **mécanique** : ces labels ne sont pas des points de 
 Les rounds 139-147 cherchaient la mauvaise fonction (`f_0070d138`, `f_006fe4d8`) — aucune ne fait 1 Mo.
 J'ai perdu sept rounds sur une erreur de cible.
 
-## La piste de découpage
+## La piste de découpage — TESTÉE ET INFIRMÉE
 
-Puisque 940 labels ne sont ciblés qu'une fois, on peut couper la fonction en **segments contigus** entre deux
-labels mono-ciblés, chacun devenant une fonction séparée. Le seul label multi-ciblé reste dans son segment.
+J'ai supposé que 940 labels mono-ciblés permettraient un découpage mécanique en segments contigus.
 
-C'est une transformation **locale au fichier généré**, sans toucher au codegen de l'autre agent.
+**La mesure dit non** :
+
+| | valeur |
+|---|---|
+| labels mono-ciblés | **939** |
+| dont le `goto` est **juste avant** le label (fall-through) | **2** |
+
+Sur 939 labels mono-ciblés, **2 seulement** sont des sauts de fall-through. Les 937 autres sont de **vrais
+sauts** : le `goto` est ailleurs dans le corps, et il saute en avant par-dessus du code.
+
+Un découpage en fonctions séparées exigerait donc de transformer ces sauts en **appels avec retour**, ce qui
+n'est possible que si la cible revient au point de départ — ce que le flot original ne garantit pas.
+
+**Mon hypothèse de découpage mécanique était fausse**, et je la retire.
 
 ## Position
 
