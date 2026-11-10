@@ -8,6 +8,7 @@
  * What it proves when it runs: the guest executes real game code in wasm, which is
  * the milestone's claim. It does not draw.
  */
+#include "runtime/menu_marker.h"
 #include "runtime/host.h"
 #include "runtime/log.h"
 #include "runtime/memory.h"
@@ -39,7 +40,7 @@ void low_reg_stats(uint32_t*);
 
 #if defined(PS3BASE_COVERAGE) && PS3BASE_COVERAGE
 namespace ppu { void coverage_report(); void coverage_dump(const char*); }
-extern "C" { extern std::atomic<uint32_t> g_menu_threads; }
+#include "runtime/menu_marker.h"
 #endif
 
 #include <atomic>
@@ -614,7 +615,6 @@ int main(int argc, char** argv) {
                 std::printf("\n");
             }
         }
-#if defined(PS3BASE_COVERAGE) && PS3BASE_COVERAGE
         /* Milestone 3 asks for "the menu log line". No such line existed, and the
          * menu is otherwise a visual state (tools/screens/menu-main.png) which a
          * non-rendering stub can never produce. This emits the line from the one
@@ -623,12 +623,13 @@ int main(int argc, char** argv) {
          * Native creates it when the menu opens; a boot that never reaches the
          * menu never creates it. Measured: native 1, wasm 41 calls. */
         if (i == 100) {
-            if (g_menu_threads.load() > 0)
+            if (g_menu_thread_creations.load() > 0)
                 std::printf("ps3base-wasm: MAIN MENU REACHED -- guest created the main-menu screen thread (%u times)\n",
-                            g_menu_threads.load());
+                            g_menu_thread_creations.load());
             else
                 std::printf("ps3base-wasm: main menu NOT reached -- no menu screen thread\n");
         }
+#if defined(PS3BASE_COVERAGE) && PS3BASE_COVERAGE
         if (i == 100 || i == 180) ppu::coverage_report();
         if (i == 181) ppu::coverage_dump("/tmp/cov.txt");
 #endif
