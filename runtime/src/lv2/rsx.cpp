@@ -591,10 +591,17 @@ void fifo_thread() {
                      * only measurement that can see surface and texture writes:
                      * everything here bypasses method(). Record the first few
                      * surface/texture writes and their order. */
-                    if ((reg >= 0x200 && reg <= 0x220) || (reg >= 0x1A00 && reg < 0x1C00)) {
-                        static std::atomic<int> n{0};
-                        const int k = n.fetch_add(1);
-                        if (k < 16) LOG_INFO("grpwrite", "#%d reg 0x%03x = 0x%08x", k, reg, arg);
+                    if (reg == 0x200 || reg == 0x204) {
+                        /* Count EVERY write to the clip, with its value: a single
+                         * zero write is a reset; a later non-zero write would be
+                         * the real configuration. */
+                        static std::atomic<uint32_t> cnt[2], maxv[2];
+                        const int i = reg == 0x200 ? 0 : 1;
+                        const uint32_t c = cnt[i].fetch_add(1) + 1;
+                        if (arg > maxv[i].load()) maxv[i].store(arg);
+                        if ((c & 0x3FF) == 0 || c <= 3)
+                            LOG_INFO("clipwrite", "reg 0x%03x = 0x%08x (#%u, max so far 0x%08x)",
+                                     reg, arg, c, maxv[i].load());
                     }
 #endif
                     continue;
