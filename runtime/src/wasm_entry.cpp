@@ -77,7 +77,7 @@ int main(int argc, char** argv) {
         files::set_provider([](const std::string& path, std::vector<uint8_t>& out) {
             std::string p = path;
             if (p.rfind("./", 0) == 0) p = p.substr(2);
-            std::string full = "/game/" + p;
+            std::string full = "/" + p;
             FILE* f = std::fopen(full.c_str(), "rb");
             if (!f) return false;
             std::fseek(f, 0, SEEK_END);
@@ -187,29 +187,6 @@ int main(int argc, char** argv) {
      * this and with what". */
     /* Who asks f_0021c178 for the 69-hour sleep? Guard its entry and record the
      * caller and argument. */
-    /* The native run's main_thread spends its time in f_005d2868, a different
-     * instance of the same 30us poll. Does the wasm run ever reach it? */
-    /* Does the wasm run enter the f_0021e060 worker loop, and if so when? The
-     * native run reaches the world without this being the only live path. */
-    hooks::add_guard(0x21e060, [](ppu::Context& c) {
-        static std::atomic<int> n{0};
-        const int k = n.fetch_add(1);
-        if (k < 4)
-            std::fprintf(stderr, "[loopB] #%d f_0021e060 r3=0x%llx lr=0x%llx\n", k,
-                         static_cast<unsigned long long>(c.gpr[3]),
-                         static_cast<unsigned long long>(c.lr));
-        return false;
-    });
-    hooks::add_guard(0x5d2868, [](ppu::Context& c) {
-        static std::atomic<int> n{0};
-        const int k = n.fetch_add(1);
-        if (k < 5)
-            std::fprintf(stderr, "[loopA] #%d f_005d2868 r3=0x%llx r31=0x%llx lr=0x%llx\n", k,
-                         static_cast<unsigned long long>(c.gpr[3]),
-                         static_cast<unsigned long long>(c.gpr[31]),
-                         static_cast<unsigned long long>(c.lr));
-        return false;
-    });
     hooks::add_guard(0x21c178, [](ppu::Context& c) {
         static std::atomic<int> n{0};
         const int k = n.fetch_add(1);
@@ -218,20 +195,6 @@ int main(int argc, char** argv) {
                          static_cast<long long>(c.gpr[3]),
                          static_cast<unsigned long long>(c.lr),
                          static_cast<unsigned long long>(c.gpr[1]));
-        return false;
-    });
-    /* f_0021da50 is the polled predicate: gpr[3] is the index, and it returns
-     * ld8(0xCE5AA0 + index). Print the index and the byte so the wait is read
-     * rather than inferred. */
-    hooks::add_guard(0x21da50, [](ppu::Context& c) {
-        static std::atomic<int> n{0};
-        const int k = n.fetch_add(1);
-        if (k < 5) {
-            const uint32_t idx = static_cast<uint32_t>(c.gpr[3]);
-            const uint32_t ea = 0x00CE0000u + 23200u + idx;
-            std::fprintf(stderr, "[pollprobe] #%d idx=0x%x ea=0x%08x byte=%u\n", k, idx, ea,
-                         vm::range_mapped(ea, 1) ? vm::ptr(ea)[0] : 255);
-        }
         return false;
     });
     hooks::add_guard(0x5d2b44, [](ppu::Context& c) {
@@ -248,7 +211,6 @@ int main(int argc, char** argv) {
     /* hooks.cpp documents this trap: add_guard sets hook_flags, but the lifted code
      * only consults them when ppu::hook_impl is non-null. Assign both here. */
     std::printf("ps3base-wasm: entry probe on f_005d2b44 (flags=%u, impl=%d)\n",
-                static_cast<unsigned>(ppu::hook_flags[0x5d2b44 >> 2]),
                 ppu::hook_impl ? 1 : 0);
 
     /* Watch the line containing the global that is never written. Every store
@@ -420,6 +382,25 @@ int main(int argc, char** argv) {
             std::printf("ps3base-wasm: --- guest thread dump at t=%ds ---\n", i + 1);
             guest::status_dump();
             spu::status_dump();
+        }
+        /* The guest is frozen at pc=0x01401ee4 with syscalls stuck. That pc is a
+         * sys_fs_stat (808) call site in libfs; print the path it is asking about
+         * so the wait is read, not guessed. */
+        if (main_thread->ctx.cia == 0x01401ee4u) {
+            static bool dumped = false;
+            if (!dumped) {
+                dumped = true;
+                const uint32_t path = static_cast<uint32_t>(main_thread->ctx.gpr[3]);
+                std::printf("ps3base-wasm: fs_stat path=0x%08x mapped=%d", path,
+                            vm::range_mapped(path, 1) ? 1 : 0);
+                if (vm::range_mapped(path, 1)) {
+                    std::printf(" '");
+                    for (int j = 0; j < 96 && vm::range_mapped(path + j, 1) && vm::ptr(path)[j]; j++)
+                        std::putchar(vm::ptr(path)[j]);
+                    std::printf("'");
+                }
+                std::printf("\n");
+            }
         }
         if (main_thread->exited) {
             std::printf("WASM-GUEST-THREAD-EXITED\n");

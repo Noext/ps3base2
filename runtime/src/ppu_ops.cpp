@@ -1,6 +1,7 @@
 #include <immintrin.h>
 #include "ppu/ops.h"
 #include "runtime/codewatch.h"
+#include "runtime/image.h"
 #include "runtime/log.h"
 #include "runtime/memory.h"
 #include "runtime/reservation.h"
@@ -157,7 +158,25 @@ void notify_store(uint8_t* base, uint32_t ea, uint32_t size) {
     }
 }
 
-uint8_t hook_flags[0x800000];
+/* hook_flags is generated per image by recomp/ppu/codegen.py into table.cpp. */
+uint8_t* hook_flag_for(uint32_t addr) {
+    for (uint32_t i = 0; i < image::image_count; i++) {
+        const image::ImageEntry& im = image::images[i];
+        if (addr >= im.text_lo && addr < im.text_hi) {
+            const uint32_t idx = (addr - im.text_lo) >> 2;
+            if (idx >= (im.text_hi - im.text_lo + 3) / 4) {
+                /* Diagnose the out-of-range index once rather than aborting blind. */
+                static int n = 0;
+                if (n++ < 3)
+                    std::fprintf(stderr, "[flagrange] addr=0x%08x image=%s idx=0x%x size=0x%x\n", addr,
+                                 im.name, idx, (im.text_hi - im.text_lo + 3) / 4);
+                return nullptr;
+            }
+            return &hook_flags[i][idx];
+        }
+    }
+    return nullptr;
+}
 void (*hook_impl)(Context& ctx, uint8_t* base, uint32_t addr, BodyFn fn) = nullptr;
 
 void hook_call(Context& ctx, uint8_t* base, uint32_t addr, BodyFn fn) {
