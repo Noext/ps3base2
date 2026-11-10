@@ -16,6 +16,7 @@
 
 namespace spu { void rsv_lost_stats(uint64_t*, uint64_t*); }
 namespace gpu { namespace rsx {
+uint32_t* registers();
 void shader_stats(uint64_t*, uint64_t*, uint64_t*);
 void framebuffer_stats(uint64_t*, uint64_t*, uint32_t*, uint32_t*);
 uint32_t bound_texture_mask();
@@ -369,6 +370,16 @@ int main(int argc, char** argv) {
                             sr[0], sr[1], sr[2], sr[4], sr[5]);
                 uint32_t lr[64] = {};
                 gpu::rsx::low_reg_stats(lr);
+                /* Read the actual register FILE, not a write counter: grouped
+                 * packets write regs[] directly and bypass method(). */
+                {
+                    const uint32_t* rf = gpu::rsx::registers();
+                    std::printf("ps3base-wasm: regfile clipH=0x%08x clipV=0x%08x fmt=0x%08x "
+                                "caoff=0x%08x | tex0off=0x%08x\n",
+                                rf ? rf[0x200 >> 2] : 0u, rf ? rf[0x204 >> 2] : 0u,
+                                rf ? rf[0x208 >> 2] : 0u, rf ? rf[0x210 >> 2] : 0u,
+                                rf ? rf[0x1A00 >> 2] : 0u);
+                }
                 std::printf("ps3base-wasm: low regs:");
                 for (int k = 0; k < 64; k++) if (lr[k]) std::printf(" 0x%02x=%u", k * 4, lr[k]);
                 std::printf("\n");
