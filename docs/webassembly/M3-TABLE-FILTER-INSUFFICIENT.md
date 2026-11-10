@@ -54,3 +54,50 @@ fonctions retenues. Emscripten n'applique pas `--gc-sections` par défaut ici.
 | plus grosse fonction sous 1 Mo | non — 1 358 012 o (`f_0070d138`) |
 | ligne de log du menu | **oui, corroborée** |
 | élimination de code mort | **partielle — la table seule ne suffit pas** |
+
+---
+
+# --gc-sections ne change rien non plus
+
+## La mesure
+
+| module | fonctions | code total |
+|---|---|---|
+| sans `--gc-sections` | **46 150** | 48 952 617 o |
+| **avec `--gc-sections`** | **46 150** | **48 952 617 o** |
+
+**Identique.** L'option est acceptée et n'a aucun effet.
+
+## Pourquoi
+
+`--gc-sections` élimine les sections non référencées. Ici, les fonctions sont **exportées** : `wasm-ld` les
+considère comme des points d'entrée possibles et ne peut pas les retirer.
+
+Emscripten exporte ces symboles parce que la table de fonctions a besoin d'eux pour le dispatch indirect —
+même quand la table filtrée ne les indexe plus.
+
+## Ce qui marcherait
+
+**Ne pas compiler les fichiers qui ne contiennent que des fonctions non retenues.** C'est un changement au
+niveau du build, pas du link : compiler seulement les `mc_*.cpp` dont au moins une fonction est dans le profil.
+
+C'est faisable — le profil donne les adresses, les adresses donnent les fichiers — mais il faut une carte
+adresse → fichier, que la table ne fournit pas directement.
+
+## Ce que ça clôt
+
+| piste | verdict |
+|---|---|
+| filtre de table | réduit la table, **pas le code** |
+| `-ffunction-sections` | aucun effet |
+| `--gc-sections` | **aucun effet** |
+| ne compiler que les fichiers utiles | **faisable, non implémenté** |
+
+## Position
+
+| critère | état |
+|---|---|
+| module sous 80 Mo | **oui — 49,7 Mo** |
+| plus grosse fonction sous 1 Mo | non — 1 358 012 o |
+| ligne de log du menu | oui, corroborée |
+| élimination de code mort | **non réalisée** — trois options testées, zéro effet |
