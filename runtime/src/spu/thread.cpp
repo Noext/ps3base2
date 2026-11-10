@@ -94,6 +94,21 @@ bool SpuThread::block(std::unique_lock<std::mutex>& lk, Pred pred) {
             ctx.halted = true;
             return false;
         }
+        /* Which channel event each SPU is parked on. The whole machine is waiting:
+         * five SPUs at pc=0x011ac with events 0x0, and four PPUs parked on SPURS
+         * queues. Naming the wait is the step that tells a deadlock from a
+         * workload that was never submitted.
+         * getenv is inert under wasm, so the switch is a compile-time constant. */
+#if defined(PS3BASE_SPU_WAIT_PROBE) && PS3BASE_SPU_WAIT_PROBE
+        {
+            static std::atomic<int> n{0};
+            const int k = n.fetch_add(1, std::memory_order_relaxed);
+            if (k < 30)
+                LOG_INFO("spuwait", "slot %d '%s' pc 0x%05x mask 0x%x events 0x%x raddr 0x%08x insns %llu",
+                         slot, name.c_str(), ctx.pc, event_mask, events, raddr,
+                         static_cast<unsigned long long>(insns.load(std::memory_order_relaxed)));
+        }
+#endif
         waiting.store(3, std::memory_order_relaxed);
         cv.wait_for(lk, std::chrono::microseconds(100));
         waiting.store(0, std::memory_order_relaxed);
@@ -285,6 +300,19 @@ uint32_t SpuThread::read_channel(uint32_t ch) {
                 ctx.halted = true;
                 return 0;
             }
+#if defined(PS3BASE_SPU_WAIT_PROBE) && PS3BASE_SPU_WAIT_PROBE
+            {
+                /* This is the wait that actually parks the SPURS kernels: a channel
+                 * read (EV_LR) at raddr. block() is never reached, which is why the
+                 * first probe printed nothing. */
+                static std::atomic<int> n{0};
+                const int k = n.fetch_add(1, std::memory_order_relaxed);
+                if (k < 40)
+                    LOG_INFO("spuwait", "slot %d '%s' pc 0x%05x event_mask 0x%x events 0x%x raddr 0x%08x insns %llu",
+                             slot, name.c_str(), ctx.pc, event_mask, events, raddr,
+                             static_cast<unsigned long long>(insns.load(std::memory_order_relaxed)));
+            }
+#endif
             if ((event_mask & EV_LR) && raddr) {
                 uint32_t line = raddr;
                 uint64_t rt = rtime;
@@ -1133,6 +1161,20 @@ void SpuThread::process_mfc(uint32_t cmd) {
             set_events(EV_LR);
         }
         if (job_stats) (ok ? g_putllc_ok : g_putllc_fail).fetch_add(1, std::memory_order_relaxed);
+#if defined(PS3BASE_SPU_WAIT_PROBE) && PS3BASE_SPU_WAIT_PROBE
+        {
+            /* A putllc that fails parks the SPU on EV_LR until a reservation
+             * matches again. Whether the guest retries is the whole question, so
+             * count ok/fail instead of guessing. */
+            static std::atomic<uint64_t> ok_n{0}, fail_n{0};
+            const uint64_t o = ok ? ok_n.fetch_add(1) + 1 : ok_n.load();
+            const uint64_t f = ok ? fail_n.load() : fail_n.fetch_add(1) + 1;
+            if ((o + f) <= 4 || (f % 2000) == 0)
+                LOG_INFO("spuput", "putllc slot %d line 0x%08x ok=%llu fail=%llu (last %s, raddr 0x%08x rtime %llu)",
+                         slot, line, o, f, ok ? "ok" : "FAIL",
+                         raddr, static_cast<unsigned long long>(rtime));
+        }
+#endif
         if (!ok && std::getenv("GOWA_PUTLLC_TRACE")) {
             static std::atomic<int> n{0};
             if (n.fetch_add(1) < 40)
