@@ -19,6 +19,7 @@ namespace gpu { namespace rsx {
 void shader_stats(uint64_t*, uint64_t*, uint64_t*);
 void framebuffer_stats(uint64_t*, uint64_t*, uint32_t*, uint32_t*);
 uint32_t bound_texture_mask();
+uint32_t texture_field_writes(uint32_t, uint32_t);
 } }
 #include "runtime/image.h"
 #include "runtime/loader.h"
@@ -341,6 +342,14 @@ int main(int argc, char** argv) {
             uint32_t hash = 0, distinct = 0;
             gpu::rsx::framebuffer_stats(&tris, &verts, &hash, &distinct);
             const uint32_t texmask = gpu::rsx::bound_texture_mask();
+            /* Which (unit, field) actually receives writes? A zero mask with
+             * non-zero field counts means the hook range was wrong, not the guest. */
+            static uint32_t fw[8] = {};
+            if ((i % 20) == 19)
+                for (uint32_t u = 0; u < 8; u++) {
+                    fw[u] = gpu::rsx::texture_field_writes(u, 0);
+                    if (fw[u]) std::printf("ps3base-wasm: tex unit %u field0 writes=%u\n", u, fw[u]);
+                }
             if ((i % 10) == 9)
                 std::printf("ps3base-wasm: texmask=0x%x shaders vp=%llu fp=%llu | fb tris=%llu verts=%llu "
                             "hash=%08x colors=%u\n",

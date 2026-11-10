@@ -132,6 +132,7 @@ namespace {
 constexpr uint32_t TEXTURE_BASE_R = 0x1A00;
 std::atomic<uint32_t> g_tex_bound{0};      /* bit per unit with a non-zero offset */
 std::atomic<uint32_t> g_tex_offsets[16];
+std::atomic<uint32_t> g_tex_field_writes[32 * 8];
 }
 
 void note_texture_unit(uint32_t unit, uint32_t offset) {
@@ -141,6 +142,10 @@ void note_texture_unit(uint32_t unit, uint32_t offset) {
     else g_tex_bound.fetch_and(~(1u << unit), std::memory_order_relaxed);
 }
 uint32_t bound_texture_mask() { return g_tex_bound.load(std::memory_order_relaxed); }
+uint32_t texture_field_writes(uint32_t unit, uint32_t field) {
+    if (unit >= 32 || field >= 8) return 0;
+    return g_tex_field_writes[unit * 8 + field].load(std::memory_order_relaxed);
+}
 
 void note_vertex_program();
 void note_fragment_program(bool);
@@ -165,10 +170,16 @@ void method(uint32_t reg, uint32_t arg) {
         g_const_writes.fetch_add(1, std::memory_order_relaxed);
         return;
     }
-    if (reg >= TEXTURE_BASE_R && reg < TEXTURE_BASE_R + 16 * 0x20) {
+    /* The whole 0x1A00-0x2000 window: the texture-unit stride is 0x20 but the
+     * guest may write fields or units the renderer's 16-unit table does not
+     * enumerate, and an earlier narrower hook missed writes for exactly that
+     * reason. Count what actually arrives, per (unit, field), before deciding. */
+    if (reg >= TEXTURE_BASE_R && reg < 0x2000) {
         const uint32_t unit = (reg - TEXTURE_BASE_R) / 0x20;
         const uint32_t field = (reg - TEXTURE_BASE_R) % 0x20;
-        if (field == 0) note_texture_unit(unit, arg & 0x7FFFFFFF);
+        g_tex_field_writes[(unit < 32 ? unit : 31) * 8 + (field < 8 ? field : 7)]
+            .fetch_add(1, std::memory_order_relaxed);
+        if (field == 0 && unit < 16) note_texture_unit(unit, arg & 0x7FFFFFFF);
         return;
     }
     switch (reg) {
