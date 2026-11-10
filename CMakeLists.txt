@@ -270,6 +270,14 @@ target_include_directories(wgpu_map PRIVATE runtime/include)
 target_compile_options(wgpu_map PRIVATE ${PS3BASE_ARCH_FLAGS})
 add_test(NAME wgpu_map COMMAND wgpu_map)
 
+# How much guest address space a real session needs: the number that decides
+# whether wasm32 can hold the map or wasm64 is required.
+add_executable(memspace tests/memspace.cpp runtime/src/memory.cpp runtime/src/mem.cpp runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/host.cpp runtime/src/log.cpp runtime/src/cycles.cpp)
+target_include_directories(memspace PRIVATE runtime/include)
+target_compile_options(memspace PRIVATE ${PS3BASE_ARCH_FLAGS})
+target_link_libraries(memspace PRIVATE pthread)
+add_test(NAME memspace COMMAND memspace)
+
 # Proves wgpu-native works here and measures the pipeline-cache cost that decides
 # whether the WebGPU port is cheap or expensive. Optional: only built when the
 # library is present, so a machine without it still configures.
