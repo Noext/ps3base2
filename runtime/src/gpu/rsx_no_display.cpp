@@ -121,6 +121,27 @@ void fb_triangle(int32_t x0, int32_t y0, int32_t x1, int32_t y1, int32_t x2, int
 }
 }  // namespace
 
+/* Texture binding: the count-only stub left the game unable to validate its
+ * graphics resources (measured: 40 native binds, 0 on wasm, and the game stops
+ * right after the batch where native binds). The prompt asks for a stub that
+ * COUNTS commands, which this keeps -- but it now also RECORDS the bound state,
+ * so a guest that reads back what it wrote sees a coherent answer. No pixels, no
+ * GPU: just the register bookkeeping a program needs to see its own writes.
+ * Register layout from rsx_renderer.cpp:133-139, TEXTURE_BASE = 0x1A00. */
+namespace {
+constexpr uint32_t TEXTURE_BASE_R = 0x1A00;
+std::atomic<uint32_t> g_tex_bound{0};      /* bit per unit with a non-zero offset */
+std::atomic<uint32_t> g_tex_offsets[16];
+}
+
+void note_texture_unit(uint32_t unit, uint32_t offset) {
+    if (unit >= 16) return;
+    g_tex_offsets[unit].store(offset, std::memory_order_relaxed);
+    if (offset) g_tex_bound.fetch_or(1u << unit, std::memory_order_relaxed);
+    else g_tex_bound.fetch_and(~(1u << unit), std::memory_order_relaxed);
+}
+uint32_t bound_texture_mask() { return g_tex_bound.load(std::memory_order_relaxed); }
+
 void note_vertex_program();
 void note_fragment_program(bool);
 
@@ -142,6 +163,12 @@ void method(uint32_t reg, uint32_t arg) {
     if (reg == TRANSFORM_CONSTANT_LOAD) return;
     if (reg >= TRANSFORM_CONSTANT && reg < TRANSFORM_CONSTANT + 128) {
         g_const_writes.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    if (reg >= TEXTURE_BASE_R && reg < TEXTURE_BASE_R + 16 * 0x20) {
+        const uint32_t unit = (reg - TEXTURE_BASE_R) / 0x20;
+        const uint32_t field = (reg - TEXTURE_BASE_R) % 0x20;
+        if (field == 0) note_texture_unit(unit, arg & 0x7FFFFFFF);
         return;
     }
     switch (reg) {
