@@ -32,6 +32,14 @@ frames.bin
 /refs
 /surface_*.ppm
 
+# Shader cache: .spv files are the game's own RSX shaders compiled from the
+# disc, and pipelines.bin is the Vulkan pipeline cache built from them. Both are
+# derived from the game, both are regenerated on demand, and neither belongs in
+# git. They were tracked once, before this rule existed; the history purge is
+# what removed them.
+shader_cache/
+*.spv
+
 # Debug artefacts written by the runtime's diagnostic env vars. They are
 # regeneration products, not sources.
 *.glsl
