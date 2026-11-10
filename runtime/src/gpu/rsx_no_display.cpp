@@ -137,6 +137,15 @@ std::atomic<uint32_t> g_tex_field_writes[32 * 8];
  * only ever draws full-screen quads or point sprites looks completely different
  * from one drawing a scene. This distinguishes "draws nothing" from "draws a
  * textureless placeholder", which is what the empty frames suggest. */
+/* Surface registers: the renderer allocates a colour surface when the surface
+ * format/offset pair is written (rsx_renderer.cpp:1076). The stub counts none, so
+ * "does the guest REQUEST a surface" is the question that decides whether surface
+ * creation is upstream or merely concomitant. */
+/* Which low registers DOES the guest write? 0x0000-0FFF receives ~930k writes but
+ * the surface registers at 0x0200-0x0214 receive none. Knowing the actual set
+ * locates the game's render state far more precisely than "it draws". */
+std::atomic<uint32_t> g_low_regs[64];
+std::atomic<uint32_t> g_surface_regs[8];
 std::atomic<uint32_t> g_begin_end[8];
 std::atomic<uint32_t> g_vtxfmt[4];
 }
@@ -148,6 +157,12 @@ void note_texture_unit(uint32_t unit, uint32_t offset) {
     else g_tex_bound.fetch_and(~(1u << unit), std::memory_order_relaxed);
 }
 uint32_t bound_texture_mask() { return g_tex_bound.load(std::memory_order_relaxed); }
+void low_reg_stats(uint32_t* out) {
+    for (int i = 0; i < 64; i++) out[i] = g_low_regs[i].load(std::memory_order_relaxed);
+}
+void surface_reg_stats(uint32_t* out) {
+    for (int i = 0; i < 8; i++) out[i] = g_surface_regs[i].load(std::memory_order_relaxed);
+}
 void draw_shape_stats(uint32_t* prims, uint32_t* fmts) {
     for (int i = 0; i < 8; i++) prims[i] = g_begin_end[i].load(std::memory_order_relaxed);
     for (int i = 0; i < 4; i++) fmts[i] = g_vtxfmt[i].load(std::memory_order_relaxed);
@@ -162,6 +177,7 @@ void note_fragment_program(bool);
 
 void method(uint32_t reg, uint32_t arg) {
     g_commands.fetch_add(1, std::memory_order_relaxed);
+    if (reg < 0x100) g_low_regs[reg >> 2] .fetch_add(1, std::memory_order_relaxed);
     /* The renderer compiles a vertex program when the transform-program load
      * changes and a fragment program when its control word is written. Counting
      * both here is what tells "the title draws nothing" from "it draws and we do
@@ -218,6 +234,9 @@ void method(uint32_t reg, uint32_t arg) {
         }
         return;
     }
+    case 0x0200: case 0x0204: case 0x0208: case 0x0210: case 0x0214:
+        g_surface_regs[(reg - 0x0200) / 4].fetch_add(1, std::memory_order_relaxed);
+        return;
     case 0x1808: {
         /* BEGIN_END: low 3 bits are the primitive, and it also latches a draw. */
         const uint32_t prim = arg & 7;
