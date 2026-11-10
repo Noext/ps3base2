@@ -130,6 +130,15 @@ void build_dispatch() {
     }
 }
 
+/* getenv returns null under Emscripten without -sENV, so every PS3BASE_* knob is
+ * inert in the wasm build. This probe is therefore a compile-time constant rather
+ * than an environment variable: it is a diagnosis, not a runtime option, and it
+ * has to work in the build that actually fails. Flip it to true to run it. */
+#ifndef PS3BASE_NULL_PROBE
+#define PS3BASE_NULL_PROBE 0
+#endif
+constexpr bool kNullProbe = PS3BASE_NULL_PROBE != 0;
+
 Func lookup(uint32_t addr) {
     std::call_once(g_dispatch_once, build_dispatch);
     if (addr & 3) return nullptr;
@@ -235,6 +244,26 @@ void call_indirect(Context& ctx, uint8_t* base, uint32_t addr) {
         }
     }
     Func fn = lookup(addr);
+    if (!fn && kNullProbe) {
+        /* r31 is the object the caller is dereferencing. Read the member that
+         * yielded the null function pointer so the diagnosis is a value, not a
+         * guess: r31+12 -> r9, then [r9+0] is the vtable slot. */
+        const uint32_t o = static_cast<uint32_t>(ctx.gpr[31]);
+        const uint32_t r9 = static_cast<uint32_t>(ctx.gpr[9]);
+        std::fprintf(stderr, "[nullprobe] r31=0x%08x r9=0x%08x", o, r9);
+        /* r31 is the object, r9 comes from [r31+12]. The null function pointer is
+         * [r9+0], so r9 is a table the guest never populated. Print both so the
+         * next reader knows which structure is empty. */
+        if (o && vm::range_mapped(o, 0x40)) {
+            std::fprintf(stderr, " obj:");
+            for (int i = 0; i < 32; i++) std::fprintf(stderr, "%02x", vm::ptr(o)[i]);
+        }
+        if (r9 && vm::range_mapped(r9, 0x20)) {
+            std::fprintf(stderr, " r9bytes:");
+            for (int i = 0; i < 16; i++) std::fprintf(stderr, "%02x", vm::ptr(r9)[i]);
+        }
+        std::fprintf(stderr, "\n");
+    }
     if (!fn) {
         /* Name the object the vtable came from: the null is a field of a structure
          * the guest never initialised, and the register holding it says which. */
