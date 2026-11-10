@@ -236,10 +236,23 @@ memory requirements, finds a matching memory type, carves the image out of a
 types, no bind, no barriers, no explicit layout transitions. Textures and buffers
 are created and the driver owns the memory.
 
-So the port is **not** a rename of 87 calls. The suballocator, the barrier
-placement and the layout tracking have no counterpart and must be deleted, with
-the render passes rewritten around WebGPU's automatic synchronisation. That is a
-design change in the renderer's core, and it is the honest scope of milestone 2.
+**But I overstated this as a blocker, and the measurement corrects me.** Two facts
+reduce it a lot:
+
+1. The suballocator is **circumscribed**: 16 references to `MemBlock` /
+   `suballocate` / `g_suballocs` in the whole file, all in the resource-creation
+   path. Deleting it is a local change, not a rewrite.
+2. **The renderer already uses dynamic rendering.** It calls
+   `vkCmdBeginRendering` with `VkRenderingInfo` and contains **zero**
+   `VkRenderPass`/`vkCreateRenderPass`. That is exactly WebGPU's model — render
+   passes described per draw, no framebuffer objects, no render-pass objects to
+   translate.
+
+So the honest scope is: **delete** the suballocator, barriers and layout
+transitions (WebGPU does all three automatically), **keep** the render-pass
+structure as it is, and translate buffer/texture creation to
+`wgpuDeviceCreateBuffer/Texture`. Larger than a rename, considerably smaller than
+a renderer rewrite.
 
 ### What is not yet done in milestone 2
 
