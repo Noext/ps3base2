@@ -328,7 +328,25 @@ void call_import_inner(Context& ctx, uint8_t* base, uint32_t index, ImportSlot& 
      * yields 1, because the HLE path had overwritten the register with the
      * previous return value. The next global read through r2 faults at
      * 0x1 + (-30324) = 0xffff898d, five frames away from the import. */
-    const uint64_t caller_toc = ctx.gpr[2];
+    /* Every import stub on the disc opens with the same three instructions:
+     *
+     *     li r12, 0 ; oris r12, r12, 0x75 ; lwz r12, 0xNNN(r12)
+     *     std r2, 0x28(r1)        <- save the CALLER's TOC into its own frame
+     *     lwz r0, 0(r12) ; lwz r2, 4(r12) ; mtctr r0 ; bctr
+     *
+     * and returns to a caller that does `ld r2, 0x28(r1)`. The lifter replaces
+     * the whole stub with a call to this function, so the `std` above has to
+     * be performed HERE or the slot keeps whatever the previous frame left.
+     *
+     * Measured on GTA SA: the LLE path already did this store, the HLE path did
+     * not, so every HLE import left the caller restoring a stale TOC. At
+     * gta 0x184dc (`bl` cellAudioInit, then `ld r2, 0x28(r1)`) the reload
+     * produced 0x1 and the next global read faulted at 0x1 + (-30324).
+     * Doing it once, for both paths, is what the ABI asks for. */
+    {
+        const uint32_t frame_sp = static_cast<uint32_t>(ctx.gpr[1]);
+        st64(base, frame_sp + 0x28, ctx.gpr[2]);
+    }
     /* Arguments must be captured BEFORE the handler runs: afterwards r3 holds
      * the return value, which is how an earlier SPURS probe read 0. */
     if (imp.name && std::strstr(imp.name, "cellSpursInitialize") && std::getenv("PS3BASE_SPURS_TRACE")) {
