@@ -495,6 +495,22 @@ LV2_SYSCALL(817, sys_fs_fcntl) {
     uint32_t op = u32arg(ctx, 1);
     uint32_t arg = u32arg(ctx, 2);
     uint32_t size = u32arg(ctx, 3);
+#if defined(PS3BASE_FS_PROBE) && PS3BASE_FS_PROBE
+    {
+        /* Which fcntl operation does the boot keep issuing, and does it succeed? */
+        static std::atomic<uint64_t> hist[8];
+        static std::atomic<int> n{0};
+        const int slot = op == 0x80000004 ? 0 : op == 0x8000000A ? 1 : op == 0x8000000B ? 2
+                       : op == 0x80000009 ? 3 : 4;
+        hist[slot].fetch_add(1);
+        if (n.fetch_add(1) % 100 == 99)
+            LOG_INFO("fcntlprobe", "op 0x%08x fdn %u size %u (slots 04:%llu 0A:%llu 0B:%llu 09:%llu other:%llu)",
+                     op, fdn, size,
+                     (unsigned long long)hist[0].load(), (unsigned long long)hist[1].load(),
+                     (unsigned long long)hist[2].load(), (unsigned long long)hist[3].load(),
+                     (unsigned long long)hist[4].load());
+    }
+#endif
     switch (op) {
     case 0x80000004:
         if (size > 4) return CELL_EINVAL;
@@ -523,6 +539,14 @@ LV2_SYSCALL(817, sys_fs_fcntl) {
         vm::write64(arg + 0x20, ((40ull << 30) - 1) / 4096);
         return CELL_OK;
     case 0xC0000006:
+        /* MEASURED: answering this as a capacity (block size + count) BREAKS the
+         * boot -- assets stop loading entirely (0 MediaPS3/pngdec events instead of
+         * 125) and the pc falls back to 0x003a18b0. The title treats a valid answer
+         * here as a precondition it then tests differently. ENOTSUP is what makes it
+         * take the path that loads assets, so keep it.
+         *
+         * What this op actually queries is unresolved; the retry loop it causes is
+         * downstream of the real stall, not the stall itself. */
         if (size == 0x20 && vm::read32(arg) == 0x20 && vm::read32(arg + 4) == 0x10 && vm::read32(arg + 8) == 0x18) {
             vm::write32(arg + 0x18, CELL_ENOTSUP_CODE);
             vm::write32(arg + 0x1C, 0);
