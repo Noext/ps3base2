@@ -259,6 +259,20 @@ int main(int argc, char** argv) {
             return false;
         });
     }
+    /* The five lifted functions that reference constant 300 (sys_vm_memory_map)
+     * as a syscall base. Guard them: reaching one and not mapping is a different
+     * diagnosis from never reaching the code at all. */
+    for (uint32_t a : {0x3c5de0u, 0x10051b8u, 0xa1874u, 0x21a338u, 0x5880b8u}) {
+        hooks::add_guard(a, [](ppu::Context& c) {
+            static std::atomic<int> n{0};
+            const int k = n.fetch_add(1);
+            if (k < 6)
+                std::fprintf(stderr, "[mapcode] pc=0x%08x lr=0x%llx\n",
+                             static_cast<unsigned>(c.cia),
+                             static_cast<unsigned long long>(c.lr));
+            return false;
+        });
+    }
     hooks::add_guard(0x21c178, [](ppu::Context& c) {
         static std::atomic<int> n{0};
         const int k = n.fetch_add(1);
