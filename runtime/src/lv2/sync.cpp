@@ -77,6 +77,12 @@ bool trace_sets_all() {
 }
 
 bool flag_watched(uint32_t id) {
+    /* getenv is inert under wasm, so the env-driven selection can never enable this
+     * there. A compile-time switch makes the trace usable in the build that needs
+     * it, and keeps the env path for native. */
+#if defined(PS3BASE_FLAG_TRACE_ALL) && PS3BASE_FLAG_TRACE_ALL
+    if ((id & 0xff000000u) == 0x98000000u) return true;
+#endif
     static const bool all = std::getenv("PS3BASE_FLAG_TRACE_ALL") != nullptr;
     if (all && (id & 0xff000000u) == 0x98000000u) return true;
     static const std::vector<uint32_t> ids = [] {
