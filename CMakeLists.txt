@@ -202,7 +202,14 @@ target_compile_options(ps3base_spu PRIVATE ${PS3BASE_ARCH_FLAGS} ${PS3BASE_CLANG
 # would do is simply not done. Remove this file once a real port wants them.
 list(APPEND GOWA_RUNTIME_SOURCES "${CMAKE_SOURCE_DIR}/runtime/src/gowa_stubs.cpp")
 
-add_executable(ps3base runtime/src/main.cpp $<TARGET_OBJECTS:ps3base_runtime> $<TARGET_OBJECTS:ps3base_volk>)
+add_executable(ps3base runtime/src/main.cpp
+                "${PS3BASE_GENERATED_DIR}/table.cpp"
+                $<TARGET_OBJECTS:ps3base_runtime> $<TARGET_OBJECTS:ps3base_volk>)
+# table.cpp is compiled into the binary, not only into libps3base_ppu. The
+# image table now DEFINES ppu::hook_flags, which hooks.cpp and ppu_ops.cpp
+# reference; a static library does not resolve a symbol for an object that was
+# already pulled in from an earlier archive, so leaving it to the archive
+# produced undefined references in the final link.
 # The binary is named after the runtime, not a title: this tree boots whatever
 # profile it is given, and the earlier name was the fork's own.
 set_target_properties(ps3base PROPERTIES OUTPUT_NAME "ps3base")
@@ -245,6 +252,14 @@ add_test(NAME lv2_enosys COMMAND lv2_enosys)
 # memory_map calls vm::write32, which goes through rsv::store_range, so it has to
 # link reservation.cpp. It was missing, and the target did not build on main
 # either -- found while checking this branch's own tests.
+# hook_flags: one array per image, so a module placed above 0x2000000 stays in
+# bounds. Self-contained: it builds its own image table at a high address rather
+# than linking the generated table, which would drag in every lifted function.
+add_executable(hook_flags tests/hook_flags.cpp)
+target_include_directories(hook_flags PRIVATE runtime/include)
+target_compile_options(hook_flags PRIVATE ${PS3BASE_ARCH_FLAGS})
+add_test(NAME hook_flags COMMAND hook_flags)
+
 add_executable(memory_map tests/memory_map.cpp runtime/src/memory.cpp runtime/src/regions.cpp runtime/src/mem.cpp runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/backtrace_port.cpp runtime/src/host.cpp runtime/src/log.cpp)
 target_include_directories(memory_map PRIVATE runtime/include)
 target_compile_options(memory_map PRIVATE ${PS3BASE_ARCH_FLAGS})

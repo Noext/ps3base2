@@ -682,11 +682,13 @@ def gen_insn(m, w):
 
 
 class Emitter:
-    def __init__(self, img, funcs, entries, import_base=0):
+    def __init__(self, img, funcs, entries, import_base=0, image_index=0, text_lo=0):
         self.img = img
         self.funcs = funcs
         self.entries = entries
         self.import_base = import_base
+        self.image_index = image_index
+        self.text_lo = text_lo
         self.unimpl = {}
 
     def fname(self, addr):
@@ -751,7 +753,12 @@ class Emitter:
                     out.append(f"    {self.jump_out(nxt, f)}")
         out.append("}")
         out.append(f"void {name}(ppu::Context& ctx, uint8_t* base) {{")
-        out.append(f"    if (ppu::hook_flags[0x{f.entry >> 2:x}]) [[unlikely]] {{")
+        # One flag array per image, indexed from that image's own text start.
+        # A single global array cannot cover a module placed above the game (Red
+        # Dead's liblv2 sits at 0x21000000, which indexed a 0x800000-byte array
+        # at 0x8405244), and the index is computed here at translation time so
+        # the check costs the same as before.
+        out.append(f"    if (ppu::hook_flags[{self.image_index}][0x{f.entry - self.text_lo >> 2:x}]) [[unlikely]] {{")
         out.append(f"        ppu::hook_call(ctx, base, 0x{f.entry:x}, {name}_body);")
         out.append("        return;")
         out.append("    }")
@@ -839,7 +846,7 @@ def main(manifest_path, nid_db, out_dir, chunk_bytes="0x19000"):
     for idx, spec in enumerate(manifest):
         img = Image(os.path.join(root, spec["elf"]), nids)
         funcs, entries = lift(img)
-        em = Emitter(img, funcs, entries, len(imports))
+        em = Emitter(img, funcs, entries, len(imports), idx, img.text_lo)
         for imp in img.imports:
             imports.append(dict(imp, image=idx))
         for exp in img.exports:
@@ -872,6 +879,28 @@ def main(manifest_path, nid_db, out_dir, chunk_bytes="0x19000"):
     lines += [f"void {name}(ppu::Context& ctx, uint8_t* base);" for _, name in all_funcs]
     open(os.path.join(out_dir, "funcs.h"), "w").write(NL.join(lines) + NL)
     t = ['#include "ppu/context.h"', '#include "funcs.h"', '#include "runtime/image.h"', "", "namespace image {", ""]
+    # One hook-flag array per image, sized to its own code segment. The lifted
+    # code indexes these directly (see Emitter.function), so a module placed
+    # anywhere in the guest map stays in bounds -- the single global array this
+    # replaces covered only the first 0x2000000 bytes of address space.
+    # Declared inside namespace ppu, because the lifted code spells them
+    # ppu::hook_flags and ppu::hook_flag_image_count.
+    t.append("}  // namespace image")
+    t.append("")
+    t.append("namespace ppu {")
+    for i, im in enumerate(images):
+        n = (im["text_hi"] - im["text_lo"] + 3) // 4
+        t.append("uint8_t hook_flags_storage_%d[%d] = {};" % (i, n))
+    t.append("")
+    # extern on the definition too: at namespace scope a const object has
+    # internal linkage in C++ unless it is declared extern, and the lifted code
+    # in another translation unit would then see an undefined symbol.
+    t.append("extern uint8_t* const hook_flags[] = {")
+    t += ["    hook_flags_storage_%d," % i for i in range(len(images))]
+    t += ["};", f"extern const uint32_t hook_flag_image_count = {len(images)};", ""]
+    t.append("}  // namespace ppu")
+    t.append("")
+    t.append("namespace image {")
     t.append("const ImageEntry images[] = {")
     for im in images:
         t.append(f'    {{"{im["name"]}", "{im["file"]}", {str(im["prx"]).lower()}, 0x{im["text_lo"]:x}, 0x{im["text_hi"]:x}, 0x{im["toc"]:x}, 0x{im["entry"]:x}}},')

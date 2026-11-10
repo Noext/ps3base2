@@ -10,6 +10,7 @@
 #include "runtime/memory.h"
 #include "runtime/jobsys.h"
 #include "jobsys/jobs_graph.h"
+#include "runtime/image.h"
 #include "runtime/reservation.h"
 #include "runtime/trace.h"
 #include "jobsys/edge_consumer.h"
@@ -49,6 +50,19 @@ void status_dump();
 namespace hooks {
 
 namespace {
+
+/* Set an image's flag byte for an address. The one place that writes the flags,
+ * so a bad address is reported once, loudly, instead of silently indexing past
+ * an array. Returns false when the address belongs to no image. */
+static bool set_hook_flag(uint32_t addr) {
+    uint8_t* f = ppu::hook_flag_for(addr);
+    if (!f) {
+        LOG_WARN("hook", "no image owns 0x%08x: hook flag NOT set (this is a lift/layout bug, not a game bug)", addr);
+        return false;
+    }
+    *f = 1;
+    return true;
+}
 
 struct Dump {
     int reg;
@@ -629,7 +643,7 @@ void install_critpath() {
             h->quiet = true;
         }
         h->cp = t[i].kind;
-        ppu::hook_flags[t[i].addr >> 2] = 1;
+        set_hook_flag(t[i].addr);
     }
 }
 
@@ -648,7 +662,7 @@ void install_patches() {
             h->ring = true;
         }
         h->guard = p.guard;
-        ppu::hook_flags[p.addr >> 2] = 1;
+        set_hook_flag(p.addr);
     }
 }
 
@@ -661,7 +675,7 @@ void add_guard(uint32_t addr, bool (*guard)(ppu::Context&)) {
     }
     if (h->guard) LOG_WARN("hook", "guard at 0x%08x replaced by jobsys", addr);
     h->guard = guard;
-    ppu::hook_flags[addr >> 2] = 1;
+    set_hook_flag(addr);
     /* MEASURED TRAP, guarded here rather than at each call site: a guard added
      * after hooks::init() left hook_impl null, and the lifted code only consults
      * hook_flags when hook_impl is set, so the guard was registered and never
@@ -685,7 +699,7 @@ void install_jobsys_edge() {
     }
     jsedge::set_prev_guard(h->guard);
     h->guard = jsedge::on_wait_previous;
-    ppu::hook_flags[0x41cbdc >> 2] = 1;
+    set_hook_flag(0x41cbdc);
     Hook*& sp = g_hooks[0x49cd6c];
     if (!sp) {
         sp = new Hook;
@@ -693,7 +707,7 @@ void install_jobsys_edge() {
         sp->quiet = true;
     }
     sp->guard = jsedge::on_set_priorities;
-    ppu::hook_flags[0x49cd6c >> 2] = 1;
+    set_hook_flag(0x49cd6c);
 }
 
 void hog_thread(int lp, int on_ms, int off_ms, double from) {
@@ -943,7 +957,10 @@ void init() {
      * GOWA_HOOK specs, so the flags are filled and the parse continues. */
     const bool route_all = std::getenv("PS3BASE_FORCE") || std::getenv("PS3BASE_CALL_TRACE");
     if (route_all) {
-        std::memset(ppu::hook_flags, 1, sizeof ppu::hook_flags);
+        for (uint32_t i = 0; i < ppu::hook_flag_image_count; i++) {
+            const auto& im = image::images[i];
+            std::memset(ppu::hook_flags[i], 1, (im.text_hi - im.text_lo + 3) / 4);
+        }
         ppu::hook_impl = impl;
     }
     /* hook_impl must be non-null for hook_call to dispatch anything. Assign it
@@ -968,25 +985,28 @@ void init() {
         add_guard(0x2e4120, load_arm_probe);
         add_guard(0x2eeb78, load_setter_probe);
         if (!ppu::hook_impl) ppu::hook_impl = impl;
-        for (uint32_t a : {0x2eee64u, 0x2e4120u, 0x2eeb78u}) ppu::hook_flags[a >> 2] = 1;
+        for (uint32_t a : {0x2eee64u, 0x2e4120u, 0x2eeb78u}) set_hook_flag(a);
         add_guard(0x2ea564, load_advance_probe);
-        ppu::hook_flags[0x2ea564 >> 2] = 1;
+        set_hook_flag(0x2ea564);
         LOG_INFO("loadprobe", "probes installed: f_002eee64 (arbiter), f_002e4120 (arm), f_002eeb78 (setter), f_002ea564 (state-5 writer)");
     }
     if (std::getenv("PS3BASE_LIST_GUARD")) {
         add_guard(0x64c044, list_guard);
         if (!ppu::hook_impl) ppu::hook_impl = impl;
-        ppu::hook_flags[0x64c044 >> 2] = 1;
+        set_hook_flag(0x64c044);
         /* Prove the wiring, do not assume it: a guard that is never called and a
          * guard that is called and finds nothing are opposite results. */
         LOG_INFO("listguard", "guard installed on f_0064c044: hook_impl=%s flag=%u, node +28/+32 are checked against the text range 0x00010000..0x00ba3688",
-                 ppu::hook_impl ? "set" : "NULL", unsigned(ppu::hook_flags[0x64c044 >> 2]));
+                 ppu::hook_impl ? "set" : "NULL",
+                 unsigned(ppu::hook_flag_for(0x64c044) ? *ppu::hook_flag_for(0x64c044) : 0));
     }
     /* Any hook or guard registered above needs the dispatcher, whether or not
      * the title-specific hook set is enabled. */
     if (ppu::hook_impl == nullptr) {
         bool any = !g_hooks.empty();
-        for (uint32_t a = 0; a < 0x800000 && !any; a++) any = ppu::hook_flags[a] != 0;
+        for (uint32_t i = 0; i < ppu::hook_flag_image_count && !any; i++)
+            for (uint32_t a = 0; a < (image::images[i].text_hi - image::images[i].text_lo + 3) / 4 && !any; a++)
+                any = ppu::hook_flags[i][a] != 0;
         if (any) ppu::hook_impl = impl;
     }
     if (std::getenv("PS3BASE_GAME_HOOKS") == nullptr) return;
@@ -1030,7 +1050,7 @@ void init() {
             if (nm == parts[0]) addr = a;
         }
         if (!addr) addr = static_cast<uint32_t>(std::strtoul(parts[0].c_str() + (parts[0].rfind("f_", 0) == 0 ? 2 : 0), nullptr, 16));
-        if (!addr || (addr >> 2) >= sizeof(ppu::hook_flags)) {
+        if (!addr || !ppu::hook_flag_for(addr)) {
             LOG_WARN("hook", "bad hook '%s'", item.c_str());
             continue;
         }
@@ -1059,7 +1079,7 @@ void init() {
             }
         }
         g_hooks[addr] = h;
-        ppu::hook_flags[addr >> 2] = 1;
+        set_hook_flag(addr);
         if (!h->ring && !h->panic) LOG_INFO("hook", "hooked %s at 0x%08x", name_of(addr).c_str(), addr);
     }
     install_patches();
