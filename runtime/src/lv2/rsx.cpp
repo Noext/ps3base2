@@ -159,6 +159,17 @@ int64_t context_attribute(uint32_t package, uint64_t a3, uint64_t a4, uint64_t a
         vm::write32(g_rsx.dma_control + 0x40, static_cast<uint32_t>(a4));
         return CELL_OK;
     case 0x102: {
+#if defined(PS3BASE_FLIP_PROBE) && PS3BASE_FLIP_PROBE
+        /* Are the flips OUR counter or the game's activity? Count the vblank
+         * packets (package 0x102) that drive gpu::flip. If the two numbers match,
+         * the flips are derived from our own packet handling, not from the guest
+         * requesting a presentation. */
+        {
+            static std::atomic<uint64_t> pkts{0};
+            const uint64_t n = pkts.fetch_add(1, std::memory_order_relaxed) + 1;
+            if ((n % 200) == 0) LOG_INFO("flipprobe", "vblank packets %llu", (unsigned long long)n);
+        }
+#endif
         uint32_t head = static_cast<uint32_t>(a3);
         uint32_t v = static_cast<uint32_t>(a4);
         uint32_t buffer = (v & 0x80000000u) ? (v & 0xF) : 0;
