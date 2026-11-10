@@ -61,3 +61,22 @@ Milestone 3 is **not** reached: the menu is not up. What changed is that the boo
 **moving** through its asset-loading phase at 9 threads and 101 decoded textures, with
 the PC advancing — the furthest this build has been, and the first time the engine has
 been shown to decode real game textures under wasm.
+
+## A note on the shared tree
+
+The last verification showed **1 native build error** unrelated to this round:
+
+    hooks.cpp:(.text+0x6176): undefined reference to `ppu::hook_flags`
+
+`git stash` + rebuild reproduces it identically, so it **predates my changes**. The
+working tree also contains modifications I did not make — `recomp/ppu/codegen.py`,
+`CMakeLists.txt`, `runtime/include/ppu/ops.h`, `runtime/src/hooks.cpp`,
+`tests/hook_flags.cpp` — which is a parallel effort on the per-image hook-flag table.
+
+`out/ppu/table.cpp` (generated, dated Nov 5) does **not** define `hook_flags`, so the
+declaration in `ops.h` has no storage until that codegen change lands. That is the
+other track's work; I am not editing it, and I am recording it here so the next reader
+knows the native link error is expected and owned elsewhere.
+
+**My own change in `runtime/src/lv2/fs.cpp` (the `PS3BASE_FS_PROBE` block) is present and
+committed**, and the wasm build links and runs with the decoder fix.
