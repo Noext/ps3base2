@@ -448,7 +448,13 @@ LV2_SYSCALL(82, sys_event_flag_create) {
     }
     const uint32_t id = add_object(0x98000000, f);
     {
+        /* getenv is inert under wasm (measured repeatedly in this port), so the
+         * env gate made this trace silent exactly where it was needed. */
+#if defined(PS3BASE_FLAG_CREATE_TRACE) && PS3BASE_FLAG_CREATE_TRACE
+        static const bool on = true;
+#else
         static const bool on = std::getenv("PS3BASE_FLAG_TRACE") != nullptr;
+#endif
         static std::atomic<int> n{0};
         if (on && n.fetch_add(1) < 200) {
             const guest::Thread* t = guest::current();
@@ -481,7 +487,7 @@ LV2_SYSCALL(83, sys_event_flag_destroy) {
 LV2_SYSCALL(85, sys_event_flag_wait) {
 #if defined(PS3BASE_FLAG_ID_PROBE) && PS3BASE_FLAG_ID_PROBE
     static std::atomic<int> n{0};
-    if (n.fetch_add(1) < 400)
+    if (n.fetch_add(1) < 100000)
         LOG_INFO("flagid", "wait id=%u bits=0x%llx mode=0x%x lr=0x%08x", u32arg(ctx, 0),
                  (unsigned long long)u64arg(ctx, 1), u32arg(ctx, 2), static_cast<uint32_t>(ctx.lr));
 #endif
