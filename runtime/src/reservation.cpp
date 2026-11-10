@@ -622,7 +622,12 @@ bool park_enabled() {
      * host::yield() without executing a single guest instruction (measured: insns
      * frozen at ~12,288 against native's 287 billion). Force it on for wasm so the
      * parked thread is woken by kick_line() instead of burning its quantum. */
-#if defined(PS3BASE_SPU_PARK_FORCED) && PS3BASE_SPU_PARK_FORCED
+#if defined(__wasm__) || defined(__EMSCRIPTEN__) || \
+    (defined(PS3BASE_SPU_PARK_FORCED) && PS3BASE_SPU_PARK_FORCED)
+    /* Under wasm the environment cannot enable this (getenv is inert), and the
+     * measured cost of leaving it off is severe: SPU instruction throughput drops
+     * 2,425x (3,072 against 7,450,624) and putllc failures rise from 1.03M to
+     * 3.43M. Forcing the futex park is the correct default for this target. */
     return true;
 #else
     static const bool on = env_long("GOWA_SPU_PARK", 0) != 0;
