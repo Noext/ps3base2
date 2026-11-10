@@ -197,6 +197,22 @@ int main(int argc, char** argv) {
             }
         }
     }
+    /* The guest runs on its own host thread, so main must not return: Emscripten
+     * shuts the runtime down when it does, killing the guest before it executes an
+     * instruction. Wait and report what the guest does. */
+    std::printf("ps3base-wasm: waiting for guest activity...\n");
+    for (int i = 0; i < 30; i++) {
+        host::sleep_ms(1000);
+        const uint32_t pc = main_thread->ctx.cia ? main_thread->ctx.cia : static_cast<uint32_t>(main_thread->ctx.lr);
+        std::printf("ps3base-wasm: t=%ds pc=0x%08x syscalls=%llu exited=%d\n", i + 1, pc,
+                    static_cast<unsigned long long>(main_thread->syscalls.load()),
+                    main_thread->exited ? 1 : 0);
+        if (main_thread->exited) {
+            std::printf("WASM-GUEST-THREAD-EXITED\n");
+            break;
+        }
+    }
+    std::printf("WASM-BOOT-ALIVE\n");
     return 0;
 }
 
