@@ -93,12 +93,23 @@ def step_check_elf(args):
 
 
 def step_reloc(args):
+    """Relocate the firmware modules above THIS title.
+
+    The bases are computed from the title's own text extent, not read from a
+    fixed file. A fixed 0x01000000 worked only while every title's text ended
+    below it; Red Dead Redemption ends at 0x10d546c and swallowed liblv2 whole,
+    which showed up as five "multiple definition" link errors and would have
+    been worse at run time (lookup() returns the first range containing an
+    address, so every liblv2 call would have run the game's code).
+    """
     reloc = os.path.join(args.fw, "reloc")
-    if os.path.exists(os.path.join(reloc, "manifest.json")):
-        return
     os.makedirs(reloc, exist_ok=True)
+    layout = os.path.join(args.gen_root, "lle_layout.json")
+    os.makedirs(args.gen_root, exist_ok=True)
+    log("computing firmware module bases for %s" % os.path.basename(args.elf))
+    run(["tools/layout_for.py", "--elf", args.elf, "--out", layout], quiet=False)
     log("relocating firmware modules into %s" % reloc)
-    run(["tools/prx_relocate.py", "recomp/lle_layout.json", args.fw, reloc], quiet=False)
+    run(["tools/prx_relocate.py", layout, args.fw, reloc], quiet=False)
 
 
 def step_ppu(args):

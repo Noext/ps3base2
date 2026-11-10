@@ -59,29 +59,77 @@ tar xf update_files.tar CORE_OS_PACKAGE.pkg dev_flash_001.tar.aa.2025_02_19_0017
 tar tf update_files.tar | grep dev_flash     # lister les tranches exactes
 ```
 
-## 4. Le piege : ce ne sont pas des SELF
+## 4. Dechiffrer les tranches : `unpkg`
 
+Chaque `dev_flash_NNN.tar.aa.*` est un conteneur `SCE\0` de **`header_type` 3** :
+un SDAT de donnees, pas un SELF executable. Deux outils existent sur cette
+machine, dans `_untrusted/allps3tools/kakaroto-ps3tools/` :
+
+| Outil | Pour quoi |
+|---|---|
+| `unpkg <in> <outdir>` | le SDAT firmware -> un dossier avec `content` (tar) |
+| `unself <in> <out>` | un SELF de module -> un ELF ; **ne marche pas** ici, trop ancien |
+
+`unpkg` lit ses cles dans **`~/.ps3/`**. Elles sont dans
+`_untrusted/allps3tools/kakaroto-ps3keys/` et `~/Dev/ps3keys/` ; copier le
+contenu, sans le README :
+
+```bash
+mkdir -p ~/.ps3
+cp /root/Dev/ps3keys/{app,iso,lv1,lv2,pkg,ldr,rvk,spp}-* ~/.ps3/
 ```
-$ xxd -l 16 dev_flash_001.tar.aa.2025_02_19_001719
-00000000: 5343 4500 0000 0002 0000 0003 0000 0000   SCE.............
+
+Sans elles : `no key found`. Avec :
+
+```bash
+unpkg dev_flash_001.tar.aa.2025_02_19_001719 /tmp/df001
+# -> /tmp/df001/content  (tar), plus info0 et info1
+tar xf /tmp/df001/content -C /tmp/dffull      # -> dev_flash/...
 ```
 
-La signature est `SCE\0`, comme un SELF, mais **`header_type` vaut 3**, et
-`tools/unself.py` echoue dessus :
+Les tranches se recollent : chacune porte une partie de l'arbre `dev_flash/`, et
+extraire les 24 dans le meme dossier reconstitue l'ensemble. Resultat mesure :
+**436 `.sprx`, dont 142 dans `dev_flash/sys/external/`**.
 
+## 5. Les `.sprx` sont encore des SELF : les passer en `.prx`
+
+Un `.sprx` sorti du PUP est toujours un conteneur `SCE\0` (`self_type` 4,
+`key_revision` 0x1c). Le runtime veut des ELF : c'est ce que sont les huit
+`fw/4.91/*.prx` existants (`7f 45 4c 46`).
+
+**L'outil du depot le fait, celui de kakaroto non.** `unself` (kakaroto) echoue
+avec `self_decrypt_header failed` : ses tables de cles s'arretent aux revisions
+315-356 et il ne connait pas 0x1c. `tools/unself.py` du depot lit
+`keys/self_keys.json` (89 entrees) et gere la revision :
+
+```bash
+cd tools && python3 - <<'PY'
+import sys; sys.path.insert(0,'.')
+from unself import Self
+s = Self('/tmp/dffull/dev_flash/sys/external/libfiber.sprx')
+open('/root/Dev/ps3base2/fw/4.91/libfiber.prx','wb').write(s.elf())
+PY
 ```
-error unpack requires a buffer of 24 bytes
-```
 
-Raison : `unself.py` lit `appinfo_off`, `elf_off`, `phdr_off`, `shdr_off` a
-`0x20..0x70` et attend la mise en page d'un SELF executtable. Un conteneur de
-**donnees** (SDAT, `header_type` 3) n'a pas ces champs : les octets a cet endroit
-sont du materiel chiffre, d'ou la taille absurde (24 octets demandes pour une
-structure tronquee).
+Mesure : **32 modules dechiffres, 0 echec.**
 
-**Ce qu'il faut a la place :** un outil qui dechiffre un SDAT firmware avec la cle
-de revision, pas un `unself`. C'est le role de `scetool` (option `--decrypt`) ou de
-l'extracteur de PUP de RPCS3, aucun des deux n'est installe ici.
+## 6. Brancher les nouveaux modules
+
+1. Les mettre dans `fw/4.91/*.prx` (faits : `libfiber`, `libnet`, `libvoice`,
+   `libsysutil`, `libsysutil_np`, `libsysutil_np2`, `libsysutil_np_trophy`,
+   `libnetctl`, `libhttp`, `libssl`, `libaudio`, `libio`, `librtc`, `libfont`,
+   `libfontFT`, `libfreetype`, `libresc`, `libsail`, `libl10n`, `libavcdec`,
+   `libadec`, `libdmux`, `libgem`, `libusbd`).
+2. Les lister dans `recomp/lle_modules.txt`, un par ligne.
+3. `tools/layout_for.py --elf <titre> --modules recomp/lle_modules.txt --out <gen>/lle_layout.json`
+   calcule leurs bases depuis la fin du texte du titre.
+4. `tools/prx_relocate.py <layout> fw/<ver> fw/<ver>/reloc` : les reloge. Le
+   dossier de sortie **doit exister**.
+5. Le manifeste d'images doit lister chaque module. `tools/setup.py --steps ppu`
+   les lifte tous.
+
+Effet mesure sur Red Dead Redemption : les imports fournis passent de **106 a 308
+sur 343**, et ce qui reste a ecrire en HLE de **237 a 35**.
 
 ## 5. Ce que le depot fournit deja
 
