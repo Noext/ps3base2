@@ -662,6 +662,11 @@ void add_guard(uint32_t addr, bool (*guard)(ppu::Context&)) {
     if (h->guard) LOG_WARN("hook", "guard at 0x%08x replaced by jobsys", addr);
     h->guard = guard;
     ppu::hook_flags[addr >> 2] = 1;
+    /* MEASURED TRAP, guarded here rather than at each call site: a guard added
+     * after hooks::init() left hook_impl null, and the lifted code only consults
+     * hook_flags when hook_impl is set, so the guard was registered and never
+     * called. Setting it here makes add_guard self-sufficient. */
+    if (!ppu::hook_impl) ppu::hook_impl = impl;
 }
 
 void install_ppujobs() {
