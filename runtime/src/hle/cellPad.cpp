@@ -116,11 +116,18 @@ void load_command_queue() {
      * by a generous gap so a slow first frame cannot swallow the press.
      */
     {
+        /* The real path, from tools/drive_world.py:95-130: PSNOFFLINE -> Down
+         * then z, and z (= cross) in DIALOG, MENU and LIST. FORM needs focus-aware
+         * navigation, which a blind script cannot do -- but z is accepted in four
+         * of five states, so a long repeating series traverses most of the path.
+         * 400 ms gaps keep a slow frame from swallowing a press. */
         static const char* const script[] = {
-            "cross 120 900",
-            "cross 120 900",
-            "start 120 900",
-            "cross 120 900",
+            "down 150 1200", "cross 150 1200",
+            "cross 150 1200", "cross 150 1200", "cross 150 1200",
+            "down 150 1200", "cross 150 1200", "cross 150 1200",
+            "cross 150 1200", "cross 150 1200", "cross 150 1200",
+            "down 150 1200", "cross 150 1200", "cross 150 1200",
+            "cross 150 1200", "cross 150 1200",
         };
         for (const char* line : script) {
             std::string text(line);
