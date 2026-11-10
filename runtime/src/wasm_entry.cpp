@@ -14,6 +14,7 @@
 #include "runtime/files.h"
 #include "runtime/kernel.h"
 
+namespace spu { void rsv_lost_stats(uint64_t*, uint64_t*); }
 namespace gpu { namespace rsx {
 void shader_stats(uint64_t*, uint64_t*, uint64_t*);
 void framebuffer_stats(uint64_t*, uint64_t*, uint32_t*, uint32_t*);
@@ -420,6 +421,12 @@ int main(int argc, char** argv) {
         if (!dumped_threads && i >= 3) {
             dumped_threads = true;
             std::printf("ps3base-wasm: --- guest thread dump at t=%ds ---\n", i + 1);
+            {
+                uint64_t c = 0, h = 0;
+                spu::rsv_lost_stats(&c, &h);
+                std::printf("ps3base-wasm: reservation lost checks=%llu hits=%llu\n",
+                            (unsigned long long)c, (unsigned long long)h);
+            }
             guest::status_dump();
             spu::status_dump();
         }
