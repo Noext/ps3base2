@@ -267,6 +267,13 @@ int main(int argc, char** argv) {
             /* The guest spins on [obj+8] against a target held in r31. Print the
              * object, the two values and the flip counter, so the wait can be read
              * instead of inferred. */
+            if (main_thread->ctx.cia == 0x3a18b0u || main_thread->ctx.cia == 0x3a189cu) {
+                std::printf("ps3base-wasm: sleep pc=0x%08x r3=%lld r11=%llu lr=0x%08x\n",
+                            static_cast<uint32_t>(main_thread->ctx.cia),
+                            static_cast<long long>(main_thread->ctx.gpr[3]),
+                            static_cast<unsigned long long>(main_thread->ctx.gpr[11]),
+                            static_cast<uint32_t>(main_thread->ctx.lr));
+            }
             if (main_thread->ctx.cia == 0x1307a08u) {
                 const uint32_t obj = static_cast<uint32_t>(main_thread->ctx.gpr[30]);
                 const uint32_t tgt = static_cast<uint32_t>(main_thread->ctx.gpr[31]);
