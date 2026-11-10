@@ -58,3 +58,33 @@ sessions, each presenting as a silent wrong result rather than an error:
 If a header is not installed, fetch or vendor it — that is what
 `third_party/renderdoc/renderdoc_app.h` is for. A hand-written layout is a guess
 that fails quietly.
+
+## An implemented syscall answers what the console answers
+
+"Never a fake success" is about functions that are **not implemented**: those
+return an explicit error and log their name, so the failure is read where it
+happens. It is not a licence to refuse work the console performs.
+
+For anything implemented, the target is the console's behaviour, which in
+practice means RPCS3's: the same return code, the same values written into the
+caller's output structures, the same "offline" state for the network. Success is
+a legitimate answer when the console succeeds.
+
+This is written down because getting it backwards cost a session. `sys_fs_chmod`,
+`sys_fs_utime`, `sys_net_infoctl` and `sys_net_bnet_sysctl` were made to refuse
+things RPCS3 accepts: chmod returned `CELL_EACCES` when the host refused a mode
+the console ignores, and the net calls returned `CELL_ENOTSUP` where RPCS3
+returns `CELL_OK`. libnet then initialised -- it was told the socket layer was up
+-- and the title waited on a stack nobody had built. It went from 7081 frame
+flips to zero, and the failure surfaced minutes later with no connection to the
+cause.
+
+The rule for a handler is therefore:
+
+1. Read the RPCS3 implementation. Its return codes, its writes into guest
+   structures and its side effects are the specification.
+2. Implement that. If RPCS3 only validates and returns `CELL_OK`, validate and
+   return `CELL_OK`.
+3. Reserve explicit refusals for what genuinely is not implemented, and name it
+   in the log.
+
