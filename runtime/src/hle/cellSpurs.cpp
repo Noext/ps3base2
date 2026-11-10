@@ -15,6 +15,16 @@
  * Errors use the SPURS base, 0x80410A00.
  */
 
+#if defined(PS3BASE_SPURS_PROBE) && PS3BASE_SPURS_PROBE
+#define SPURS_PROBE(name)                                                      \
+    do {                                                                       \
+        static std::atomic<int> n{0};                                          \
+        if (n.fetch_add(1) < 6) LOG_INFO("spursprobe", "%s", name);            \
+    } while (0)
+#else
+#define SPURS_PROBE(name) do {} while (0)
+#endif
+
 namespace hle {
 
 namespace {
@@ -76,6 +86,7 @@ HLE_FUNC(cellSpurs, _cellSpursEventFlagInitialize) {
 }
 
 HLE_FUNC(cellSpurs, cellSpursEventFlagAttachLv2EventQueue) {
+    SPURS_PROBE("EventFlagAttachLv2EventQueue");
     const uint32_t flag = a32(ctx, 0);
     if (!flag) return ret(ctx, SPURS_TASK_ERROR_NULL_POINTER);
     if (!vm::range_mapped(flag, EF_GUEST_SIZE)) return ret(ctx, SPURS_TASK_ERROR_PERM);
@@ -97,6 +108,7 @@ HLE_FUNC(cellSpurs, cellSpursEventFlagDetachLv2EventQueue) {
 }
 
 HLE_FUNC(cellSpurs, cellSpursEventFlagSet) {
+    SPURS_PROBE("EventFlagSet");
     const uint32_t flag = a32(ctx, 0);
     const uint16_t bits = static_cast<uint16_t>(a32(ctx, 1));
     if (!flag) return ret(ctx, SPURS_TASK_ERROR_NULL_POINTER);
@@ -151,7 +163,7 @@ static void event_flag_wait(ppu::Context& ctx) {
     ret(ctx, CELL_OK_);
 }
 
-HLE_FUNC(cellSpurs, cellSpursEventFlagWait) { event_flag_wait(ctx); }
+HLE_FUNC(cellSpurs, cellSpursEventFlagWait) { SPURS_PROBE("EventFlagWait"); event_flag_wait(ctx); }
 HLE_FUNC(cellSpurs, cellSpursEventFlagTryWait) { event_flag_wait(ctx); }
 
 /* The lock-free queue family: the reference forwards these to cellSyncLFQueue
