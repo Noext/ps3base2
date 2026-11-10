@@ -193,6 +193,54 @@ Only two need emulation, and both are real:
 Compare functions (7), cull modes (3 of 4 direct), blend ops (5) and stencil ops
 (8) all map directly, so the state translation is not where the work is.
 
+### Fourth brick: every format proven creatable, and a hard blocker found
+
+**Formats are not merely named in a table any more -- they are created on the
+device:**
+
+    textures: 20 of 20 formats created for rendering, 0 sample-only,
+              0 skipped, 0 not creatable
+    wgpu_smoke: 10 checks, 0 failures
+
+Getting there found a real WebGPU-vs-Vulkan difference that only execution
+reveals. `Rg8Snorm` accepts `RENDER_ATTACHMENT` in Vulkan; WebGPU **rejects it**:
+
+    Texture usages TextureUsages(RENDER_ATTACHMENT) are not allowed
+    on a texture of type Rg8Snorm
+
+And wgpu-native **aborts the process** on an uncaptured error, so the first run
+did not report a bad format, it panicked. That is itself the lesson: a WebGPU port
+must install an uncaptured-error callback in the device descriptor before creating
+anything, or the first invalid combination kills the process with a Rust panic
+instead of an error code. That is now in the test and is required in the renderer.
+
+### The blocker this round found: the renderer manages GPU memory by hand
+
+The remaining porting work is not mechanical after all. Measured in
+`runtime/src/gpu/`:
+
+| Vulkan memory management | count |
+|---|---|
+| `vkAllocateMemory` | **11** |
+| `vkGetImageMemoryRequirements` | 6 |
+| `vkGetBufferMemoryRequirements` | 5 |
+| `vkBindImageMemory` | 7 |
+| `vkBindBufferMemory` | 5 |
+| `vkMapMemory` | 5 |
+| `vkCmdPipelineBarrier` | **14** |
+| `vkCmdCopyImageToBuffer` / `BufferToImage` | 7 / 5 |
+
+The renderer has its own **suballocator**: `allocate_image()` asks Vulkan for the
+memory requirements, finds a matching memory type, carves the image out of a
+`MemBlock` and tracks the suballocation. WebGPU exposes none of this: no memory
+types, no bind, no barriers, no explicit layout transitions. Textures and buffers
+are created and the driver owns the memory.
+
+So the port is **not** a rename of 87 calls. The suballocator, the barrier
+placement and the layout tracking have no counterpart and must be deleted, with
+the render passes rewritten around WebGPU's automatic synchronisation. That is a
+design change in the renderer's core, and it is the honest scope of milestone 2.
+
 ### What is not yet done in milestone 2
 
 No renderer call site is ported. The 87 `vk*` uses in `rsx_renderer.cpp` still

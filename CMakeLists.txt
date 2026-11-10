@@ -261,7 +261,11 @@ add_test(NAME spu_aot_variants COMMAND spu_aot_variants)
 
 # Every Vulkan format and blend factor the renderer uses must have a WebGPU
 # decision, with the inexpressible ones classified rather than omitted.
-add_executable(wgpu_map tests/wgpu_map.cpp runtime/src/gpu/wgpu_map.cpp)
+add_library(wgpu_map_obj OBJECT runtime/src/gpu/wgpu_map.cpp)
+target_include_directories(wgpu_map_obj PRIVATE runtime/include)
+target_compile_options(wgpu_map_obj PRIVATE ${PS3BASE_ARCH_FLAGS})
+
+add_executable(wgpu_map tests/wgpu_map.cpp $<TARGET_OBJECTS:wgpu_map_obj>)
 target_include_directories(wgpu_map PRIVATE runtime/include)
 target_compile_options(wgpu_map PRIVATE ${PS3BASE_ARCH_FLAGS})
 add_test(NAME wgpu_map COMMAND wgpu_map)
@@ -272,7 +276,8 @@ add_test(NAME wgpu_map COMMAND wgpu_map)
 set(WGPU_DIR "/root/Dev/ps2-web-recomp/third_party/wgpu-native" CACHE PATH "wgpu-native prefix")
 if(EXISTS "${WGPU_DIR}/lib/libwgpu_native.so")
     add_executable(wgpu_smoke tests/wgpu_smoke.cpp)
-    target_include_directories(wgpu_smoke PRIVATE "${WGPU_DIR}/include")
+    target_include_directories(wgpu_smoke PRIVATE "${WGPU_DIR}/include" runtime/include)
+    target_link_libraries(wgpu_smoke PRIVATE wgpu_map_obj)
     target_link_directories(wgpu_smoke PRIVATE "${WGPU_DIR}/lib")
     target_link_libraries(wgpu_smoke PRIVATE wgpu_native pthread)
     set_target_properties(wgpu_smoke PROPERTIES BUILD_RPATH "${WGPU_DIR}/lib")
