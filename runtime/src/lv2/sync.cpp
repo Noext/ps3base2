@@ -479,6 +479,12 @@ LV2_SYSCALL(83, sys_event_flag_destroy) {
 }
 
 LV2_SYSCALL(85, sys_event_flag_wait) {
+#if defined(PS3BASE_FLAG_ID_PROBE) && PS3BASE_FLAG_ID_PROBE
+    static std::atomic<int> n{0};
+    if (n.fetch_add(1) < 400)
+        LOG_INFO("flagid", "wait id=%u bits=0x%llx mode=0x%x lr=0x%08x", u32arg(ctx, 0),
+                 (unsigned long long)u64arg(ctx, 1), u32arg(ctx, 2), static_cast<uint32_t>(ctx.lr));
+#endif
     auto f = get<EventFlag>(u32arg(ctx, 0));
     if (!f) return CELL_ESRCH;
     uint64_t bits = u64arg(ctx, 1);
@@ -597,6 +603,17 @@ int64_t event_flag_set_bits_traced(uint32_t id, uint64_t bits, uint32_t from_lr,
 }
 
 LV2_SYSCALL(87, sys_event_flag_set) {
+#if defined(PS3BASE_FLAG_ID_PROBE) && PS3BASE_FLAG_ID_PROBE
+    /* Which event flag does ./4J Tile update wait on, and does anyone ever set it?
+     * An uncapped count per id answers both without guessing. */
+    static std::atomic<uint64_t> sets[64];
+    static std::atomic<int> n{0};
+    const uint32_t id = u32arg(ctx, 0);
+    if (n.fetch_add(1) < 400)
+        LOG_INFO("flagid", "set id=%u bits=0x%llx lr=0x%08x", id,
+                 (unsigned long long)u64arg(ctx, 1), static_cast<uint32_t>(ctx.lr));
+    if (id < 64) sets[id].fetch_add(1);
+#endif
     return event_flag_set_bits_traced(u32arg(ctx, 0), u64arg(ctx, 1),
                                      static_cast<uint32_t>(ctx.lr), nullptr);
 }
