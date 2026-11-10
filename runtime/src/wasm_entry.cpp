@@ -25,6 +25,10 @@
 #include "runtime/codewatch.h"
 #include "ppu/ops.h"
 
+#if defined(PS3BASE_COVERAGE) && PS3BASE_COVERAGE
+namespace ppu { void coverage_report(); }
+#endif
+
 #include <atomic>
 #include <cstdio>
 #include <cstring>
@@ -404,6 +408,9 @@ int main(int argc, char** argv) {
                 std::printf("\n");
             }
         }
+#if defined(PS3BASE_COVERAGE) && PS3BASE_COVERAGE
+        if (i == 100 || i == 180) ppu::coverage_report();
+#endif
         if (main_thread->exited) {
             std::printf("WASM-GUEST-THREAD-EXITED\n");
             break;

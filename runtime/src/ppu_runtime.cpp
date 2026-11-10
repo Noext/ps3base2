@@ -1,4 +1,5 @@
 #include "ppu/ops.h"
+#include <cstdint>
 #include "runtime/critpath.h"
 #include "runtime/hle.h"
 #include "runtime/image.h"
@@ -193,6 +194,17 @@ int32_t resolve(uint32_t index, ImportSlot& slot) {
 
 }
 
+#if defined(PS3BASE_COVERAGE) && PS3BASE_COVERAGE
+/* One bit per 4 bytes of guest text: a 64 MiB window covers every image. */
+uint8_t g_cov[0x10000000u / 4 / 8] = {};
+void coverage_report() {
+    uint64_t hit = 0;
+    for (uint8_t b : g_cov) hit += static_cast<uint64_t>(__builtin_popcount(b));
+    LOG_INFO("coverage", "%llu distinct lifted functions executed of %u in the table",
+             (unsigned long long)hit, image::function_count);
+}
+#endif
+
 bool has_code_at(uint32_t addr) { return lookup(addr) != nullptr; }
 
 void call_indirect(Context& ctx, uint8_t* base, uint32_t addr) {
@@ -275,6 +287,17 @@ void call_indirect(Context& ctx, uint8_t* base, uint32_t addr) {
                   static_cast<unsigned long long>(ctx.gpr[9]), static_cast<unsigned long long>(ctx.gpr[31]),
                   static_cast<unsigned long long>(ctx.ctr));
     }
+    /* Coverage: count distinct lifted functions the boot actually executes. That
+     * number decides whether dead-code elimination is worth the plumbing: near
+     * 90 % means nothing to recover, near 10 % means the module can shrink 10x.
+     * A flat bitmap over the whole text window is enough and needs no allocation
+     * per call. Compile-time switch because getenv is inert under wasm. */
+#if defined(PS3BASE_COVERAGE) && PS3BASE_COVERAGE
+    if (addr < 0x10000000u) {
+        const uint32_t bit = addr >> 2;
+        if (!(g_cov[bit >> 3] & (1u << (bit & 7)))) g_cov[bit >> 3] |= uint8_t(1u << (bit & 7));
+    }
+#endif
     force::on_call(addr);
     const uint32_t saved_lr = static_cast<uint32_t>(ctx.lr);
     /* PS3BASE_TOC_TRACE=2: bracket every lifted call and report the ones that
