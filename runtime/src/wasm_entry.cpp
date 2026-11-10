@@ -405,15 +405,20 @@ int main(int argc, char** argv) {
                  * DO run (round 130), so the question is now whether they touch
                  * this base at all. Print every non-zero byte in the window. */
                 {
-                    /* The guest reads WORDS, not bytes: a byte sample at 0xbe0704
-                     * reads 0 while the 32-bit word there is 1. Read both widths
-                     * so the question "is the polled value zero" is answered at
-                     * the width the code actually uses. */
-                    std::fprintf(stderr, "[width] t=%ds byte@704=%u word@704=%u byte@70c=%u word@70c=%u\n", i,
-                                 static_cast<unsigned>(*vm::ptr(0x00be0704u)),
-                                 static_cast<unsigned>(vm::read32(0x00be0704u)),
-                                 static_cast<unsigned>(*vm::ptr(0x00be070cu)),
-                                 static_cast<unsigned>(vm::read32(0x00be070cu)));
+                    /* Is the polled word a COUNTER (rises) or a PARITY (0/1)? A
+                     * counter that stalls proves the frame loop is stuck; a parity
+                     * that flips proves it is running. Sample every 20 ms for two
+                     * seconds and report first, last, and how often it changed. */
+                    uint32_t first = vm::read32(0x00be0704u), prev = first, changes = 0, maxv = first;
+                    for (int k = 0; k < 100; k++) {
+                        const uint32_t now = vm::read32(0x00be0704u);
+                        if (now != prev) changes++;
+                        if (now > maxv) maxv = now;
+                        prev = now;
+                        host::yield();
+                    }
+                    std::fprintf(stderr, "[counter] t=%ds first=%u last=%u max=%u changes_in_100=%u\n",
+                                 i, first, prev, maxv, changes);
                 }
             }
             if ((i % 40) == 39) {
