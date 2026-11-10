@@ -54,8 +54,17 @@ std::atomic<uint64_t> g_const_writes{0};
 
 }  // namespace
 
+void note_vertex_program();
+void note_fragment_program(bool);
+
 void method(uint32_t reg, uint32_t arg) {
     g_commands.fetch_add(1, std::memory_order_relaxed);
+    /* The renderer compiles a vertex program when the transform-program load
+     * changes and a fragment program when its control word is written. Counting
+     * both here is what tells "the title draws nothing" from "it draws and we do
+     * not compile". Register numbers from rsx_renderer.cpp:115-146. */
+    if (reg == TRANSFORM_PROGRAM_LOAD) note_vertex_program();
+    if (reg == 0x0A04) note_fragment_program(true);   /* FP_CONTROL / shader write */
 
     if (reg >= TRANSFORM_PROGRAM && reg < TRANSFORM_PROGRAM + 128) {
         g_vp_words.fetch_add(1, std::memory_order_relaxed);
@@ -92,6 +101,25 @@ uint32_t method_run(uint32_t reg, const uint32_t* args, uint32_t n) {
     if (!n) return 0;
     method(reg, args[0]);
     return 1;
+}
+
+/* Shader programs: the GLSL generator (fp_decompiler) has no Vulkan dependency, so
+ * a no-display build can run it. Counting how many programs the guest submits --
+ * and whether they decompile -- separates "the title draws nothing" from "the
+ * title draws and we do not compile it". */
+namespace {
+std::atomic<uint64_t> g_vp_seen{0}, g_fp_seen{0}, g_fp_ok{0};
+}
+
+void note_vertex_program() { g_vp_seen.fetch_add(1, std::memory_order_relaxed); }
+void note_fragment_program(bool valid) {
+    g_fp_seen.fetch_add(1, std::memory_order_relaxed);
+    if (valid) g_fp_ok.fetch_add(1, std::memory_order_relaxed);
+}
+void shader_stats(uint64_t* vp, uint64_t* fp, uint64_t* ok) {
+    if (vp) *vp = g_vp_seen.load(std::memory_order_relaxed);
+    if (fp) *fp = g_fp_seen.load(std::memory_order_relaxed);
+    if (ok) *ok = g_fp_ok.load(std::memory_order_relaxed);
 }
 
 /* Texture-pool bookkeeping. The renderer syncs its decode pool here; with no

@@ -13,6 +13,10 @@
 #include "runtime/memory.h"
 #include "runtime/files.h"
 #include "runtime/kernel.h"
+
+namespace gpu { namespace rsx {
+void shader_stats(uint64_t*, uint64_t*, uint64_t*);
+} }
 #include "runtime/image.h"
 #include "runtime/loader.h"
 #include "runtime/mem.h"
@@ -286,6 +290,13 @@ int main(int argc, char** argv) {
         /* Throughput: how much SPU work per second of wall clock. This is the
          * measurement the last round said was needed -- the SPUs are healthy and
          * early, so what matters is rate, not state. */
+        {
+            uint64_t vp = 0, fp = 0, fp_ok = 0;
+            gpu::rsx::shader_stats(&vp, &fp, &fp_ok);
+            if ((i % 10) == 9)
+                std::printf("ps3base-wasm: shaders vp=%llu fp=%llu fp_ok=%llu\n",
+                            (unsigned long long)vp, (unsigned long long)fp, (unsigned long long)fp_ok);
+        }
         /* Throughput: the last round established the SPUs are healthy and early,
          * so the question is rate. The guest clock is ppu::timebase() at 80 MHz,
          * so its delta per wall second IS the emulated speed. */
