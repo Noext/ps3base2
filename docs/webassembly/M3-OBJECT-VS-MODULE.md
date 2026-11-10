@@ -56,3 +56,43 @@ couplé à `--gc-sections`.
 | module sous 80 Mo | **oui — 49,7 Mo** |
 | plus grosse fonction sous 1 Mo | non — mais **c'est un effet du linker**, pas du code |
 | ligne de log du menu | **oui, corroborée** |
+
+---
+
+# Les tests de la piste linker
+
+## `-ffunction-sections`
+
+| | objet |
+|---|---|
+| avec `-ffunction-sections` | **742 128 o** |
+| sans | **742 128 o** |
+
+**Aucun changement.** Emscripten applique déjà cette séparation au niveau objet ; l'option n'ajoute rien ici.
+
+## Le link isolé
+
+J'ai tenté de lier **seulement** `mc_018.o` pour voir ce que la géante devient hors contexte. Le link
+**échoue** (symboles manquants : le runtime, la table, les autres modules PPU).
+
+Je n'ai donc **pas** pu mesurer la taille de la géante dans un module réduit.
+
+## Ce que je n'ai pas établi
+
+Pourquoi la fonction triple de taille au link. Trois explications possibles, aucune vérifiée :
+
+1. le linker **fusionne** des fonctions voisines ;
+2. il **inline** des appels dont la cible est dans un autre objet ;
+3. mon `wasm_sizes.py` mesure des **groupes de fonctions** là où `llvm-objdump` mesure des symboles, et les
+   deux chiffres ne comptent pas la même chose.
+
+La troisième est la plus probable, et je ne l'ai pas vérifiée : `llvm-objdump` donne la taille d'un symbole
+**jusqu'au suivant**, ce qui inclut le padding ; `wasm_sizes.py` donne la taille **déclarée dans la section
+code**, qui est exacte.
+
+Si c'est la troisième, alors **365 ko est le bon chiffre** et la fonction ne dépasse pas 1 Mo.
+
+## La mesure qui trancherait
+
+Comparer, dans le module lié, la taille de la section code attribuée à `f_001e1f68` **par la section `name`**
+avec la somme des tailles de ses voisines. Si elle est bien 365 ko, mon rapport de 1,3 Mo est faux.
