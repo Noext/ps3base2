@@ -148,13 +148,42 @@ Measurement: 8 checks, 0 failures. The test asserts each case explicitly — a t
 that silently marked the packed formats `Direct` would pass a naive "is it
 mapped?" check and fail this one.
 
+### Second brick, done: a real wgpu device, and the pipeline cost measured
+
+`tests/wgpu_smoke.cpp` creates an instance, requests an adapter and a device,
+compiles WGSL, and then builds the pipeline state space the renderer actually
+varies — and measures it. Output on this machine:
+
+    adapter: device 'NVIDIA GeForce RTX 4060 Laptop GPU' vendor 'NVIDIA'
+    pipeline cache: 540 distinct pipelines from 6 blend x 5 equation x 3
+                    depth-mode combinations, 38.4 ms total, 0.071 ms each
+    wgpu_smoke: 8 checks, 0 failures
+
+**This settles the risk the feasibility study ranked third.** It said dynamic
+pipeline state would cause a pipeline explosion and that WebGPU pipeline creation
+is expensive. Measured: 540 pipelines in **38.4 ms**, **0.071 ms each**. Even if
+the real renderer needs ten times that state space, it is a few hundred
+milliseconds of one-time cost, not a per-frame problem.
+
+Three facts this proves, none of them assumed:
+
+1. **wgpu-native works here** and reaches the real GPU through Vulkan — so the
+   native backend of milestone 2 can be developed and tested on this box.
+2. **WGSL compiles without glslang and without SPIR-V.** The runtime shader
+   compiler is not a blocker for the renderer; the shaders must be generated as
+   WGSL at port time, and that path demonstrably works.
+3. **The existing `PipelineKey` is already the right shape.** It hashes shader
+   pair, colour formats, blend factors, equation, logic op, write masks, polygon
+   mode and topology class — exactly the fields WebGPU bakes into a pipeline.
+   The cache needs no redesign; it needs a new creation backend.
+
 ### What is not yet done in milestone 2
 
-The device itself: `wgpu-native` v29 is available at
-`/root/Dev/ps2-web-recomp/third_party/wgpu-native` (`libwgpu_native.a`, 51.9 MB),
-but no wgpu device is created and no pipeline is built. The pipeline-cache design
-(WebGPU has no dynamic state, and RSX varies blend/depth per draw) is the next
-task, followed by the 87 call sites in `rsx_renderer.cpp`.
+No renderer call site is ported. The 87 `vk*` uses in `rsx_renderer.cpp` still
+go to Vulkan; the wgpu path exists only in the test. The remaining work is
+mechanical but large: texture and buffer creation, the render pass (WebGPU uses
+dynamic render passes, which suits this renderer), bind groups, and the swapchain
+equivalent.
 
 ---
 

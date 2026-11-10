@@ -265,6 +265,20 @@ add_executable(wgpu_map tests/wgpu_map.cpp runtime/src/gpu/wgpu_map.cpp)
 target_include_directories(wgpu_map PRIVATE runtime/include)
 target_compile_options(wgpu_map PRIVATE ${PS3BASE_ARCH_FLAGS})
 add_test(NAME wgpu_map COMMAND wgpu_map)
+
+# Proves wgpu-native works here and measures the pipeline-cache cost that decides
+# whether the WebGPU port is cheap or expensive. Optional: only built when the
+# library is present, so a machine without it still configures.
+set(WGPU_DIR "/root/Dev/ps2-web-recomp/third_party/wgpu-native" CACHE PATH "wgpu-native prefix")
+if(EXISTS "${WGPU_DIR}/lib/libwgpu_native.so")
+    add_executable(wgpu_smoke tests/wgpu_smoke.cpp)
+    target_include_directories(wgpu_smoke PRIVATE "${WGPU_DIR}/include")
+    target_link_directories(wgpu_smoke PRIVATE "${WGPU_DIR}/lib")
+    target_link_libraries(wgpu_smoke PRIVATE wgpu_native pthread)
+    set_target_properties(wgpu_smoke PROPERTIES BUILD_RPATH "${WGPU_DIR}/lib")
+    target_compile_options(wgpu_smoke PRIVATE ${PS3BASE_ARCH_FLAGS})
+    add_test(NAME wgpu_smoke COMMAND wgpu_smoke)
+endif()
 # Cross-processor reservation invalidation: an SPU write must invalidate an
 # active PPU reservation on the same line, or stcx. commits unseen data.
 add_executable(reservation_xproc tests/reservation_xproc.cpp runtime/src/memory.cpp runtime/src/mem.cpp runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/host.cpp runtime/src/log.cpp)
