@@ -345,6 +345,29 @@ std::unordered_map<uint32_t, uint32_t> g_zpass_cache;
 Dummy g_dummy[4];
 VkDescriptorSetLayout g_set_layout = VK_NULL_HANDLE;
 VkPipelineLayout g_pipeline_layout = VK_NULL_HANDLE;
+/* How often RSX changes the state WebGPU would bake into a pipeline. Milestone 2
+ * needs this number to size the pipeline cache: Vulkan absorbed these calls with
+ * vkCmdSet*, WebGPU must look up a pipeline instead, and the prompt's premise --
+ * "RSX changes state per draw" -- decides whether the port can hold frame time.
+ * Counted per setter so the distribution shows which field drives it. */
+static std::atomic<uint64_t> g_state_sets[8];
+static const char* const kStateSetNames[8] = {
+    "blend", "cull", "depth", "stencil", "viewport", "scissor", "topology", "other" };
+static int state_bucket(const char* fn) {
+    if (std::strstr(fn, "Blend")) return 0;
+    if (std::strstr(fn, "Cull") || std::strstr(fn, "FrontFace")) return 1;
+    if (std::strstr(fn, "Depth")) return 2;
+    if (std::strstr(fn, "Stencil")) return 3;
+    if (std::strstr(fn, "Viewport")) return 4;
+    if (std::strstr(fn, "Scissor")) return 5;
+    if (std::strstr(fn, "Topology") || std::strstr(fn, "PrimitiveRestart")) return 6;
+    return 7;
+}
+/* Records one state set; the comma operator keeps the call site unchanged. */
+static int counted_set(const char* fn) {
+    g_state_sets[state_bucket(fn)].fetch_add(1, std::memory_order_relaxed);
+    return 0;
+}
 VkPipelineCache g_pipeline_cache = VK_NULL_HANDLE;
 uint64_t g_pipelines_saved = 0;
 
@@ -1914,8 +1937,8 @@ void redirect_pass(Surface* s, TempImage* t, uint32_t w, uint32_t h) {
     vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g_redirect_layout, 0, 1, &wr);
     VkViewport viewport{0, 0, float(t->iw), float(t->ih), 0.0f, 1.0f};
     VkRect2D scissor{{0, 0}, {t->iw, t->ih}};
-    vkCmdSetViewport(cmd, 0, 1, &viewport);
-    vkCmdSetScissor(cmd, 0, 1, &scissor);
+    counted_set("Viewport"), vkCmdSetViewport(cmd, 0, 1, &viewport);
+    counted_set("Scissor"), vkCmdSetScissor(cmd, 0, 1, &scissor);
     vkCmdDraw(cmd, 3, 1, 0, 0);
     vkCmdEndRendering(cmd);
     image_barrier(cmd, t->image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
@@ -3387,36 +3410,36 @@ bool draw() {
     float ps = colors.empty() ? (depth ? depth->scale : 1.0f) : colors[0]->scale;
     VkViewport viewport{0, 0, float(w) * ps, float(h) * ps, 0.0f, 1.0f};
     if (!ds.set || std::memcmp(&ds.viewport, &viewport, sizeof viewport) != 0) {
-        vkCmdSetViewport(cmd, 0, 1, &viewport);
+        counted_set("Viewport"), vkCmdSetViewport(cmd, 0, 1, &viewport);
         ds.viewport = viewport;
     }
     uint32_t scx0 = x0 ? up(x0, ps) : 0, scy0 = y0 ? up(y0, ps) : 0;
     VkRect2D scissor{{int32_t(scx0), int32_t(scy0)}, {up(x1, ps) - scx0, up(y1, ps) - scy0}};
     if (!ds.set || std::memcmp(&ds.scissor, &scissor, sizeof scissor) != 0) {
-        vkCmdSetScissor(cmd, 0, 1, &scissor);
+        counted_set("Scissor"), vkCmdSetScissor(cmd, 0, 1, &scissor);
         ds.scissor = scissor;
     }
     uint32_t lw = R(LINE_WIDTH);
     float line = vk().features.wideLines ? std::max(1.0f, (lw >> 3) + (lw & 7) / 8.0f) : 1.0f;
     if (!ds.set || ds.line != line) {
-        vkCmdSetLineWidth(cmd, line);
+        counted_set("LineWidth"), vkCmdSetLineWidth(cmd, line);
         ds.line = line;
     }
     uint32_t bias_on = R(POLY_OFFSET_FILL) ? 1 : 0;
     if (!ds.set || ds.bias_on != bias_on) {
-        vkCmdSetDepthBiasEnable(cmd, bias_on ? VK_TRUE : VK_FALSE);
+        counted_set("DepthBiasEnable"), vkCmdSetDepthBiasEnable(cmd, bias_on ? VK_TRUE : VK_FALSE);
         ds.bias_on = bias_on;
     }
     uint32_t bias[2] = {R(POLY_OFFSET_BIAS), R(POLY_OFFSET_SCALE)};
     if (!ds.set || ds.bias[0] != bias[0] || ds.bias[1] != bias[1]) {
-        vkCmdSetDepthBias(cmd, RF(POLY_OFFSET_BIAS), 0.0f, RF(POLY_OFFSET_SCALE));
+        counted_set("DepthBias"), vkCmdSetDepthBias(cmd, RF(POLY_OFFSET_BIAS), 0.0f, RF(POLY_OFFSET_SCALE));
         ds.bias[0] = bias[0];
         ds.bias[1] = bias[1];
     }
     uint32_t bc = R(BLEND_COLOR);
     if (!ds.set || ds.blend != bc) {
         float blend[4] = {((bc >> 16) & 0xFF) / 255.0f, ((bc >> 8) & 0xFF) / 255.0f, (bc & 0xFF) / 255.0f, ((bc >> 24) & 0xFF) / 255.0f};
-        vkCmdSetBlendConstants(cmd, blend);
+        counted_set("BlendConstants"), vkCmdSetBlendConstants(cmd, blend);
         ds.blend = bc;
     }
     bool two_sided = R(TWO_SIDED_STENCIL) != 0;
@@ -3427,10 +3450,10 @@ bool draw() {
         uint32_t st[7] = {R(fb[s][0]) & 0xFF, R(fb[s][2]) & 0xFF, R(fb[s][3]) & 0xFF, R(ops[s]), R(ops[s] + 8), R(ops[s] + 4), R(fb[s][1])};
         if (ds.set && std::memcmp(ds.stencil[face], st, sizeof st) == 0) continue;
         VkStencilFaceFlags ff = face ? VK_STENCIL_FACE_BACK_BIT : VK_STENCIL_FACE_FRONT_BIT;
-        vkCmdSetStencilWriteMask(cmd, ff, st[0]);
-        vkCmdSetStencilReference(cmd, ff, st[1]);
-        vkCmdSetStencilCompareMask(cmd, ff, st[2]);
-        vkCmdSetStencilOp(cmd, ff, stencil_op(st[3]), stencil_op(st[4]), stencil_op(st[5]), compare_op(st[6]));
+        counted_set("StencilWriteMask"), vkCmdSetStencilWriteMask(cmd, ff, st[0]);
+        counted_set("StencilReference"), vkCmdSetStencilReference(cmd, ff, st[1]);
+        counted_set("StencilCompareMask"), vkCmdSetStencilCompareMask(cmd, ff, st[2]);
+        counted_set("StencilOp"), vkCmdSetStencilOp(cmd, ff, stencil_op(st[3]), stencil_op(st[4]), stencil_op(st[5]), compare_op(st[6]));
         std::memcpy(ds.stencil[face], st, sizeof st);
     }
     bool has_stencil = depth && depth->format == VK_FORMAT_D24_UNORM_S8_UINT;
@@ -3449,18 +3472,18 @@ bool draw() {
     uint32_t fixed[11] = {has_stencil && R(STENCIL_TEST_ENABLE) ? 1u : 0u, dtest ? 1u : 0u, dtest && R(DEPTH_MASK) ? 1u : 0u, uint32_t(depth_op), depth && R(DEPTH_BOUNDS_ENABLE) ? 1u : 0u, 0, 0,
                           uint32_t(cull), cw ? 1u : 0u, uint32_t(topo), restart ? 1u : 0u};
     std::memcpy(&fixed[5], bounds, sizeof bounds);
-    if (!ds.set || fixed[0] != ds.fixed[0]) vkCmdSetStencilTestEnable(cmd, fixed[0] ? VK_TRUE : VK_FALSE);
-    if (!ds.set || fixed[1] != ds.fixed[1]) vkCmdSetDepthTestEnable(cmd, fixed[1] ? VK_TRUE : VK_FALSE);
-    if (!ds.set || fixed[2] != ds.fixed[2]) vkCmdSetDepthWriteEnable(cmd, fixed[2] ? VK_TRUE : VK_FALSE);
-    if (!ds.set || fixed[3] != ds.fixed[3]) vkCmdSetDepthCompareOp(cmd, depth_op);
+    if (!ds.set || fixed[0] != ds.fixed[0]) counted_set("StencilTestEnable"), vkCmdSetStencilTestEnable(cmd, fixed[0] ? VK_TRUE : VK_FALSE);
+    if (!ds.set || fixed[1] != ds.fixed[1]) counted_set("DepthTestEnable"), vkCmdSetDepthTestEnable(cmd, fixed[1] ? VK_TRUE : VK_FALSE);
+    if (!ds.set || fixed[2] != ds.fixed[2]) counted_set("DepthWriteEnable"), vkCmdSetDepthWriteEnable(cmd, fixed[2] ? VK_TRUE : VK_FALSE);
+    if (!ds.set || fixed[3] != ds.fixed[3]) counted_set("DepthCompareOp"), vkCmdSetDepthCompareOp(cmd, depth_op);
     if (vk().features.depthBounds) {
-        if (!ds.set || fixed[4] != ds.fixed[4]) vkCmdSetDepthBoundsTestEnable(cmd, fixed[4] ? VK_TRUE : VK_FALSE);
-        if (!ds.set || fixed[5] != ds.fixed[5] || fixed[6] != ds.fixed[6]) vkCmdSetDepthBounds(cmd, bounds[0], bounds[1]);
+        if (!ds.set || fixed[4] != ds.fixed[4]) counted_set("DepthBoundsTestEnable"), vkCmdSetDepthBoundsTestEnable(cmd, fixed[4] ? VK_TRUE : VK_FALSE);
+        if (!ds.set || fixed[5] != ds.fixed[5] || fixed[6] != ds.fixed[6]) counted_set("DepthBounds"), vkCmdSetDepthBounds(cmd, bounds[0], bounds[1]);
     }
-    if (!ds.set || fixed[7] != ds.fixed[7]) vkCmdSetCullMode(cmd, cull);
-    if (!ds.set || fixed[8] != ds.fixed[8]) vkCmdSetFrontFace(cmd, cw ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE);
-    if (!ds.set || fixed[9] != ds.fixed[9]) vkCmdSetPrimitiveTopology(cmd, topo);
-    if (!ds.set || fixed[10] != ds.fixed[10]) vkCmdSetPrimitiveRestartEnable(cmd, restart ? VK_TRUE : VK_FALSE);
+    if (!ds.set || fixed[7] != ds.fixed[7]) counted_set("CullMode"), vkCmdSetCullMode(cmd, cull);
+    if (!ds.set || fixed[8] != ds.fixed[8]) counted_set("FrontFace"), vkCmdSetFrontFace(cmd, cw ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE);
+    if (!ds.set || fixed[9] != ds.fixed[9]) counted_set("PrimitiveTopology"), vkCmdSetPrimitiveTopology(cmd, topo);
+    if (!ds.set || fixed[10] != ds.fixed[10]) counted_set("PrimitiveRestartEnable"), vkCmdSetPrimitiveRestartEnable(cmd, restart ? VK_TRUE : VK_FALSE);
     std::memcpy(ds.fixed, fixed, sizeof fixed);
     ds.set = true;
     bool query = zcount && g_qpool && !g_qreset_needed && g_qused < QMAX;
@@ -4509,6 +4532,23 @@ bool present(uint32_t buffer_id) {
                  g_stats.watch_skips / 60.0, g_stats.upload_frame / 60.0, g_stats.upload_bytes / 60.0 / 1048576.0);
         g_stats.watch_skips = 0;
         LOG_INFO("rsx", "  nv3089 blits %.1f fast %.1f slow per frame", g_stats.blit_fast / 60.0, g_stats.blit_slow / 60.0);
+        {
+            /* Milestone 2 sizing: how many distinct state sets each frame issues,
+             * and of which kind. Vulkan absorbed them silently; WebGPU must turn
+             * every unseen combination into a pipeline. */
+            static uint64_t last[8] = {};
+            char buf[256] = {};
+            size_t used = 0;
+            uint64_t total = 0;
+            for (int i = 0; i < 8; i++) {
+                const uint64_t now = g_state_sets[i].load(std::memory_order_relaxed);
+                const uint64_t d = now - last[i];
+                total += d;
+                last[i] = now;
+                if (d) used += static_cast<size_t>(std::snprintf(buf + used, sizeof buf - used, " %s %.1f", kStateSetNames[i], d / 60.0));
+            }
+            LOG_INFO("rsx", "  state sets %.1f per frame:%s", total / 60.0, buf);
+        }
         g_stats.blit_fast = g_stats.blit_slow = 0;
         static uint64_t last_faults = 0;
         uint64_t faults = vm::watch_faults();
