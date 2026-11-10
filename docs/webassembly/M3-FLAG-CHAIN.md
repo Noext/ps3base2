@@ -67,3 +67,20 @@ Le jalon 3 reste ouvert. La chaîne causale du blocage est maintenant complète 
 observé** : création (t=7,52, `f_00252b88`), attente (t=7,55, `f_0025d01c`), zéro pose. Le
 prochain pas est de lire `f_00252b88_body` autour de `0x252bcc` pour trouver l'appel de pose
 qui devrait suivre la création, et vérifier s'il est atteint.
+
+## Note sur l'état du build natif
+
+La vérification finale montre **1 erreur native**, et elle n'est pas de ce round :
+
+    runtime/src/hle/cellGame.cpp:62:20: error: expected unqualified-id
+        constexpr uint32_t PATH_MAX = 128;
+
+`git status` montre `cellGame.cpp` **modifié et binaire** (édition en cours), et la variable
+`PATH_MAX` entre en collision avec la macro du même nom de `<limits.h>` — un défaut classique
+de ce fichier, pas de mon changement.
+
+Mes fichiers de ce round (`runtime/src/lv2/sync.cpp`) sont **commités et propres**,
+`sync.cpp` compile seul sans erreur nativement, et `spurs` passe.
+
+C'est le chantier parallèle signalé par l'opérateur : un autre agent travaille sur le port natif
+Linux du même dépôt et corrige des bugs du natif.
