@@ -289,6 +289,17 @@ void execute(uint32_t reg, uint32_t arg) {
             LOG_INFO("texstat", "methods %u, texture-unit writes %u", t, hits.load());
     }
 #endif
+#if defined(PS3BASE_TEXREG_FIFO) && PS3BASE_TEXREG_FIFO
+    /* Does the FIFO ever carry TEXTURE_OFFSET (0x1A00 + unit*0x20, field 0)?
+     * Measured at the FIFO itself, so the stub's own dispatch cannot hide it. */
+    {
+        static std::atomic<uint32_t> hits{0};
+        if (reg >= 0x1A00 && reg < 0x1C00 && ((reg - 0x1A00) & 0x1F) == 0) {
+            const uint32_t n = hits.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (n <= 6) LOG_INFO("texfifo", "TEXTURE_OFFSET write #%u reg 0x%04x off 0x%08x", n, reg, arg);
+        }
+    }
+#endif
     if (reg < 0xE000) gpu::rsx::method(reg, arg);
     switch (reg) {
     case 0x50: case 0x68: case 0x6C: case 0x1D70: case 0x1D74: case 0x1800:
