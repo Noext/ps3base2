@@ -348,7 +348,11 @@ int main(int argc, char** argv) {
     std::printf("ps3base-wasm: waiting for guest activity...\n");
     /* The native run needs 86 s to reach the world. A 30 s window cannot tell
      * "stalled" from "not there yet", so give the guest the same budget. */
-    for (int i = 0; i < 200; i++) {
+    /* 200 iterations = 200 seconds, and the module then exits. The native run
+     * needs thousands of seconds to reach the world, so a 200 s harness cannot
+     * distinguish "stalled" from "not there yet". 1800 iterations gives half an
+     * hour, which is the comparison the native reference demands. */
+    for (int i = 0; i < 1800; i++) {
         host::sleep_ms(1000);
         const uint32_t pc = main_thread->ctx.cia ? main_thread->ctx.cia : static_cast<uint32_t>(main_thread->ctx.lr);
         /* Throughput: how much SPU work per second of wall clock. This is the
