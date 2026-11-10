@@ -366,6 +366,10 @@ int main(int argc, char** argv) {
      * needs thousands of seconds to reach the world, so a 200 s harness cannot
      * distinguish "stalled" from "not there yet". 1800 iterations gives half an
      * hour, which is the comparison the native reference demands. */
+    /* The guest's main thread polls one byte in a loop:
+     *   ld8(base, 0xbe0000 + 1804); if (flag) syscall(141=usleep); goto
+     * That byte is the last thing between the wasm and engine progress. Print it
+     * so the question "does it ever clear" is answered by a number. */
     for (int i = 0; i < 1800; i++) {
         host::sleep_ms(1000);
         const uint32_t pc = main_thread->ctx.cia ? main_thread->ctx.cia : static_cast<uint32_t>(main_thread->ctx.lr);
@@ -381,6 +385,10 @@ int main(int argc, char** argv) {
             const uint32_t texmask = gpu::rsx::bound_texture_mask();
             /* Which (unit, field) actually receives writes? A zero mask with
              * non-zero field counts means the hook range was wrong, not the guest. */
+            if ((i % 40) == 39) {
+                std::fprintf(stderr, "[pollflag] t=%ds byte@0xbe070c=%u\n", i,
+                             static_cast<unsigned>(*vm::ptr(0x00be070cu)));
+            }
             if ((i % 40) == 39) {
                 uint32_t sr[8] = {};
                 gpu::rsx::surface_reg_stats(sr);
