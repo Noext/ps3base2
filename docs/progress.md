@@ -451,3 +451,60 @@ pour expirer.
 A cote : `rdr2_installed.sdat` (539 Mo), des donnees installees que le titre
 ecrit/relit, et deux cinematiques `.bik` (Bink).
 
+
+## Red Dead Redemption -- where the port stands
+
+### Proven
+
+- The seven proven LLE modules plus libnet, libfiber, libssl, libhttp, librtc cover
+  153 of 343 imports; 190 remain for HLE (docs/board.md, one ticket per module).
+- No module overlaps a runtime region: modules occupy 0x30000000..0x3b004490, the
+  RSX context at 0x40100000 and the video/stack/SPU regions are untouched.
+- The allocator refuses image ranges, and each title has its own reloc tree.
+- The title reaches its own engine: RAGE netThreadPool, DVD Reader and Streamer,
+  HDD threads, LoadThread, FreeSpaceCheckThread, SPURS handlers, cellGame data
+  checks and content permit, the 181 MB startup heap at 0x80000000.
+
+### The blocker, measured
+
+```
+sys: 41 _sys_ppu_thread_exit lr=0x30004eac r3=0xdeadc0de
+ppu: thread 0x100000e '[RAGE] LoadThread' exit 0xdeadc0de
+```
+
+Every RAGE worker thread is created through the shared entry OPD 0x01356420,
+which is a table of {code, toc} pairs ABOVE the title's text_hi (0x10d9f74):
+
+    00533064 0139ebb0   LoadThread's real entry
+    005331e0 0139ebb0   the next one
+
+call_opd() reads the pair correctly and lookup() finds f_00533064. The thread
+runs, then liblv2 at 0x30004eac calls _sys_ppu_thread_exit with 0xdeadc0de --
+the value a title passes when the work it wanted to do did not happen. So the
+thread starts and gives up within a millisecond.
+
+Consequence: the loader stops, the renderer receives nothing, and the frame
+counter stays at zero. draw 0.0%, flip 0.0%.
+
+### What changed and what it bought
+
+| commit | effect |
+|---|---|
+| 6e921ef | lift covers the whole binary; interior seeds rejected |
+| 584f96c | allocator and mmapper refuse image ranges; per-title reloc |
+| 5bcbf49 | the five syscalls, now matching RPCS3 exactly |
+
+At 584f96c the title reported:
+
+    [FATAL] Cannot load archive 'gamedata:/rdr2_installed.sdat'
+
+because the install never wrote the archive. Pre-placing it clears that and
+moves the failure to the thread exit above. The remaining work is the 190 HLE
+functions and this thread exit.
+
+### Not done
+
+No in-game capture. regress.sh is green on Minecraft (6841) and GTA (6481);
+Red Dead Redemption reports alive with zero flips, which the script counts as a
+failure and reports as one.
+
