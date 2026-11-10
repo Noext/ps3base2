@@ -10,6 +10,7 @@
 #include "runtime/trace.h"
 #include <atomic>
 #include "runtime/thread.h"
+#include "runtime/stacks.h"
 #include "runtime/memory.h"
 
 #include <algorithm>
@@ -444,6 +445,10 @@ void syscall(Context& ctx, uint8_t* base) {
             t->in_syscall.store(n + 1, std::memory_order_relaxed);
             t->syscalls.fetch_add(1, std::memory_order_relaxed);
             t->syscall_hist[n]++;
+            /* Sampled at syscall entry: every thread passes here and r1 is the
+             * live frame pointer, so the lowest value seen is how deep the guest
+             * stack actually went. Cheap enough to keep always on. */
+            stacks::note_sp(t->id, static_cast<uint32_t>(ctx.gpr[1]));
         }
         if (trace::on(trace::SYSCALL)) {
             uint64_t a0 = ctx.gpr[3], a1 = ctx.gpr[4], a2 = ctx.gpr[5];

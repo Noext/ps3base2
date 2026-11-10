@@ -1,5 +1,6 @@
 #include "runtime/placement.h"
 #include "runtime/host.h"
+#include "runtime/stacks.h"
 #include "runtime/thread.h"
 #include "runtime/kernel.h"
 #include "runtime/log.h"
@@ -69,6 +70,7 @@ void body(std::shared_ptr<Thread> t) {
 Thread* current() { return t_current; }
 
 void status_dump() {
+    stacks::dump();
     std::lock_guard lk(g_lock);
     for (auto& [id, t] : g_threads) {
         if (t->exited) continue;
@@ -108,8 +110,13 @@ std::shared_ptr<Thread> find(uint32_t id) {
 std::shared_ptr<Thread> create(const std::string& name, uint32_t entry_opd, uint64_t arg0, uint64_t arg1, int32_t prio, uint32_t stack_size, uint32_t tls, bool joinable) {
     stack_size = (stack_size + 0xFFF) & ~0xFFFu;
     if (stack_size < 0x4000) stack_size = 0x4000;
-    uint32_t stack = vm::alloc(vm::Region::Stack, stack_size, 0x1000);
-    if (!stack) return nullptr;
+    /* One contiguous block: 64 KB of guard followed by the stack itself. The
+     * guard MUST be part of the same reservation -- allocating it separately
+     * puts it above the stack and the overflow walks through the hole. */
+    constexpr uint32_t GUARD = 0x10000;
+    uint32_t block = vm::alloc(vm::Region::Stack, stack_size + GUARD, 0x1000);
+    if (!block) return nullptr;
+    uint32_t stack = block + GUARD;
     auto t = std::make_shared<Thread>();
     t->name = name;
     t->entry_opd = entry_opd;
@@ -119,12 +126,21 @@ std::shared_ptr<Thread> create(const std::string& name, uint32_t entry_opd, uint
     t->joinable = joinable;
     t->ctx.gpr[1] = stack + stack_size - 0x70;
     t->ctx.gpr[13] = tls;
+    /* Record the stack and put an inaccessible 64 KB page below it, so a
+     * downward overflow faults on the guard instead of silently corrupting a
+     * heap node. */
+    {
+        std::lock_guard lk(g_lock);
+        t->id = g_next_id++;
+    }
+    if (!stacks::split(t->id, name.c_str(), stack_size, block, stack_size + GUARD)) {
+        LOG_ERROR("stacks", "thread '%s': guard could not be installed; its overflow would be silent", name.c_str());
+    }
     t->ctx.gpr[3] = arg0;
     t->ctx.gpr[4] = arg1;
     t->ctx.vscr_nj = 1;
     {
         std::lock_guard lk(g_lock);
-        t->id = g_next_id++;
         g_threads[t->id] = t;
     }
     t->ctx.thread_id = t->id;
@@ -170,6 +186,7 @@ void join_host(const std::shared_ptr<Thread>& t) {
 }
 
 void remove(uint32_t id) {
+    stacks::remove(id);
     std::lock_guard lk(g_lock);
     g_threads.erase(id);
 }
