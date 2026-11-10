@@ -215,8 +215,25 @@ int main(int argc, char** argv) {
      * through rsv::store_range reports its caller, so the writer is read out of
      * the machine rather than guessed. PS3BASE_CODEWATCH_NOTE cannot be used:
      * getenv is inert in wasm. */
-    cw::note_line(0x00D6E800);
-    std::printf("ps3base-wasm: write watch armed on 0x00d6e800\n");
+    /* The state table the guest polls at 4 Hz. The lift at mc_021.cpp:645 is
+     *   gpr[4] = 13500416 (0xCE0000) + 23200 (0x5AA0) = 0xCE5AA0;
+     *   return ld8(base, gpr[4] + idx);
+     * Watching its line tells us whether anything writes it at all, which
+     * distinguishes "no writer" from "writer ran and failed". */
+    /* codewatch names the writer only if it can read the live guest context.
+     * Nothing installs it in this entry, so every report said "guest lr
+     * 0x00000000" -- useless. Install it from the guest thread's own context. */
+    cw::current_context = [] {
+        cw::Context c{};
+        guest::Thread* t = guest::current();
+        if (t) {
+            c.lr = static_cast<uint32_t>(t->ctx.lr);
+            c.thread = t->name.c_str();
+        }
+        return c;
+    };
+    cw::note_line(0x00CE5AA0);
+    std::printf("ps3base-wasm: write watch armed on 0x00ce5aa0\n");
 #endif
 
     std::printf("ps3base-wasm: starting the LV2 entry...\n");
