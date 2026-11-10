@@ -427,6 +427,13 @@ int main(int argc, char** argv) {
                 std::printf("ps3base-wasm: reservation lost checks=%llu hits=%llu\n",
                             (unsigned long long)c, (unsigned long long)h);
             }
+            /* The main thread spins in f_002dc1e4 on the byte at 0xBE070C and
+             * sleeps 300us between looks. Printing it tells whether it ever
+             * changes -- a constant byte is a producer that never runs, a moving
+             * one is a poll that never succeeds. */
+            std::printf("ps3base-wasm: byte[0xBE070C]=%u byte[0xBE0709]=%u byte[0xBE0708]=%u\n",
+                        unsigned(vm::g_base[0xBE070Cu]), unsigned(vm::g_base[0xBE0709u]),
+                        unsigned(vm::g_base[0xBE0708u]));
             guest::status_dump();
             spu::status_dump();
         }
