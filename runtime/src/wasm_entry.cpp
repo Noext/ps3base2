@@ -371,6 +371,15 @@ int main(int argc, char** argv) {
             }
             std::printf("\n");
         }
+        /* Other guest threads are the real question: f_0021e060 is a worker loop
+         * with no return, so progress can only come from elsewhere. Dump every
+         * thread once so the state of the machine is read, not assumed. */
+        static bool dumped_threads = false;
+        if (!dumped_threads && i >= 3) {
+            dumped_threads = true;
+            std::printf("ps3base-wasm: --- guest thread dump at t=%ds ---\n", i + 1);
+            guest::status_dump();
+        }
         if (main_thread->exited) {
             std::printf("WASM-GUEST-THREAD-EXITED\n");
             break;
