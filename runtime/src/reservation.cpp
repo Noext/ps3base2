@@ -617,8 +617,17 @@ int poll_once(uint32_t line, uint64_t rtime, const uint8_t* rdata, int slot, uin
 }
 
 bool park_enabled() {
+    /* getenv is inert under wasm, so the env knob can never enable the futex park
+     * there: the SPU falls back to wait_lost, which SPINS on _mm_pause() and
+     * host::yield() without executing a single guest instruction (measured: insns
+     * frozen at ~12,288 against native's 287 billion). Force it on for wasm so the
+     * parked thread is woken by kick_line() instead of burning its quantum. */
+#if defined(PS3BASE_SPU_PARK_FORCED) && PS3BASE_SPU_PARK_FORCED
+    return true;
+#else
     static const bool on = env_long("GOWA_SPU_PARK", 0) != 0;
     return on;
+#endif
 }
 
 int park_alloc() {
