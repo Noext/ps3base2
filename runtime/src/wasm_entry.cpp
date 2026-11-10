@@ -182,6 +182,18 @@ int main(int argc, char** argv) {
      * switch is a compile-time constant. hooks::add_guard fires at function entry
      * with the live context, which is the only place that can answer "who called
      * this and with what". */
+    /* Who asks f_0021c178 for the 69-hour sleep? Guard its entry and record the
+     * caller and argument. */
+    hooks::add_guard(0x21c178, [](ppu::Context& c) {
+        static std::atomic<int> n{0};
+        const int k = n.fetch_add(1);
+        if (k < 6)
+            std::fprintf(stderr, "[sleepprobe] #%d f_0021c178 r3=%lld lr=0x%llx sp=0x%llx\n", k,
+                         static_cast<long long>(c.gpr[3]),
+                         static_cast<unsigned long long>(c.lr),
+                         static_cast<unsigned long long>(c.gpr[1]));
+        return false;
+    });
     hooks::add_guard(0x5d2b44, [](ppu::Context& c) {
         static std::atomic<int> n{0};
         const int k = n.fetch_add(1);
@@ -273,6 +285,33 @@ int main(int argc, char** argv) {
                             static_cast<long long>(main_thread->ctx.gpr[3]),
                             static_cast<unsigned long long>(main_thread->ctx.gpr[11]),
                             static_cast<uint32_t>(main_thread->ctx.lr));
+            }
+            /* r1 is the guest stack pointer. Walking it up gives the return
+             * chain, which is what names the caller that chose 250000 seconds. */
+            if (main_thread->ctx.cia == 0x3a18b0u) {
+                static bool dumped = false;
+                if (!dumped) {
+                    dumped = true;
+                    std::printf("ps3base-wasm: stack walk at the sleep:\n");
+                    /* PPC64 frame: [sp] is the caller's sp (back chain), [sp+16]
+                     * is the saved LR slot in this calling convention. Print both
+                     * so the chain can be read rather than assumed. */
+                    /* f_003a1884 saved its caller's LR at [sp+128] (see
+                     * mc_036.cpp:13004), so that slot names who asked for the
+                     * sleep. Walk the back chain from there, printing the saved LR
+                     * of each frame, which is the guest's own call stack. */
+                    uint32_t sp = static_cast<uint32_t>(main_thread->ctx.gpr[1]);
+                    std::printf("ps3base-wasm:   sp=0x%08x mapped=%d lr_in_frame=0x%08x\n", sp,
+                                vm::range_mapped(sp, 0x100) ? 1 : 0,
+                                vm::range_mapped(sp + 128, 4) ? vm::read32(sp + 128) : 0);
+                    for (int k = 0; k < 12; k++) {
+                        if (!vm::range_mapped(sp, 0x20)) break;
+                        const uint32_t back = vm::read32(sp);
+                        std::printf("ps3base-wasm:   back[%d] sp=0x%08x -> 0x%08x\n", k, sp, back);
+                        if (!back || back <= sp || back > 0x10000000) break;
+                        sp = back;
+                    }
+                }
             }
             if (main_thread->ctx.cia == 0x1307a08u) {
                 const uint32_t obj = static_cast<uint32_t>(main_thread->ctx.gpr[30]);
