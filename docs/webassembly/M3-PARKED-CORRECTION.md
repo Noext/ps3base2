@@ -73,3 +73,30 @@ that would break the tie is not running.
 I am not calling this "working" or "early". Two rounds ago I called the SPUs missing;
 last round I called them early; both were wrong. **They are parked, the clock is fine,
 and the deadlock is real.**
+
+## The symmetric wait, confirmed natively
+
+The native run's own thread dump shows the other half:
+
+    status: ppu 0x1000002 'MinecraftSpursHdlr0' blocked in 178
+            (r3 0x4000100 r31 0x30028500) syscalls +2 lr 0x0
+
+`syscall 178` is `sys_spu_thread_group_join` on group `0x4000100`, and `r31` is
+**`0x30028500`** — the same taskset line the SPUs are parked on.
+
+So the shape is confirmed in **both** runs:
+
+    SPU kernels  -> wait on version change of 0x30028500  (rsv::wait_parked)
+    PPU handler  -> waits for the SPU group to finish     (sys_spu_thread_group_join)
+
+The native run escapes this because **other PPU work proceeds** — it reaches the world
+with the kernels still parked in this exact state (`events 0x20 insns 19240960`). The
+join is one path among many, and the game continues on the paths that do not join.
+
+The wasm run does not escape because its PPU side has only one live thread,
+`main_thread`, and it is in the `f_0021e060` poll — a loop that also depends on the
+SPURS handlers.
+
+**That is the difference between the two runs, and it is now precisely stated:** not a
+missing writer, not a slow interpreter, but a PPU that has no thread left to make
+progress while three of its four threads are joined to the SPU group.
