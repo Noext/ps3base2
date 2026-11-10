@@ -17,6 +17,7 @@
 #include "runtime/mem.h"
 #include "runtime/regions.h"
 #include "runtime/thread.h"
+#include "runtime/hooks.h"
 
 #include <cstdio>
 #include <cstring>
@@ -164,6 +165,12 @@ int main(int argc, char** argv) {
     c.gpr[12] = pi.malloc_pagesize;
     std::printf("ps3base-wasm: CRT args sp=0x%08x argv=0x%08x envp=0x%08x\n", (uint32_t)c.gpr[1], argv_addr,
                 envp_addr);
+
+    /* Install the hook dispatch. Without it ppu::hook_impl stays null and the
+     * lifted code never consults hook_flags, so PS3BASE_CALL_TRACE would record
+     * nothing -- the same inert-guard trap documented in hooks.cpp. */
+    hooks::init();
+    std::printf("ps3base-wasm: hooks installed\n");
 
     std::printf("ps3base-wasm: starting the LV2 entry...\n");
     try {
