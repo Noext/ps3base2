@@ -379,6 +379,21 @@ int main(int argc, char** argv) {
                                 rf ? rf[0x200 >> 2] : 0u, rf ? rf[0x204 >> 2] : 0u,
                                 rf ? rf[0x208 >> 2] : 0u, rf ? rf[0x210 >> 2] : 0u,
                                 rf ? rf[0x1A00 >> 2] : 0u);
+                /* Dump every non-zero register in the surface/texture window: the
+                 * question is which surface registers the guest DOES write, not
+                 * whether the ones I guessed are written. */
+                std::printf("ps3base-wasm: nonzero regs 0x0000-0x0220:");
+                for (uint32_t r = 0; r <= 0x220; r += 4) {
+                    const uint32_t v = rf[r >> 2];
+                    if (v) std::printf(" 0x%03x=%08x", r, v);
+                }
+                std::printf("\n");
+                std::printf("ps3base-wasm: tex unit offsets:");
+                for (uint32_t u = 0; u < 8; u++) {
+                    const uint32_t v = rf[(0x1A00u + u * 0x20) >> 2];
+                    if (v) std::printf(" u%u=0x%x", u, v);
+                }
+                std::printf("\n");
                 }
                 std::printf("ps3base-wasm: low regs:");
                 for (int k = 0; k < 64; k++) if (lr[k]) std::printf(" 0x%02x=%u", k * 4, lr[k]);
