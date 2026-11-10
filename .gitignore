@@ -51,3 +51,13 @@ glyphsrc_*.raw
 snap_*.bin
 pair_*.raw
 framelog*
+
+# One-off scratch scripts from a single debugging session. They carry absolute
+# host paths (/root/Dev/...), reference nothing in the tree, and describe the
+# state of one file at one moment rather than a job anything can re-run.
+/de*.py
+/hooks.py
+/excl.py
+/spu.py
+/mkstubs*.py
+

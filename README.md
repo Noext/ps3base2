@@ -1,74 +1,119 @@
-# GoWA-pc
+# ps3base v2
 
-A static recompilation of God of War: Ascension (PS3, BCES01741) for PC.
+A generic static-recompilation runtime for PS3 titles.
 
-The game's PPU code is translated to C++ and compiled for x86-64. SPU programs are compiled ahead of time as well, and some of the heavier SPU jobs (Edge geometry, cloth, parts of the job system) have been rewritten by hand and checked against the original output. The PS3 system libraries the game uses are reimplemented in the runtime, and the RSX command stream is drawn with Vulkan.
+The game's PowerPC code is translated to C++ ahead of time and compiled for
+x86-64. The PS3 system libraries the title calls are lifted from the user's own
+firmware or reimplemented, and the RSX command stream is drawn with Vulkan. It is
+not an emulator: no CPU emulator runs at play time.
 
-<p align="center">
-  <img src="media/demo.webp" alt="God of War: Ascension running natively on Linux" width="960">
-  <br>
-  <a href="media/demo.mp4">Watch the full recording (2:53)</a>
-</p>
+**It knows no game.** The runtime contains no title identity, no disc serial, no
+hardcoded path. What a title needs beyond the generic machine arrives through a
+game profile (`runtime/include/runtime/game_profile.h`); a build with no profile
+gets the generic machine alone, which is the supported way to measure a foreign
+disc.
 
-The recording was made on Linux with an i7-8700K and an RTX 4070 at 1080p internal resolution. The counter in the corner is the game's frame rate.
+This is a hobby project. It is not affiliated with Sony Interactive Entertainment,
+and it contains no game code or data. You need your own copies.
 
-This is a hobby project. It is not affiliated with Sony Interactive Entertainment or Santa Monica Studio, and it contains no game code or data. You need your own copy of the game.
+## What runs on it
+
+Measured, not claimed. Each title was lifted from its own disc and played on this
+same runtime with no title-specific code except an optional profile:
+
+| Title | Disc | Reached |
+|---|---|---|
+| Minecraft: PlayStation 3 Edition | BLES01976 | menus, world creation, gameplay, world generation; 99.9% of SPU code compiled ahead of time |
+| Grand Theft Auto: San Andreas | BLES02219 | title screen, intro cutscene, in game at Grove Street with a full HUD |
+
+Neither is finished. Their status lives in their own projects;
+`docs/progress.md` here records what each one taught the runtime.
+
+The port this tree was forked from (God of War: Ascension) still selects its layer
+through `profile_gowa`, kept as the reference profile and as the regression that
+Phase 0.4 checks.
 
 ## Status
 
-The game boots, plays the intro, and is playable. It is not finished and not every part of the game has been tested.
+`docs/progress.md` is the record: one section per milestone, each with the command
+and the output that proves it. What it currently says:
 
-On an i7-8700K with an RTX 4070, calm areas run at around 55-60 fps. Large fights run at roughly 35-45 fps and can still drop lower for short moments. Most of the remaining cost is SPU work (mainly Edge geometry jobs), not the GPU.
+- **Phase 0 -- the fork.** A build with no game-derived inputs stops at once and
+  names the missing step. The runtime contains no title identity:
+  `grep -rn 'BCES01741' runtime/` returns 0. A title with no profile starts, runs
+  and presents frames.
+- **Phase 1 -- what the old tree kept.** The LV2 syscall table is generated from
+  the specification and reports its own coverage:
+  `lv2: 451 listed, 180 implemented (39.9%)`. An unimplemented number returns
+  `0x8001003F` with its name rather than a fabricated success.
+- **The memory map, tested:** `memory: 22 checks passed (0 failed)`.
 
-Known issues:
-
-- Frame drops in heavy fights and short hitches when new areas stream in.
-- Audio can crackle in busy scenes.
-- Linux is the main development platform at the moment. The Windows build has not been tested since the Linux port.
-
-## Requirements
-
-- A dump of your own disc (BCES01741) and the 01.12 update.
-- PS3 firmware 4.91 and the key material needed to decrypt the game and the firmware modules (your own `keys/keys.json`). Keys are never included and never committed.
-- Python 3 with pycryptodome for the setup tools.
-- Linux: clang, CMake, Ninja, SDL3, a Vulkan driver, and optionally FFmpeg (libavcodec) for the videos.
-- Windows: Visual Studio 2022 Build Tools with clang-cl, CMake and Ninja.
+The full build currently also carries a WebAssembly milestone track; see
+`docs/PORT-WEB-PROMPT.md`.
 
 ## Setup
 
-The setup is still a set of manual steps. The tools in `tools/` extract and decrypt the disc, the update and the firmware. After that, `tools/setup.py` generates all game-derived sources into `out/` from your own files:
+ps3base compiles nothing by itself. The code it runs is generated from **your
+own** copy of a disc and of the firmware. None of that material is tracked.
 
+```bash
+python3 tools/extract_keys.py <rpcs3>/rpcs3/Crypto/key_vault.cpp keys/self_keys.json
+python3 tools/decrypt_all.py bin                 # your SELF payloads -> plain ELF
+python3 tools/setup.py --steps ppu --elf bin/<title>/EBOOT.elf
+python3 tools/setup.py --steps spu --elf bin/<title>/EBOOT.elf
 ```
-python3 tools/decrypt_all.py bin          # EBOOT.BIN and the other SELF payloads -> plain ELF
-python3 tools/setup.py --steps all         # lift into out/
+
+`bin/`, `fw/`, `keys/` and `out/` are git-ignored. `docs/setup.md` has the full
+sequence, including how the decryption works and why the KLIC is never stored.
+
+To lift a second title without touching the first, point the generated-code and
+build directories somewhere else:
+
+```bash
+python3 tools/setup.py --steps ppu --images recomp/images-<title>.json \
+    --elf bin/<title>/EBOOT.elf --out-root out-<title>
+cmake -S . -B build-<title> -G Ninja \\
+      -DPS3BASE_GENERATED_DIR=$PWD/out-<title>/ppu \\
+      -DGOWA_SPU_GENERATED_DIR=$PWD/out-<title>/spu
 ```
-
-`decrypt_all.py` needs `keys/keys.json` and `keys/self_keys.json`; the second is
-generated with `tools/extract_keys.py`. The KLIC for each payload is recovered
-from the decrypted EBOOT by CMAC verification, never stored. See
-[docs/setup.md](docs/setup.md) for the full sequence and how the decryption works.
-
-By default it expects the decrypted 01.12 executable at `bin/01.12/` and the decrypted firmware modules at `fw/4.91/`. Nothing in `bin/`, `fw/`, `keys/` or `out/` is tracked by git.
 
 ## Building
 
-Linux:
-
-```
-cmake -S . -B build-linux -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
-cmake --build build-linux
-```
-
-Windows:
-
-```
-build.cmd
+```bash
+cmake -S . -B build -G Ninja \
+      -DCMAKE_BUILD_TYPE=RelWithDebInfo \\
+      -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+cmake --build build -j 8 --target ps3base
 ```
 
-## Running
+clang only, RelWithDebInfo only, and `-j 8` at most: this machine is shared, and
+higher values make it unusable for anything else.
 
-Start `God of War Ascension` from the build folder. A small launcher opens first, where you set the game folder, the update folder and a few options. The settings are kept in `user/settings.ini` next to the executable. Most options can also be set with `GOWA_*` environment variables.
+## Known defects
 
-## License
+- The LV2 surface is about 40% implemented. Everything else refuses explicitly
+  rather than pretending.
+- `f_0064c044` crashes Minecraft's `(4J) Server` on long sessions: a corrupted
+  linked-list pointer read as if it were a node. The writer is unidentified.
+- Loading an existing Minecraft world returns `-2` from the file callback after
+  `THUMB`.
 
-MIT, see `LICENSE`. It covers the code in this repository only, not the game. Third-party components keep their own licenses, see `THIRD_PARTY_NOTICES.txt`. God of War is a trademark of Sony Interactive Entertainment.
+## Documentation
+
+| File | What it answers |
+|---|---|
+| `docs/progress.md` | what each milestone proved, with the command and its output |
+| `docs/decisions.md` | why the structure is this way (D-001 to D-006), and the abandon criterion |
+| `docs/RUN.md` | the exact command that launches a run, and how to judge one |
+| `docs/setup.md` | discs, firmware and key material -> liftable sources |
+| `docs/REFERENCES.md` | where a fact comes from: the file that answers a question |
+| `docs/forcings.md` | every active forcing, as a debt to be replaced |
+| `docs/PLAY.md`, `docs/recon/` | the Minecraft and GTA San Andreas tracks |
+| `docs/PORTING.md`, `docs/RECIPE.md` | what porting a title taught, and the recipe for the next one |
+
+## Licence
+
+MIT, see `LICENSE`. It covers the code in this repository only, not any game.
+Third-party components keep their own licenses, see `THIRD_PARTY_NOTICES.txt`.
+God of War, Minecraft and Grand Theft Auto are trademarks of their respective
+owners; none of their code or data is included here.
