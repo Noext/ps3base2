@@ -29,7 +29,7 @@ Known issues:
 ## Requirements
 
 - A dump of your own disc (BCES01741) and the 01.12 update.
-- PS3 firmware 4.91 and the keys needed to decrypt the game and the firmware modules. These are not included.
+- PS3 firmware 4.91 and the key material needed to decrypt the game and the firmware modules (your own `keys/keys.json`). Keys are never included and never committed.
 - Python 3 with pycryptodome for the setup tools.
 - Linux: clang, CMake, Ninja, SDL3, a Vulkan driver, and optionally FFmpeg (libavcodec) for the videos.
 - Windows: Visual Studio 2022 Build Tools with clang-cl, CMake and Ninja.
@@ -39,8 +39,14 @@ Known issues:
 The setup is still a set of manual steps. The tools in `tools/` extract and decrypt the disc, the update and the firmware. After that, `tools/setup.py` generates all game-derived sources into `out/` from your own files:
 
 ```
-python3 tools/setup.py --steps all
+python3 tools/decrypt_all.py bin          # EBOOT.BIN and the other SELF payloads -> plain ELF
+python3 tools/setup.py --steps all         # lift into out/
 ```
+
+`decrypt_all.py` needs `keys/keys.json` and `keys/self_keys.json`; the second is
+generated with `tools/extract_keys.py`. The KLIC for each payload is recovered
+from the decrypted EBOOT by CMAC verification, never stored. See
+[docs/setup.md](docs/setup.md) for the full sequence and how the decryption works.
 
 By default it expects the decrypted 01.12 executable at `bin/01.12/` and the decrypted firmware modules at `fw/4.91/`. Nothing in `bin/`, `fw/`, `keys/` or `out/` is tracked by git.
 
