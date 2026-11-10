@@ -189,6 +189,17 @@ int main(int argc, char** argv) {
      * caller and argument. */
     /* The native run's main_thread spends its time in f_005d2868, a different
      * instance of the same 30us poll. Does the wasm run ever reach it? */
+    /* Does the wasm run enter the f_0021e060 worker loop, and if so when? The
+     * native run reaches the world without this being the only live path. */
+    hooks::add_guard(0x21e060, [](ppu::Context& c) {
+        static std::atomic<int> n{0};
+        const int k = n.fetch_add(1);
+        if (k < 4)
+            std::fprintf(stderr, "[loopB] #%d f_0021e060 r3=0x%llx lr=0x%llx\n", k,
+                         static_cast<unsigned long long>(c.gpr[3]),
+                         static_cast<unsigned long long>(c.lr));
+        return false;
+    });
     hooks::add_guard(0x5d2868, [](ppu::Context& c) {
         static std::atomic<int> n{0};
         const int k = n.fetch_add(1);
