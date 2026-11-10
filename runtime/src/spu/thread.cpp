@@ -215,6 +215,20 @@ void SpuThread::log_watched_dma(const char* what, uint32_t cmd, uint32_t ea, uin
 
 static const bool job_stats = std::getenv("GOWA_SPU_JOBS") != nullptr;
 
+
+/* Is the awaited reservation line ever invalidated by a writer? The SPU parks on
+ * EV_LR at raddr (the SPURS taskset line); if nothing ever writes that line, the
+ * event never fires and the SPU waits forever regardless of ie or the decrementer. */
+#include <atomic>
+namespace {
+std::atomic<uint64_t> g_lost_checks{0}, g_lost_hits{0};
+}
+
+void rsv_lost_stats(uint64_t* checks, uint64_t* hits) {
+    if (checks) *checks = g_lost_checks.load(std::memory_order_relaxed);
+    if (hits) *hits = g_lost_hits.load(std::memory_order_relaxed);
+}
+
 void SpuThread::collect_events() {
     if (!dec_frozen) {
         /* The decrementer is 32-bit and wraps, but dec_start must not simply be
@@ -235,7 +249,10 @@ void SpuThread::collect_events() {
         }
     }
     if ((event_mask & EV_LR) && raddr && !(events & EV_LR)) {
-        if (rsv::lost(raddr, rtime, rdata)) {
+        const bool lost = rsv::lost(raddr, rtime, rdata);
+        g_lost_checks.fetch_add(1, std::memory_order_relaxed);
+        if (lost) {
+            g_lost_hits.fetch_add(1, std::memory_order_relaxed);
             set_events(EV_LR);
             raddr = 0;
         }
