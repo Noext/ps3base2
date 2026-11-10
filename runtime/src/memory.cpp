@@ -1,5 +1,6 @@
 #include <atomic>
 #include "runtime/memory.h"
+#include "runtime/mem.h"
 #include "runtime/log.h"
 
 #include <algorithm>
@@ -65,7 +66,7 @@ uint32_t g_used[static_cast<size_t>(Region::Count)] = {};
 /* Callers inside this file already hold g_lock, so this must not take it. */
 bool commit_locked(uint32_t addr, uint32_t size) {
     watch_reset(addr, size);
-    return host::vm_commit(g_base + addr, size);
+    return mem::commit(g_base, addr, size);
 }
 
 bool overlaps(uint32_t addr, uint32_t size) {
@@ -126,7 +127,7 @@ void watch_reset(uint32_t addr, uint64_t size) {
         uint32_t page = uint32_t(a >> 12);
         watch_lock(page).lock();
         if (g_page_watched[page].load(std::memory_order_relaxed)) {
-            host::vm_protect(g_base + a, 0x1000, host::Prot::ReadWrite);
+            mem::protect(g_base, a, 0x1000, mem::Prot::ReadWrite);
             g_page_watched[page].store(0, std::memory_order_relaxed);
             static std::atomic<int> logged{0};
             if (logged.fetch_add(1) < 4) LOG_WARN("vm", "remapped watched page 0x%08llx", static_cast<unsigned long long>(a));
@@ -148,11 +149,11 @@ uint64_t watch_range(uint32_t addr, uint32_t size, bool& ok) {
         uint32_t run = page;
         while (run < last && run - page < 1024 && !g_page_watched[run].load(std::memory_order_acquire)) run++;
         for (uint32_t q = page; q < run; q++) watch_lock(q).lock();
-        if (host::vm_protect(g_base + (uint64_t(page) << 12), uint64_t(run - page) << 12, host::Prot::Read)) {
+        if (mem::protect(g_base, (uint64_t(page) << 12), uint64_t(run - page) << 12, mem::Prot::Read)) {
             for (uint32_t q = page; q < run; q++) g_page_watched[q].store(1, std::memory_order_release);
         } else {
             for (uint32_t q = page; q < run; q++) {
-                if (host::vm_protect(g_base + (uint64_t(q) << 12), 0x1000, host::Prot::Read)) g_page_watched[q].store(1, std::memory_order_release);
+                if (mem::protect(g_base, (uint64_t(q) << 12), 0x1000, mem::Prot::Read)) g_page_watched[q].store(1, std::memory_order_release);
                 else ok = false;
             }
         }
@@ -175,7 +176,7 @@ bool watch_fault(uint32_t addr, bool repair_stale) {
     watch_lock(page).lock();
     bool handled = false;
     if (g_page_watched[page].load(std::memory_order_relaxed)) {
-        host::vm_protect(g_base + (uint64_t(page) << 12), 0x1000, host::Prot::ReadWrite);
+        mem::protect(g_base, (uint64_t(page) << 12), 0x1000, mem::Prot::ReadWrite);
         g_page_watched[page].store(0, std::memory_order_release);
         g_page_epoch[page].fetch_add(1, std::memory_order_acq_rel);
         handled = true;
@@ -204,7 +205,7 @@ bool watch_fault(uint32_t addr, bool repair_stale) {
          * condition (no watches at all) left this window open for as long as
          * any watch was active, which is most of the run. */
         if (is_mapped(addr)) {
-            host::vm_protect(g_base + (uint64_t(page) << 12), 0x1000, host::Prot::ReadWrite);
+            mem::protect(g_base, (uint64_t(page) << 12), 0x1000, mem::Prot::ReadWrite);
             g_page_epoch[page].fetch_add(1, std::memory_order_acq_rel);
             g_stale_repairs.fetch_add(1, std::memory_order_relaxed);
             handled = true;
@@ -229,7 +230,7 @@ void host_write(uint32_t addr, uint64_t size) {
         uint32_t run = page;
         while (run < last && run - page < 1024 && g_page_watched[run].load(std::memory_order_acquire)) run++;
         for (uint32_t q = page; q < run; q++) watch_lock(q).lock();
-        host::vm_protect(g_base + (uint64_t(page) << 12), uint64_t(run - page) << 12, host::Prot::ReadWrite);
+        mem::protect(g_base, (uint64_t(page) << 12), uint64_t(run - page) << 12, mem::Prot::ReadWrite);
         for (uint32_t q = page; q < run; q++) {
             if (g_page_watched[q].load(std::memory_order_relaxed)) {
                 g_page_watched[q].store(0, std::memory_order_release);
@@ -255,13 +256,15 @@ void refresh_pages_locked(uint32_t addr, uint64_t size) {
 }
 
 bool init() {
-    void* p = host::vm_reserve(0x200000000ull);
+    /* 8 GB of address space, reserved through the backend so a WebAssembly build
+     * can use a flat bitmap instead of mmap+mprotect. */
+    void* p = mem::reserve(0x200000000ull);
     if (!p) {
         LOG_ERROR("vm", "failed to reserve guest address space");
         return false;
     }
     g_base = static_cast<uint8_t*>(p);
-    LOG_INFO("vm", "guest base %p", p);
+    LOG_INFO("vm", "guest base %p (backing: %s)", p, mem::mode_name());
     return true;
 }
 
@@ -332,7 +335,7 @@ bool dealloc(uint32_t addr) {
         }
     }
     watch_reset(addr, it->second);
-    host::vm_decommit(g_base + addr, it->second);
+    mem::decommit(g_base, addr, it->second);
     uint32_t freed = it->second;
     g_blocks.erase(it);
     refresh_pages_locked(addr, freed);

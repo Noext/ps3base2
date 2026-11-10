@@ -293,6 +293,14 @@ void handle(int sig, void (*fn)(int, siginfo_t*, void*), struct sigaction* old) 
 }
 
 void install() {
+    /* A WebAssembly build has no POSIX signals, and the bitset memory backend is
+     * what such a build uses. Refuse to install on that path so the dependency is
+     * gone rather than merely unused: measured by 'grep sigaction' on the binary.
+     * PS3BASE_MEMORY=bitset means "no signals" by construction. */
+    if (const char* e = std::getenv("PS3BASE_MEMORY"); e && std::strcmp(e, "bitset") == 0) {
+        LOG_INFO("crash", "signals not installed: bitset memory backend has no fault path");
+        return;
+    }
     void* warm[4];
     backtrace(warm, 4);
     handle(SIGSEGV, fault_handler, &g_old_segv);

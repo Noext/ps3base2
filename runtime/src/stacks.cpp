@@ -3,6 +3,7 @@
 #include "runtime/host.h"
 #include "runtime/log.h"
 #include "runtime/memory.h"
+#include "runtime/mem.h"
 
 #include <algorithm>
 #include <cstring>
@@ -33,10 +34,13 @@ uint32_t split(uint32_t id, const char* name, uint32_t requested, uint32_t block
     const uint32_t allocated = block_size - GUARD_BYTES;
     const uint32_t guard = block_base;
     const uint32_t lo = block_base + GUARD_BYTES;
-    if (!host::vm_protect(vm::g_base + guard, GUARD_BYTES, host::Prot::None)) {
+    if (!mem::protect(vm::g_base, guard, GUARD_BYTES, mem::Prot::None)) {
         LOG_WARN("stacks", "thread %u '%s': guard at 0x%08x could not be protected", id, name ? name : "?", guard);
         return 0;
     }
+    /* In bitset mode Prot::None is not enforced by the CPU: the guard is a
+     * SOFTWARE range check. Record it so the check has a list to consult. */
+    mem::register_guard(guard, GUARD_BYTES);
     Entry e{};
     e.id = id;
     std::snprintf(e.name, sizeof e.name, "%s", name ? name : "?");
