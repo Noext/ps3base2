@@ -100,6 +100,10 @@ LV2_SYSCALL(52, _sys_ppu_thread_create) {
      * stub can never produce. */
     if (name.find("GetFriendsThreadProc") != std::string::npos)
         g_menu_thread_creations.fetch_add(1);
+    if (name.find("thread_options_load") != std::string::npos ||
+        name.find("thread_getSavesInfo") != std::string::npos ||
+        name.find("thread_readSaveCacheFile") != std::string::npos)
+        g_ui_thread_creations.fetch_add(1);
     LOG_INFO("ppu", "_sys_ppu_thread_create '%s' entry 0x%08x arg 0x%llx prio %d stack 0x%x flags 0x%llx -> 0x%x", name.c_str(), entry,
              static_cast<unsigned long long>(arg), prio, stack, static_cast<unsigned long long>(flags), t->id);
     return CELL_OK;
