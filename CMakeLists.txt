@@ -278,6 +278,17 @@ target_compile_options(memspace PRIVATE ${PS3BASE_ARCH_FLAGS})
 target_link_libraries(memspace PRIVATE pthread)
 add_test(NAME memspace COMMAND memspace)
 
+# SPURS event flag: the struct is written in the guest's real big-endian layout,
+# so the field offsets are asserted rather than assumed.
+add_executable(spurs tests/spurs.cpp
+    runtime/src/memory.cpp runtime/src/regions.cpp runtime/src/mem.cpp
+    runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/backtrace_port.cpp
+    runtime/src/host.cpp runtime/src/log.cpp runtime/src/cycles.cpp)
+target_include_directories(spurs PRIVATE runtime/include runtime/src runtime/src/hle runtime/src/lv2 out/ppu)
+target_compile_options(spurs PRIVATE ${PS3BASE_ARCH_FLAGS})
+target_link_libraries(spurs PRIVATE pthread)
+add_test(NAME spurs COMMAND spurs)
+
 # Proves wgpu-native works here and measures the pipeline-cache cost that decides
 # whether the WebGPU port is cheap or expensive. Optional: only built when the
 # library is present, so a machine without it still configures.
