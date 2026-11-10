@@ -258,6 +258,13 @@ target_include_directories(spu_aot_variants PRIVATE runtime/include)
 target_compile_options(spu_aot_variants PRIVATE ${PS3BASE_ARCH_FLAGS})
 target_link_libraries(spu_aot_variants PRIVATE pthread)
 add_test(NAME spu_aot_variants COMMAND spu_aot_variants)
+
+# Every Vulkan format and blend factor the renderer uses must have a WebGPU
+# decision, with the inexpressible ones classified rather than omitted.
+add_executable(wgpu_map tests/wgpu_map.cpp runtime/src/gpu/wgpu_map.cpp)
+target_include_directories(wgpu_map PRIVATE runtime/include)
+target_compile_options(wgpu_map PRIVATE ${PS3BASE_ARCH_FLAGS})
+add_test(NAME wgpu_map COMMAND wgpu_map)
 # Cross-processor reservation invalidation: an SPU write must invalidate an
 # active PPU reservation on the same line, or stcx. commits unseen data.
 add_executable(reservation_xproc tests/reservation_xproc.cpp runtime/src/memory.cpp runtime/src/mem.cpp runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/host.cpp runtime/src/log.cpp)

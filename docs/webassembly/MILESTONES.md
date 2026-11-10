@@ -105,7 +105,59 @@ measuring, not by reading the diff.
 
 ---
 
-## Milestones 2-5
+---
 
-Not started. Milestone 2 (native WebGPU backend) is next once the guard check
-above closes milestone 1 completely.
+## Milestone 2 -- native WebGPU backend -- IN PROGRESS
+
+### Scope measured first
+
+The renderer's Vulkan surface, counted rather than guessed:
+
+| where | value |
+|---|---|
+| distinct `Vk*` types across `runtime/src/gpu/` | **118** |
+| distinct `vk*` calls | **100** |
+| calls in `rsx_renderer.cpp` alone | 87 (in 4,626 lines) |
+| `VK_FORMAT_*` used | **28** |
+| `VK_BLEND_FACTOR_*` used | **15** |
+
+### First brick, done: the correspondence table
+
+`runtime/include/runtime/wgpu_map.h` + `runtime/src/gpu/wgpu_map.cpp`, tested by
+`tests/wgpu_map.cpp`. This is the part of the port that can be written and
+audited without a device, and it forces the two inexpressible cases to be named
+now instead of discovered after the port.
+
+Measured coverage, printed by the test:
+
+    formats: 17 direct, 7 feature, 4 expand, 0 emulate, 0 absent
+    blend  : 13 direct, 0 feature, 0 expand, 2 emulate, 0 absent
+
+The decisions that matter:
+
+- **4 formats are `Expand`**: `A1R5G5B5`, `R5G5B5A1`, `R4G4B4A4`, `R5G6B5`. WebGPU
+  has no 16-bit packed RGBA colour, so they widen to `RGBA8Unorm` at **twice the
+  bytes per texel**. The texture cache must budget for it.
+- **7 formats are `Feature`**: the BC1/BC2/BC3 set, gated on
+  `texture-compression-bc`, plus `DEPTH32FLOAT_STENCIL8`.
+- **2 blend factors are `Emulate`**: `CONSTANT_ALPHA` and
+  `ONE_MINUS_CONSTANT_ALPHA`. WebGPU's `constant`/`one-minus-constant` read the
+  **colour** channels, so the alpha variant has to come through a shader uniform.
+
+Measurement: 8 checks, 0 failures. The test asserts each case explicitly — a table
+that silently marked the packed formats `Direct` would pass a naive "is it
+mapped?" check and fail this one.
+
+### What is not yet done in milestone 2
+
+The device itself: `wgpu-native` v29 is available at
+`/root/Dev/ps2-web-recomp/third_party/wgpu-native` (`libwgpu_native.a`, 51.9 MB),
+but no wgpu device is created and no pipeline is built. The pipeline-cache design
+(WebGPU has no dynamic state, and RSX varies blend/depth per draw) is the next
+task, followed by the 87 call sites in `rsx_renderer.cpp`.
+
+---
+
+## Milestones 3-5
+
+Not started.
