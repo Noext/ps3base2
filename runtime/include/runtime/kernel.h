@@ -32,6 +32,9 @@ enum : int64_t {
     CELL_ENOTCONN = static_cast<int32_t>(0x80010016),
     CELL_EBADF = static_cast<int32_t>(0x8001002A),
     CELL_EIO = static_cast<int32_t>(0x8001002B),
+    /* refs/rpcs3/rpcs3/Emu/Cell/ErrorCodes.h:144. Used by sys_fs_chmod when the
+     * host refuses the mode. */
+    CELL_EACCES = static_cast<int32_t>(0x80010029),
     CELL_EMFILE = static_cast<int32_t>(0x8001002C),
     CELL_ENOTDIR = static_cast<int32_t>(0x8001002F),
     CELL_ENOTEMPTY = static_cast<int32_t>(0x8001003C),

@@ -367,6 +367,66 @@ LV2_SYSCALL(808, sys_fs_stat) {
     return CELL_OK;
 }
 
+/* cellFsChmod / sys_fs_chmod (834). refs/.../sys_fs.cpp:3420 makes this a
+ * todo() that reports success without touching the file -- the "never a fake
+ * success" case AGENTS.md forbids: a title told its file has the mode it asked
+ * for then writes where the host refuses.
+ *
+ * Red Dead Redemption calls it through libfs at 0x34004964 right after creating
+ * its install file; the ENOSYS return there stopped the installation with no
+ * error and no progress. The progress dialog sat at zero and the title never
+ * reached its renderer.
+ *
+ * The guest mode is a 32-bit CellFsMode whose low 12 bits are permission bits.
+ * A host that refuses is reported as CELL_EACCES, not swallowed. */
+/* cellFsUtime / sys_fs_utime (815), refs/.../sys_fs.cpp. RPCS3 logs and returns
+ * CELL_OK without setting anything; this runtime sets the real timestamps,
+ * because an installer that reads back the mtime it just wrote and finds the old
+ * one decides its copy never happened.
+ *
+ * Reached in Red Dead Redemption from libfs at 0x34005db0, immediately after
+ * sys_fs_chmod: fixing one took the title straight to the next missing syscall.
+ * The two CellFsUtimbuf fields are 64-bit seconds (actime, modtime). */
+LV2_SYSCALL(815, sys_fs_utime) {
+    std::string guest, host;
+    if (int64_t e = resolve(u32arg(ctx, 0), guest, host)) return e;
+    const uint32_t buf = u32arg(ctx, 1);
+    if (!buf) return CELL_EFAULT;
+    /* CellFsUtimbuf is two 64-bit seconds: actime then modtime. */
+    const int64_t actime = static_cast<int64_t>(vm::read64(buf));
+    const int64_t modtime = static_cast<int64_t>(vm::read64(buf + 8));
+    std::error_code ec;
+    if (!std::filesystem::exists(host, ec)) return CELL_ENOENT;
+    using namespace std::chrono;
+    const auto sys_tp = system_clock::time_point(seconds(modtime));
+    const auto file_tp = std::filesystem::file_time_type::clock::from_sys(sys_tp);
+    std::filesystem::last_write_time(host, file_tp, ec);
+    if (ec) {
+        LOG_WARN("fs", "utime %s refused: %s", guest.c_str(), ec.message().c_str());
+        return CELL_EIO;
+    }
+    (void)actime;
+    LOG_DEBUG("fs", "utime %s -> %lld", guest.c_str(), static_cast<long long>(modtime));
+    return CELL_OK;
+}
+
+LV2_SYSCALL(834, sys_fs_chmod) {
+    std::string guest, host;
+    if (int64_t e = resolve(u32arg(ctx, 0), guest, host)) return e;
+    const uint32_t mode = u32arg(ctx, 1);
+    std::error_code ec;
+    if (!std::filesystem::exists(host, ec)) return CELL_ENOENT;
+    std::filesystem::permissions(host,
+        static_cast<std::filesystem::perms>(mode & 0777),
+        std::filesystem::perm_options::replace, ec);
+    if (ec) {
+        LOG_WARN("fs", "chmod %s mode 0%o refused: %s", guest.c_str(), mode & 0777, ec.message().c_str());
+        return CELL_EACCES;
+    }
+    LOG_DEBUG("fs", "chmod %s -> 0%o", guest.c_str(), mode & 0777);
+    return CELL_OK;
+}
+
 LV2_SYSCALL(809, sys_fs_fstat) {
     auto fd = get_fd(u32arg(ctx, 0));
     if (!fd) return CELL_EBADF;
