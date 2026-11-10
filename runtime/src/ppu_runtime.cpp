@@ -107,12 +107,12 @@ Tap find_tap(const char* module, const char* name) {
 
 }
 
-extern "C" { std::atomic<uint32_t> g_menu_threads{0}; }
+#include "runtime/menu_marker.h"
+std::atomic<uint32_t> g_menu_thread_creations{0};
 namespace ppu {
 /* How many times the guest created the main-menu screen thread. It is the one
  * behavioural marker specific to the menu and shared with the native reference,
  * which is why the milestone-3 log line is keyed on it. */
-std::atomic<uint32_t> g_menu_threads{0};
 
 namespace {
 
