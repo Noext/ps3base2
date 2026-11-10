@@ -57,7 +57,11 @@ HLE_FUNC(cellGcmSys, cellGcmGetConfiguration) {
     const uint32_t p = a32(ctx, 0);
     if (!p || !vm::range_mapped(p, 28)) return ret(ctx, static_cast<int32_t>(0x80010002));
     vm::write32(p + 0, 0xC0000000u);   /* localAddress */
-    vm::write32(p + 4, 0x00200000u);   /* localSize */
+    /* RPCS3 reports a 249 MB local window (cellGcmSys.cpp:425-430:
+     * local_size = 0xf900000, local_addr = 0xc0000000). Announcing 2 MB was a
+     * guess, and a title that sizes its surface pool against this value would
+     * see a window too small to hold one. */
+    vm::write32(p + 4, 0x0F900000u);   /* localSize, as RPCS3 reports it */
     vm::write32(p + 8, 0x00000000u);   /* mainAddress */
     vm::write32(p + 12, 0x00000000u);  /* mainSize */
     vm::write32(p + 16, 0x00000000u);  /* ioAddress */
