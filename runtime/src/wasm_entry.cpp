@@ -18,7 +18,9 @@
 #include "runtime/regions.h"
 #include "runtime/thread.h"
 #include "runtime/hooks.h"
+#include "ppu/ops.h"
 
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -171,6 +173,30 @@ int main(int argc, char** argv) {
      * nothing -- the same inert-guard trap documented in hooks.cpp. */
     hooks::init();
     std::printf("ps3base-wasm: hooks installed\n");
+
+#if PS3BASE_BOOT_PROBE
+    /* Record the argument and caller of the function that dies with a null this.
+     * getenv is inert in wasm (see docs/webassembly/M3-NULL-VTABLE.md), so the
+     * switch is a compile-time constant. hooks::add_guard fires at function entry
+     * with the live context, which is the only place that can answer "who called
+     * this and with what". */
+    hooks::add_guard(0x5d2b44, [](ppu::Context& c) {
+        static std::atomic<int> n{0};
+        const int k = n.fetch_add(1);
+        if (k < 40)
+            std::fprintf(stderr, "[entryprobe] #%d f_005d2b44 r3=0x%llx r4=0x%llx lr=0x%llx sp=0x%llx\n",
+                         k, static_cast<unsigned long long>(c.gpr[3]),
+                         static_cast<unsigned long long>(c.gpr[4]),
+                         static_cast<unsigned long long>(c.lr),
+                         static_cast<unsigned long long>(c.gpr[1]));
+        return false;
+    });
+    /* hooks.cpp documents this trap: add_guard sets hook_flags, but the lifted code
+     * only consults them when ppu::hook_impl is non-null. Assign both here. */
+    std::printf("ps3base-wasm: entry probe on f_005d2b44 (flags=%u, impl=%d)\n",
+                static_cast<unsigned>(ppu::hook_flags[0x5d2b44 >> 2]),
+                ppu::hook_impl ? 1 : 0);
+#endif
 
     std::printf("ps3base-wasm: starting the LV2 entry...\n");
     try {
