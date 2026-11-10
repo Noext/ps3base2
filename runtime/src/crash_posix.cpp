@@ -1,3 +1,27 @@
+/* The crash reporter walks x86 machine state: REG_RIP, si_addr, signal frames.
+ * None of that exists in WebAssembly, and there are no POSIX signals there
+ * either. Under wasm this file provides inert stubs so the callers link; the
+ * bitset memory backend already reports overruns in software instead.
+ */
+#if defined(__wasm__) || defined(__EMSCRIPTEN__)
+
+#include "runtime/log.h"
+
+#include <string>
+
+namespace crash {
+
+void install() {}
+std::string sample_stack(void* native, int depth) {
+    (void)native;
+    (void)depth;
+    return "<no stack in wasm>";
+}
+
+}  // namespace crash
+
+#else
+
 #ifndef _WIN32
 #include "runtime/hooks.h"
 #include "runtime/host.h"
@@ -22,7 +46,7 @@
 
 #include <cxxabi.h>
 #include <dlfcn.h>
-#include <execinfo.h>
+#include "runtime/backtrace_port.h"
 #include <pthread.h>
 #include <sys/mman.h>
 #include <ucontext.h>
@@ -52,7 +76,7 @@ std::string symbol_of(uintptr_t addr) {
 
 int stack_from(const ucontext_t* uc, void** pcs, int depth) {
     void* raw[64];
-    int n = backtrace(raw, 64);
+    int n = backtrace_port::capture(raw, 64);
     uintptr_t rip = uc ? static_cast<uintptr_t>(uc->uc_mcontext.gregs[REG_RIP]) : 0;
     int start = 0;
     if (uc) {
@@ -302,7 +326,7 @@ void install() {
         return;
     }
     void* warm[4];
-    backtrace(warm, 4);
+    backtrace_port::capture(warm, 4);
     handle(SIGSEGV, fault_handler, &g_old_segv);
     handle(SIGBUS, fault_handler, &g_old_bus);
     handle(SIGILL, fault_handler, &g_old_ill);
@@ -416,3 +440,5 @@ void arm_watch() {
 
 }
 #endif
+
+#endif  // !__wasm__

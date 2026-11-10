@@ -1,3 +1,10 @@
+/* Windows thread profiler: HANDLE, SuspendThread, GetThreadContext. There is no
+ * equivalent in WebAssembly and nothing to sample on a single-threaded page, so
+ * the file is inert there. Its public entry points are provided by the wasm stub
+ * in crash_posix.cpp's wasm branch.
+ */
+#if defined(__wasm__) || defined(__EMSCRIPTEN__)
+#else
 #ifdef _WIN32
 #include "runtime/hooks.h"
 #include "runtime/log.h"
@@ -413,3 +420,5 @@ void arm_watch() {
 
 }
 #endif
+
+#endif  // !__wasm__

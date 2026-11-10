@@ -15,7 +15,7 @@
 #include <vector>
 
 #include <dlfcn.h>
-#include <execinfo.h>
+#include "runtime/backtrace_port.h"
 
 namespace cw {
 
@@ -69,7 +69,7 @@ std::string frame(void* p) {
 
 std::string bt(int depth) {
     void* pcs[40];
-    int n = ::backtrace(pcs, depth < 40 ? depth : 40);
+    int n = backtrace_port::capture(pcs, depth < 40 ? depth : 40);
     std::string s;
     for (int i = 1; i < n; i++) s += " <-" + frame(pcs[i]);
     return s;

@@ -1,3 +1,12 @@
+/* RenderDoc capture: a desktop debugging tool. A browser build cannot load
+ * librenderdoc.so and does not need it. Under wasm this file is inert.
+ */
+#if defined(__wasm__) || defined(__EMSCRIPTEN__)
+#include <cstdint>
+namespace rdcapture {
+void maybe_capture(uint64_t) {}
+}
+#else
 /* ps3base -- RenderDoc capture trigger.
 
  * The API struct is taken from RenderDoc's own header. Nothing here guesses a
@@ -120,3 +129,5 @@ void maybe_capture(uint64_t flips)
 }
 
 }  // namespace rdcapture
+
+#endif  // !__wasm__

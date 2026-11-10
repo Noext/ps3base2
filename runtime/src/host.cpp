@@ -74,6 +74,38 @@ int logical_cpus() {
     return static_cast<int>(emscripten_num_logical_cores());
 }
 
+/* Timing: emscripten_get_now() is milliseconds as a double. The qpc/qpf pair is
+ * used as a ratio by the guest timing code, so qpc is now scaled to microseconds
+ * and qpf is one million -- consistent, and monotonic. */
+uint64_t qpc() { return static_cast<uint64_t>(emscripten_get_now() * 1000.0); }
+uint64_t qpf() { return 1000000ull; }
+uint64_t thread_cycles() { return qpc(); }
+uint64_t thread_cycles(void*) { return qpc(); }
+
+void yield() { std::this_thread::yield(); }
+void sleep_ms(uint32_t ms) { emscripten_thread_sleep(static_cast<double>(ms)); }
+
+uint32_t tid() {
+    /* No SYS_gettid and no pthread_self in the wasm ABI. A per-thread counter is
+     * all any caller needs: it only distinguishes one host thread from another. */
+    static std::atomic<uint32_t> next{1};
+    thread_local const uint32_t assigned = next.fetch_add(1, std::memory_order_relaxed);
+    return assigned;
+}
+
+void set_thread_name(const std::string&) {}
+std::string thread_name() { return "wasm"; }
+void* current_native() { return nullptr; }
+bool native_is_current(void*) { return true; }
+bool set_affinity(const std::vector<int>&) { return true; }
+bool set_priority(int) { return true; }
+int last_error() { return 0; }
+
+void note_key(int, bool) {}
+void attach_virtual_pad() {}
+void virtual_pad_button(int, bool) {}
+void virtual_pad_axis(int, int) {}
+
 }  // namespace host
 
 #else

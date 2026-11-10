@@ -4,7 +4,12 @@
 #include <cstdint>
 #include <cstring>
 
-#ifdef _WIN32
+/* x86intrin.h has no meaning under wasm and its ia32 intrinsics do not compile
+ * there. cycles.h supplies __rdtsc (a monotonic clock under wasm), so the
+ * platform headers are only needed on the native path. */
+#if defined(__wasm__) || defined(__EMSCRIPTEN__)
+#include "runtime/cycles.h"
+#elif defined(_WIN32)
 #include <intrin.h>
 #else
 #include <x86intrin.h>
