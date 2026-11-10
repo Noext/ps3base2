@@ -243,6 +243,21 @@ int main(int argc, char** argv) {
                          static_cast<unsigned long long>(c.gpr[3]));
         return false;
     });
+    /* The lifted functions that reference the surface-register constants
+     * (0x200-0x214) are the candidates for the code that configures a render
+     * target. Guard their entries: "the code exists but is never executed" is a
+     * different diagnosis from "it runs and fails". */
+    for (uint32_t a : {0x2202c8u, 0x6e6d20u, 0x6eaff0u, 0x7421b0u, 0x435708u}) {
+        hooks::add_guard(a, [](ppu::Context& c) {
+            static std::atomic<int> n{0};
+            const int k = n.fetch_add(1);
+            if (k < 4)
+                std::fprintf(stderr, "[surfcode] pc=0x%08x entry lr=0x%llx\n",
+                             static_cast<unsigned>(c.cia),
+                             static_cast<unsigned long long>(c.lr));
+            return false;
+        });
+    }
     hooks::add_guard(0x21c178, [](ppu::Context& c) {
         static std::atomic<int> n{0};
         const int k = n.fetch_add(1);
