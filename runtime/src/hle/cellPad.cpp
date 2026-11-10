@@ -180,6 +180,16 @@ bool take_command_file(Press& out, uint32_t& repeat) {
 
 void fill(uint32_t out) {
     std::call_once(g_script_once, load_script);
+#if defined(PS3BASE_PAD_PROBE) && PS3BASE_PAD_PROBE
+    {
+        /* Is the title polling input at all, and is the pad neutral? If it polls
+         * and the pad is always zero, a title waiting for "press start" is
+         * indistinguishable from one that is stuck. */
+        static std::atomic<uint64_t> n{0};
+        const uint64_t k = n.fetch_add(1) + 1;
+        if ((k & 0xFF) == 1) LOG_INFO("padprobe", "cellPadGetData call #%llu", (unsigned long long)k);
+    }
+#endif
     double now = double(ppu::timebase() - g_start) / 80000000.0;
     uint16_t b[24] = {};
     b[1] = 0x70 | 12;
@@ -206,6 +216,17 @@ void fill(uint32_t out) {
             }
         }
         static uint32_t held_left = 0;
+#if defined(PS3BASE_PAD_AUTOSTART) && PS3BASE_PAD_AUTOSTART
+        /* The title polls input continuously with a neutral pad. Inject a START
+         * press at a fixed offset so "waiting for the user" can be told from
+         * "stuck": if the frame content changes after it, the guest was at a
+         * prompt. b[3] bit 0x08 is START in the PS3 pad layout. */
+        {
+            static std::atomic<uint64_t> n{0};
+            const uint64_t k = n.fetch_add(1) + 1;
+            if (k > 300 && k < 360) b[3] |= 0x08;
+        }
+#endif
         if (held_left) {
             const Queued& q = cmd_queue().front();
             b[q.offset] |= q.mask;
