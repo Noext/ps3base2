@@ -100,6 +100,33 @@ int main() {
         if (!seen.insert(f[i].vk).second) dup++;
     check(dup == 0, "no Vulkan format appears twice");
 
+    /* State beyond formats: every value the renderer names must be classified,
+     * and the two WebGPU cannot express must not be claimed as direct. */
+    size_t sn = 0;
+    const gpu::wgpu::StateMap* st = gpu::wgpu::state_table(sn);
+    check(sn >= 26, "the 26 state values used are mapped");
+
+    int fan = 0, fan_emulate = 0;
+    for (size_t i = 0; i < sn; i++) {
+        if (std::strstr(st[i].vk, "TRIANGLE_FAN")) {
+            fan++;
+            if (st[i].kind == gpu::wgpu::Map::Emulate) fan_emulate++;
+        }
+    }
+    check(fan == 1 && fan_emulate == 1, "triangle fan is Emulate: WebGPU has no fan topology");
+
+    int cull_all = 0, cull_emulate = 0;
+    for (size_t i = 0; i < sn; i++) {
+        if (std::strstr(st[i].vk, "FRONT_AND_BACK")) {
+            cull_all++;
+            if (st[i].kind == gpu::wgpu::Map::Emulate) cull_emulate++;
+        }
+    }
+    check(cull_all == 1 && cull_emulate == 1, "cull FRONT_AND_BACK is Emulate, not absent");
+
+    auto sc = gpu::wgpu::state_coverage();
+    std::printf("state  : %d direct, %d feature, %d expand, %d emulate, %d absent\n", sc.direct, sc.feature, sc.expand, sc.emulate, sc.absent);
+
     auto fc = gpu::wgpu::format_coverage();
     auto bcov = gpu::wgpu::blend_coverage();
     std::printf("formats: %d direct, %d feature, %d expand, %d emulate, %d absent\n", fc.direct, fc.feature, fc.expand, fc.emulate, fc.absent);

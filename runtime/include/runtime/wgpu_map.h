@@ -53,6 +53,18 @@ struct Coverage {
     int emulate = 0;
     int absent = 0;
 };
+struct StateMap {
+    const char* vk;
+    const char* wgpu;
+    Map kind;
+    const char* note;
+};
+
+/* Primitives, compare functions, cull modes and blend/logic/stencil ops: every
+ * value the renderer names, with a decision. */
+const StateMap* state_table(size_t& count);
+Coverage state_coverage();
+
 Coverage format_coverage();
 Coverage blend_coverage();
 

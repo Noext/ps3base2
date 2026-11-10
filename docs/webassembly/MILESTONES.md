@@ -177,6 +177,22 @@ Three facts this proves, none of them assumed:
    mode and topology class — exactly the fields WebGPU bakes into a pipeline.
    The cache needs no redesign; it needs a new creation backend.
 
+### Third brick: pipeline state beyond formats
+
+The renderer names 30 more state values. All are mapped and tested:
+
+    state  : 28 direct, 0 feature, 0 expand, 2 emulate, 0 absent
+
+Only two need emulation, and both are real:
+
+- **`TRIANGLE_FAN`** — WebGPU has no fan topology. Reindex to a triangle list.
+  This is the one that costs CPU per draw, because a fan cannot be handed through.
+- **`CULL_MODE_FRONT_AND_BACK`** — WebGPU's cull mode has no "both"; it is
+  expressed by discarding every triangle in the vertex stage.
+
+Compare functions (7), cull modes (3 of 4 direct), blend ops (5) and stencil ops
+(8) all map directly, so the state translation is not where the work is.
+
 ### What is not yet done in milestone 2
 
 No renderer call site is ported. The 87 `vk*` uses in `rsx_renderer.cpp` still

@@ -65,6 +65,54 @@ const BlendMap kBlend[] = {
     {"VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA", "WGPUBlendFactor_OneMinusConstant", Map::Emulate, "same"},
 };
 
+/* Pipeline state beyond formats and blend factors. The interesting entries are
+ * the ones WebGPU does not have: triangle fans, separate stencil ops per face in
+ * some combinations, and logic ops (absent from WebGPU entirely). */
+const StateMap kState[] = {
+    /* topology -- measured: 6 real values plus the sentinel */
+    {"VK_PRIMITIVE_TOPOLOGY_POINT_LIST", "WGPUPrimitiveTopology_PointList", Map::Direct, ""},
+    {"VK_PRIMITIVE_TOPOLOGY_LINE_LIST", "WGPUPrimitiveTopology_LineList", Map::Direct, ""},
+    {"VK_PRIMITIVE_TOPOLOGY_LINE_STRIP", "WGPUPrimitiveTopology_LineStrip", Map::Direct, ""},
+    {"VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST", "WGPUPrimitiveTopology_TriangleList", Map::Direct, ""},
+    {"VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP", "WGPUPrimitiveTopology_TriangleStrip", Map::Direct, ""},
+    {"VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN", "WGPUPrimitiveTopology_TriangleList", Map::Emulate, "WebGPU has no fan; reindex to a list"},
+
+    /* compare -- all seven exist */
+    {"VK_COMPARE_OP_NEVER", "WGPUCompareFunction_Never", Map::Direct, ""},
+    {"VK_COMPARE_OP_LESS", "WGPUCompareFunction_Less", Map::Direct, ""},
+    {"VK_COMPARE_OP_EQUAL", "WGPUCompareFunction_Equal", Map::Direct, ""},
+    {"VK_COMPARE_OP_LESS_OR_EQUAL", "WGPUCompareFunction_LessEqual", Map::Direct, ""},
+    {"VK_COMPARE_OP_GREATER", "WGPUCompareFunction_Greater", Map::Direct, ""},
+    {"VK_COMPARE_OP_GREATER_OR_EQUAL", "WGPUCompareFunction_GreaterEqual", Map::Direct, ""},
+    {"VK_COMPARE_OP_ALWAYS", "WGPUCompareFunction_Always", Map::Direct, ""},
+
+    /* cull -- WebGPU has none/front/back. FRONT_AND_BACK is expressed by
+     * discarding every triangle, which the shader can do, so it is Emulate and
+     * not Absent. */
+    {"VK_CULL_MODE_NONE", "WGPUCullMode_None", Map::Direct, ""},
+    {"VK_CULL_MODE_FRONT_BIT", "WGPUCullMode_Front", Map::Direct, ""},
+    {"VK_CULL_MODE_BACK_BIT", "WGPUCullMode_Back", Map::Direct, ""},
+    {"VK_CULL_MODE_FRONT_AND_BACK", "WGPUCullMode_None", Map::Emulate, "cull everything: discard in the vertex stage"},
+
+    /* blend ops -- all five exist */
+    {"VK_BLEND_OP_ADD", "WGPUBlendOperation_Add", Map::Direct, ""},
+    {"VK_BLEND_OP_SUBTRACT", "WGPUBlendOperation_Subtract", Map::Direct, ""},
+    {"VK_BLEND_OP_REVERSE_SUBTRACT", "WGPUBlendOperation_ReverseSubtract", Map::Direct, ""},
+    {"VK_BLEND_OP_MIN", "WGPUBlendOperation_Min", Map::Direct, ""},
+    {"VK_BLEND_OP_MAX", "WGPUBlendOperation_Max", Map::Direct, ""},
+
+    /* stencil ops -- all eight exist */
+    {"VK_STENCIL_OP_KEEP", "WGPUStencilOperation_Keep", Map::Direct, ""},
+    {"VK_STENCIL_OP_ZERO", "WGPUStencilOperation_Zero", Map::Direct, ""},
+    {"VK_STENCIL_OP_REPLACE", "WGPUStencilOperation_Replace", Map::Direct, ""},
+    {"VK_STENCIL_OP_INCREMENT_AND_CLAMP", "WGPUStencilOperation_IncrementClamp", Map::Direct, ""},
+    {"VK_STENCIL_OP_DECREMENT_AND_CLAMP", "WGPUStencilOperation_DecrementClamp", Map::Direct, ""},
+    {"VK_STENCIL_OP_INVERT", "WGPUStencilOperation_Invert", Map::Direct, ""},
+    {"VK_STENCIL_OP_INCREMENT_AND_WRAP", "WGPUStencilOperation_IncrementWrap", Map::Direct, ""},
+    {"VK_STENCIL_OP_DECREMENT_AND_WRAP", "WGPUStencilOperation_DecrementWrap", Map::Direct, ""},
+};
+
+constexpr size_t kStateCount = sizeof(kState) / sizeof(kState[0]);
 constexpr size_t kFormatCount = sizeof(kFormats) / sizeof(kFormats[0]);
 constexpr size_t kBlendCount = sizeof(kBlend) / sizeof(kBlend[0]);
 
@@ -84,6 +132,25 @@ Coverage format_coverage() {
     Coverage c;
     for (size_t i = 0; i < kFormatCount; i++) {
         switch (kFormats[i].kind) {
+        case Map::Direct: c.direct++; break;
+        case Map::Feature: c.feature++; break;
+        case Map::Expand: c.expand++; break;
+        case Map::Emulate: c.emulate++; break;
+        case Map::Absent: c.absent++; break;
+        }
+    }
+    return c;
+}
+
+const StateMap* state_table(size_t& count) {
+    count = kStateCount;
+    return kState;
+}
+
+Coverage state_coverage() {
+    Coverage c;
+    for (size_t i = 0; i < kStateCount; i++) {
+        switch (kState[i].kind) {
         case Map::Direct: c.direct++; break;
         case Map::Feature: c.feature++; break;
         case Map::Expand: c.expand++; break;
