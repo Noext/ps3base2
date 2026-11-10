@@ -1,5 +1,27 @@
 #pragma once
 
+/* WebAssembly has no FCSR: rounding is fixed and there are no FP exception flags.
+ * These helpers keep the save/modify/restore pattern compiling and make the wasm
+ * divergence explicit rather than scattering #ifdefs through the body. */
+#include <cstdint>
+#if !defined(__wasm__) && !defined(__EMSCRIPTEN__)
+#include <immintrin.h>
+#endif
+inline unsigned gowa_csr_read() {
+#if defined(__wasm__) || defined(__EMSCRIPTEN__)
+    return 0u;
+#else
+    return _mm_getcsr();
+#endif
+}
+inline void gowa_csr_write(unsigned v) {
+#if defined(__wasm__) || defined(__EMSCRIPTEN__)
+    (void)v;
+#else
+    _mm_setcsr(v);
+#endif
+}
+
 #include "renjob_ops.h"
 
 #include <bit>
@@ -13,8 +35,8 @@ namespace renjob::xo {
 
 struct DRound {
     unsigned old;
-    DRound() : old(_mm_getcsr()) { _mm_setcsr((old & ~0x6000u) & ~0x8040u); }
-    ~DRound() { _mm_setcsr(old); }
+    DRound() : old(gowa_csr_read()) { gowa_csr_write((old & ~0x6000u) & ~0x8040u); }
+    ~DRound() { gowa_csr_write(old); }
 };
 
 inline V d_pack(const uint64_t (&u)[2]) {
