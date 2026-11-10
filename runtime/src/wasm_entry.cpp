@@ -12,6 +12,7 @@
 #include "runtime/log.h"
 #include "runtime/memory.h"
 #include "runtime/files.h"
+#include "runtime/kernel.h"
 #include "runtime/image.h"
 #include "runtime/loader.h"
 #include "runtime/mem.h"
@@ -248,6 +249,37 @@ int main(int argc, char** argv) {
         std::printf("ps3base-wasm: t=%ds pc=0x%08x syscalls=%llu exited=%d\n", i + 1, pc,
                     static_cast<unsigned long long>(main_thread->syscalls.load()),
                     main_thread->exited ? 1 : 0);
+        /* The syscall histogram is already kept per thread (thread.h:35). Printing
+         * the top entries answers "what is it looping on" without an environment
+         * variable, which getenv cannot supply under wasm. */
+        {
+            uint32_t top[4] = {0, 0, 0, 0};
+            for (uint32_t k = 0; k < 1024; k++) {
+                const uint32_t v = main_thread->syscall_hist[k];
+                for (int j = 0; j < 4; j++) {
+                    if (v > main_thread->syscall_hist[top[j]]) {
+                        for (int m = 3; m > j; m--) top[m] = top[m - 1];
+                        top[j] = k;
+                        break;
+                    }
+                }
+            }
+            /* The guest spins on [obj+8] against a target held in r31. Print the
+             * object, the two values and the flip counter, so the wait can be read
+             * instead of inferred. */
+            if (main_thread->ctx.cia == 0x1307a08u) {
+                const uint32_t obj = static_cast<uint32_t>(main_thread->ctx.gpr[30]);
+                const uint32_t tgt = static_cast<uint32_t>(main_thread->ctx.gpr[31]);
+                std::printf("ps3base-wasm: spin obj=0x%08x cur=%u target=%u\n", obj,
+                            vm::range_mapped(obj + 12, 1) ? vm::read32(obj + 8) : 0xFFFFFFFFu, tgt);
+            }
+            std::printf("ps3base-wasm: top syscalls:");
+            for (int j = 0; j < 4; j++) {
+                const char* spec = lv2::spec_name(top[j]);
+                std::printf(" %u(%s)=%u", top[j], spec ? spec : "?", main_thread->syscall_hist[top[j]]);
+            }
+            std::printf("\n");
+        }
         if (main_thread->exited) {
             std::printf("WASM-GUEST-THREAD-EXITED\n");
             break;
