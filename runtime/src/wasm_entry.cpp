@@ -430,6 +430,12 @@ int main(int argc, char** argv) {
         if (i == 100 || i == 180) ppu::coverage_report();
         if (i == 181) ppu::coverage_dump("/tmp/cov.txt");
 #endif
+        /* A dump at t≈4 s only shows the loader. The interesting state is after
+         * the boot settles, so take a second one late. */
+        if (i == 150) {
+            std::printf("ps3base-wasm: --- late dump (t=%ds) ---\n", i);
+            guest::status_dump();
+        }
         if (main_thread->exited) {
             std::printf("WASM-GUEST-THREAD-EXITED\n");
             break;
