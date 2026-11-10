@@ -401,17 +401,19 @@ int main(int argc, char** argv) {
             /* Which (unit, field) actually receives writes? A zero mask with
              * non-zero field counts means the hook range was wrong, not the guest. */
             if ((i % 40) == 39) {
-                /* Sample the parity flag 200 times in a row: if it toggles, it is
-                 * a frame counter, not a lock. A single sample per 40 s could
-                 * land on 0 every time by luck. */
+                /* Watch the whole neighbourhood of the polled flags: the setters
+                 * DO run (round 130), so the question is now whether they touch
+                 * this base at all. Print every non-zero byte in the window. */
                 {
-                    unsigned flips = 0, prev = *vm::ptr(0x00be0704u);
-                    for (int k = 0; k < 200; k++) {
-                        const unsigned now = *vm::ptr(0x00be0704u);
-                        if (now != prev) flips++;
-                        prev = now;
-                    }
-                    std::fprintf(stderr, "[pollflag] t=%ds 0xbe0704=%u toggles_in_200=%u\n", i, prev, flips);
+                    /* The guest reads WORDS, not bytes: a byte sample at 0xbe0704
+                     * reads 0 while the 32-bit word there is 1. Read both widths
+                     * so the question "is the polled value zero" is answered at
+                     * the width the code actually uses. */
+                    std::fprintf(stderr, "[width] t=%ds byte@704=%u word@704=%u byte@70c=%u word@70c=%u\n", i,
+                                 static_cast<unsigned>(*vm::ptr(0x00be0704u)),
+                                 static_cast<unsigned>(vm::read32(0x00be0704u)),
+                                 static_cast<unsigned>(*vm::ptr(0x00be070cu)),
+                                 static_cast<unsigned>(vm::read32(0x00be070cu)));
                 }
             }
             if ((i % 40) == 39) {
