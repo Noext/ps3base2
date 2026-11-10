@@ -386,7 +386,8 @@ int main(int argc, char** argv) {
             /* Which (unit, field) actually receives writes? A zero mask with
              * non-zero field counts means the hook range was wrong, not the guest. */
             if ((i % 40) == 39) {
-                std::fprintf(stderr, "[pollflag] t=%ds byte@0xbe070c=%u\n", i,
+                std::fprintf(stderr, "[pollflag] t=%ds 0xbe0704=%u 0xbe070c=%u\n", i,
+                             static_cast<unsigned>(*vm::ptr(0x00be0704u)),
                              static_cast<unsigned>(*vm::ptr(0x00be070cu)));
             }
             if ((i % 40) == 39) {
