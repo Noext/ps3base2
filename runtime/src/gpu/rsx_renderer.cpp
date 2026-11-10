@@ -4137,30 +4137,11 @@ inline void vp_word(uint32_t arg) {
 
 }
 
+
 uint32_t* registers() { return g_regs; }
 
-const uint8_t* special_methods() {
-    static const auto table = [] {
-        std::array<uint8_t, 0x4000> t{};
-        auto mark = [&](uint32_t from, uint32_t to) {
-            for (uint32_t r = from; r < to; r += 4) t[(r >> 2) & 0x3FFF] = 1;
-        };
-        mark(TRANSFORM_PROGRAM, TRANSFORM_PROGRAM + 128);
-        mark(TRANSFORM_CONSTANT, TRANSFORM_CONSTANT + 128);
-        mark(0x0A80, 0x0B00);
-        mark(0x1500, 0x1600);
-        mark(0x1880, 0x1A00);
-        mark(0x1C00, 0x1D00);
-        mark(0x1E40, 0x1E80);
-        mark(0xA400, 0xC000);
-        for (uint32_t r : {uint32_t(TRANSFORM_PROGRAM_LOAD), uint32_t(TRANSFORM_CONSTANT_LOAD), uint32_t(BEGIN_END), uint32_t(ARRAY_ELEMENT16), uint32_t(ARRAY_ELEMENT32), uint32_t(DRAW_ARRAYS),
-                           uint32_t(INLINE_ARRAY), uint32_t(DRAW_INDEX_ARRAY), uint32_t(CLEAR_SURFACE), 0x17C8u, 0x2328u, 0xC40Cu})
-            mark(r, r + 4);
-        return t;
-    }();
-    return table.data();
-}
-
+/* special_methods() now lives in rsx_special_methods.cpp so a build with no GPU
+ * can satisfy the guest's RSX-init call without linking the renderer. */
 uint32_t method_run(uint32_t reg, const uint32_t* args, uint32_t n) {
     if (g_trace) return 0;
     if (reg == 0x0100) return 1;
