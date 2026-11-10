@@ -87,6 +87,19 @@ SpuThread::~SpuThread() {
 
 template <class Pred>
 bool SpuThread::block(std::unique_lock<std::mutex>& lk, Pred pred) {
+#if defined(PS3BASE_SPU_WAIT_PROBE) && PS3BASE_SPU_WAIT_PROBE
+    {
+        /* Entry count, independent of the predicate: if this never grows, the host
+         * thread is not running the SPU at all, and no gate can explain that. */
+        static std::atomic<uint64_t> enters{0};
+        static std::atomic<int> rep{0};
+        const uint64_t e = enters.fetch_add(1, std::memory_order_relaxed) + 1;
+        if ((e % 1000) == 0 && rep.fetch_add(1) < 10)
+            LOG_INFO("blockenter", "slot %d enter #%llu pc 0x%05x insns %llu", slot,
+                     (unsigned long long)e,
+                     ctx.pc, static_cast<unsigned long long>(insns.load(std::memory_order_relaxed)));
+    }
+#endif
     if (pred()) return true;
     const uint64_t cp0 = critpath::g_on ? __rdtsc() : 0;
     while (!pred()) {
@@ -106,6 +119,20 @@ bool SpuThread::block(std::unique_lock<std::mutex>& lk, Pred pred) {
             if (k < 30)
                 LOG_INFO("spuwait", "slot %d '%s' pc 0x%05x mask 0x%x events 0x%x raddr 0x%08x insns %llu",
                          slot, name.c_str(), ctx.pc, event_mask, events, raddr,
+                         static_cast<unsigned long long>(insns.load(std::memory_order_relaxed)));
+        }
+#endif
+#if defined(PS3BASE_SPU_WAIT_PROBE) && PS3BASE_SPU_WAIT_PROBE
+        /* Distinguish "one entry that waits forever" from "many wakeups that each
+         * re-test a false predicate". The second would park the host thread without
+         * executing any SPU instruction, which is what a frozen insns count means. */
+        {
+            static std::atomic<uint64_t> wakes{0};
+            static std::atomic<int> rep{0};
+            const uint64_t w = wakes.fetch_add(1, std::memory_order_relaxed) + 1;
+            if ((w & 0xFFF) == 0 && rep.fetch_add(1) < 12)
+                LOG_INFO("wakeup", "slot %d wake #%llu pc 0x%05x events 0x%x insns %llu",
+                         slot, (unsigned long long)w, ctx.pc, events,
                          static_cast<unsigned long long>(insns.load(std::memory_order_relaxed)));
         }
 #endif
