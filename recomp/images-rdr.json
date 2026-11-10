@@ -1,0 +1,47 @@
+[
+ {
+  "name": "rdr",
+  "elf": "../bin/rdr/EBOOT.elf",
+  "file": "bin/rdr/EBOOT.elf"
+ },
+ {
+  "name": "liblv2",
+  "elf": "../fw/4.91/reloc-rdr/liblv2.elf",
+  "file": "fw/4.91/reloc-rdr/liblv2.elf"
+ },
+ {
+  "name": "libsysmodule",
+  "elf": "../fw/4.91/reloc-rdr/libsysmodule.elf",
+  "file": "fw/4.91/reloc-rdr/libsysmodule.elf"
+ },
+ {
+  "name": "libsre",
+  "elf": "../fw/4.91/reloc-rdr/libsre.elf",
+  "file": "fw/4.91/reloc-rdr/libsre.elf"
+ },
+ {
+  "name": "libgcm_sys",
+  "elf": "../fw/4.91/reloc-rdr/libgcm_sys.elf",
+  "file": "fw/4.91/reloc-rdr/libgcm_sys.elf"
+ },
+ {
+  "name": "libfs",
+  "elf": "../fw/4.91/reloc-rdr/libfs.elf",
+  "file": "fw/4.91/reloc-rdr/libfs.elf"
+ },
+ {
+  "name": "libvdec",
+  "elf": "../fw/4.91/reloc-rdr/libvdec.elf",
+  "file": "fw/4.91/reloc-rdr/libvdec.elf"
+ },
+ {
+  "name": "libsmvd2",
+  "elf": "../fw/4.91/reloc-rdr/libsmvd2.elf",
+  "file": "fw/4.91/reloc-rdr/libsmvd2.elf"
+ },
+ {
+  "name": "libspurs_jq",
+  "elf": "../fw/4.91/reloc-rdr/libspurs_jq.elf",
+  "file": "fw/4.91/reloc-rdr/libspurs_jq.elf"
+ }
+]

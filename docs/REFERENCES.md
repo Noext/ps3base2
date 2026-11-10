@@ -69,6 +69,20 @@ Two consequences worth remembering:
   (Script Compiler Main), `data/handling.cfg`, `Text/PS3/*.gxt`,
   `Textures/fonts/*.met`.
 
+## Red Dead Redemption (BLES00680) -- containers
+
+- `rdr2_layer0.rpf` (7.35 GB) starts with the ASCII magic **`RPF6`** at offset 0.
+  This is Rockstar's own archive format, not a PS3 one: RPCS3's tree contains no
+  RPF reader at all (`grep -rn 'RPF6' refs/rpcs3/` returns nothing), and it is
+  the same container family the PC and Xbox 360 versions use.
+- Do not reach for a PS3-side parser. The title reads its own archive through
+  its own file code; the runtime's job is to serve the bytes from the VFS, as
+  with any other file. A `7z` extraction of the 7.35 GB member is unnecessary
+  and slow enough to time out.
+- `rdr2_installed.sdat` (539 MB) sits beside it and is installed game data the
+  title writes/reads, not something to decode on the host.
+- The disc carries its cutscenes as `.bik` (Bink video), two of them here.
+
 ## PPU
 
 - `refs/rpcs3/rpcs3/Emu/Cell/PPUInterpreter.cpp` is the reference for

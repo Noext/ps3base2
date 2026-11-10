@@ -367,3 +367,87 @@ avec `kill -9 -- -$PID` quand c'est fini.
   instruire, probablement une cible de rendu ou un marqueur de mission.
 - Vitesse : 11-26 fps selon la scene. Non mesure sur GPU reel hors Xvfb.
 
+
+## Red Dead Redemption (BLES00680) -- deux murs sur le chemin
+
+Tentative de port du troisieme titre. Etat mesure, pas conclu.
+
+### R1 -- Le disque se dechiffre et se lifte -- GREEN
+
+```
+self_type 4  key_revision 0x1  ->  EBOOT.elf 21 886 336 octets
+sha256 b893b33fe63ccc3bb372b127503060f5df36c898755df5444bacd1d1afd48f0c
+rdr            functions  74415 files 172 imports  343 exports 0
+total functions 76418 imports 588 exports 781
+unimplemented: []
+```
+
+**74 415 fonctions PPU** : 3,6 fois GTA San Andreas, 3,6 fois Minecraft. 343 imports,
+tous resolus dans `ref/nid_db.json`, aucun non implemente au lift.
+
+Profil d'import different des deux titres precedents :
+
+| Module | Imports | Note |
+|---|---|---|
+| `cellSpurs` | 41 | SPU lourd, comme Minecraft |
+| `sceNp` | 39 | |
+| `cellSysutil` | 34 | |
+| `sys_net` | 28 | **le reseau est importe directement** |
+| `sceNp2` | 27 | |
+| `sceNpCommerce2` | 26 | |
+| `cellGcmSys` | 21 | |
+| `sys_fs` | 21 | |
+| `cellVoice` | 13 | chat vocal |
+| `cellFiber` | 8 | fibres, absent des deux autres |
+
+**106 des 343** sont fournis par le firmware lifte ; **227 sont du HLE a ecrire**, dont
+92 rien que pour la pile reseau/PSN. C'est le profil le plus lourd des trois titres.
+
+PS3_SYSTEM_VER est **03.3000**, soit un firmware de 2009 : plus ancien que les deux
+autres titres, ce qui peut changer les structures attendues de certaines bibliotheques.
+
+### R2 -- Les modules firmware chevauchent le titre -- CAUSE TROUVEE
+
+Premiere compilation :
+
+```
+rdr_163.cpp:25295: multiple definition of 'f_01012534(...)';
+  liblv2_000.cpp:23362: first defined here
+```
+
+Cinq collisions. La cause n'est pas le lifter mais le **layout** :
+
+```
+rdr      text 0x00010200 - 0x010d546c
+liblv2   text 0x01000000 - 0x01013b68     <- DANS la plage du titre
+```
+
+Minecraft s'arrete a `0x8aa674` et GTA a `0x6fccdc`, tous deux **sous** `0x01000000`, donc
+`recomp/lle_layout.json` n'avait jamais pose probleme. Red Dead s'etend au-dela et
+avale les huit modules.
+
+Le defaut est plus profond que les cinq symboles : `ppu_runtime.cpp:lookup()` rend la
+**premiere** plage qui contient l'adresse. Avec ce chevauchement, tout appel a
+`liblv2` a `0x01000000` serait resolu vers le code du jeu a la meme adresse.
+
+**Correction :** `recomp/lle_layout-rdr.json` place les modules a `0x21000000` et
+au-dela, au-dessus du titre et hors des regions heap. `tools/prx_relocate.py` les
+reloge (verifie : 8 modules, relocations appliquees), et `recomp/images-rdr.json`
+pointe dessus.
+
+**A generaliser :** le layout devrait etre choisi en fonction de `text_hi` du titre,
+pas fixe. Un titre dont le texte depasse `0x01000000` casse autrement, et la panne
+se presente comme une erreur de link au lieu de dire pourquoi.
+
+### R3 -- L'archive de donnees est du RPF6 -- mesure
+
+`rdr2_layer0.rpf` (7,35 Go) commence par l'ASCII **`RPF6`** a l'offset 0. C'est le
+format d'archive de Rockstar, pas un format PS3 : l'arbre RPCS3 ne contient aucun
+lecteur RPF (`grep -rn 'RPF6' refs/rpcs3/` ne rend rien). Le runtime n'a donc rien a
+en faire : le titre lit sa propre archive via son propre code fichier, comme pour
+tout autre fichier. Extraire le membre de 7,35 Go avec 7z est inutile et assez lent
+pour expirer.
+
+A cote : `rdr2_installed.sdat` (539 Mo), des donnees installees que le titre
+ecrit/relit, et deux cinematiques `.bik` (Bink).
+
