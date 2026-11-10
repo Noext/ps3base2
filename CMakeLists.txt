@@ -289,6 +289,8 @@ add_executable(pipeline_cost tests/pipeline_cost.cpp runtime/src/gpu/pipeline_ca
 target_include_directories(pipeline_cost PRIVATE runtime/include)
 add_executable(wgsl_map tests/wgsl_map.cpp runtime/src/gpu/wgsl_map.cpp)
 target_include_directories(wgsl_map PRIVATE runtime/include)
+add_executable(command_ring tests/command_ring.cpp runtime/src/gpu/command_ring.cpp)
+target_include_directories(command_ring PRIVATE runtime/include)
 target_include_directories(wgpu_map PRIVATE runtime/include)
 target_compile_options(wgpu_map PRIVATE ${PS3BASE_ARCH_FLAGS})
 add_test(NAME wgpu_map COMMAND wgpu_map)
