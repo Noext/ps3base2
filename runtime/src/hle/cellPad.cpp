@@ -121,15 +121,24 @@ void load_command_queue() {
          * navigation, which a blind script cannot do -- but z is accepted in four
          * of five states, so a long repeating series traverses most of the path.
          * 400 ms gaps keep a slow frame from swallowing a press. */
-        static const char* const script[] = {
-            "down 150 1200", "cross 150 1200",
-            "cross 150 1200", "cross 150 1200", "cross 150 1200",
-            "down 150 1200", "cross 150 1200", "cross 150 1200",
-            "cross 150 1200", "cross 150 1200", "cross 150 1200",
-            "down 150 1200", "cross 150 1200", "cross 150 1200",
-            "cross 150 1200", "cross 150 1200",
+        /* Drawing scaled with press count (3k/s none, 8k/s with 4, 11k/s with 16),
+         * so the sequence length is the lever. The native path presses z in four
+         * of five states, so a long repeating series traverses most of it. Built at
+         * run time rather than written out: 200 presses would be 200 literals. */
+        struct Step { const char* name; };
+        static const Step steps[] = {
+            {"down"}, {"cross"}, {"cross"}, {"cross"}, {"cross"}, {"cross"},
+            {"down"}, {"cross"}, {"cross"}, {"cross"}, {"cross"}, {"cross"},
         };
-        for (const char* line : script) {
+        char line_buf[64];
+        std::vector<std::string> script;
+        script.reserve(600);
+        for (int rep = 0; rep < 50; rep++)
+            for (const Step& st : steps) {
+                std::snprintf(line_buf, sizeof line_buf, "%s 150 500", st.name);
+                script.push_back(line_buf);
+            }
+        for (const std::string& line : script) {
             std::string text(line);
             std::vector<std::string> parts;
             size_t p = 0;
