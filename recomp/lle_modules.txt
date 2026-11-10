@@ -1,0 +1,34 @@
+# Firmware modules to place, in order. One per line.
+# Each gets its own 16 MiB slot above the title's text.
+# Source: the firmware PUP at docs/FIRMWARE.md, decrypted by tools/unself.py.
+liblv2.prx
+libsysmodule.prx
+libsre.prx
+libgcm_sys.prx
+libfs.prx
+libvdec.prx
+libsmvd2.prx
+libspurs_jq.prx
+libfiber.prx
+libnet.prx
+libvoice.prx
+libsysutil.prx
+libsysutil_np.prx
+libsysutil_np2.prx
+libsysutil_np_trophy.prx
+libnetctl.prx
+libhttp.prx
+libssl.prx
+libaudio.prx
+libio.prx
+librtc.prx
+libfont.prx
+libfontFT.prx
+libfreetype.prx
+libresc.prx
+libsail.prx
+libl10n.prx
+libavcdec.prx
+libdmux.prx
+libgem.prx
+libusbd.prx
