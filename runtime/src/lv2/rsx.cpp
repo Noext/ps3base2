@@ -586,6 +586,17 @@ void fifo_thread() {
                 uint32_t arg = reader.read(ea + 4 + i * 4);
                 if (!full_dispatch && !special[reg >> 2]) {
                     regs[reg >> 2] = arg;
+#if defined(PS3BASE_GROUPED_PROBE) && PS3BASE_GROUPED_PROBE
+                    /* The ONLY place a grouped packet writes a register, and the
+                     * only measurement that can see surface and texture writes:
+                     * everything here bypasses method(). Record the first few
+                     * surface/texture writes and their order. */
+                    if ((reg >= 0x200 && reg <= 0x220) || (reg >= 0x1A00 && reg < 0x1C00)) {
+                        static std::atomic<int> n{0};
+                        const int k = n.fetch_add(1);
+                        if (k < 16) LOG_INFO("grpwrite", "#%d reg 0x%03x = 0x%08x", k, reg, arg);
+                    }
+#endif
                     continue;
                 }
                 execute(reg, arg);
