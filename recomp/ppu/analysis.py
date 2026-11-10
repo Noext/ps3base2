@@ -22,13 +22,25 @@ class Image:
             for f in m["functions"]:
                 self.imports.append({"module": m["module"], "nid": f["nid"], "name": f["name"], "stub": int(f["stub_target"], 16)})
         self.stubs = {imp["stub"]: i for i, imp in enumerate(self.imports)}
-        stub_lo = min(self.stubs) if self.stubs else None
         self.exports = []
+        # The code range is the executable PT_LOAD segment, whole. It used to be
+        # cut short at the lowest import stub, on the theory that stubs sit past
+        # the code. That is true for some images and false for others: a stub can
+        # be planted inside the segment, and truncating there drops every function
+        # above it. Red Dead Redemption's libsysutil has its first stub at
+        # 0x2b01cbc0 and real code up to 0x2b01ee60, so a call to 0x2b0187a8 --
+        # valid PowerPC, never lifted -- became 'unknown indirect target' and
+        # killed the run.
+        #
+        # Stubs are excluded as ZONES instead, not as a boundary: the lifter
+        # already treats a branch into one as an import call (t in img.stubs),
+        # so keeping the whole range and letting that check do its work is both
+        # correct and simpler. stub_ranges is what other passes consult.
+        self.stub_ranges = sorted(self.stubs) if self.stubs else []
         if self.elf.shdrs:
             execs = sorted((s[3], s[3] + s[5]) for s in self.elf.shdrs if s[2] & 4 and s[5])
-            code = [r for r in execs if stub_lo is None or not (r[0] <= stub_lo < r[1])]
-            self.text_lo = code[0][0]
-            self.text_hi = max(b for _, b in code)
+            self.text_lo = execs[0][0]
+            self.text_hi = max(b for _, b in execs)
             self.text_size = self.text_hi - self.text_lo
             self.text = self.elf.read(self.text_lo, self.text_size)
             o = opd(self.elf)
@@ -39,7 +51,7 @@ class Image:
         else:
             seg = next(p for p in self.elf.phdrs if p[0] == 1 and p[1] & 1)
             self.text_lo = seg[3]
-            self.text_hi = stub_lo if stub_lo is not None and seg[3] <= stub_lo < seg[3] + seg[5] else seg[3] + seg[5]
+            self.text_hi = seg[3] + seg[5]
             self.text_size = self.text_hi - self.text_lo
             self.text = self.elf.read(self.text_lo, self.text_size)
             self.toc = int(prx["toc"], 16)
@@ -211,7 +223,58 @@ def looks_like_function(img, a, b):
     return all(mnemonic(w) for w in ws) and ws[-1] == 0x4E800020 and not any(((w >> 23) & 0xFF) in range(0x70, 0x90) and (w & 0xFFFF) == 0 for w in ws)
 
 
-def discover(img, extra=()):
+def seeds_outside_functions(img, seeds, log=None):
+    """Drop seeds that fall inside a function the lift already found.
+
+    A seed is a claim about where a function STARTS. explore() stops at any
+    address in `entries`, so a seed in the middle of an existing function splits
+    that function in two, and the first half keeps a jump table whose cases now
+    point past the cut. The generated code then contains `goto L_x` for a label
+    that was never emitted, and the image does not compile:
+
+    libavcdec_000.cpp:152: error: use of undeclared label L_3b0002c8
+
+    The right answer is to refuse the seed: the function it lies in is already
+    translated, and the address is a landing pad, not an entry. Rejected seeds
+    are logged, because a discovery that is silently dropped looks like the
+    loop not working.
+    """
+    if not seeds:
+        return set()
+    # discover() memoises its work per call; calling it once per seed made this
+    # quadratic and a 40,000-seed image never finished. One baseline lift, then
+    # every seed is tested against the same spans.
+    base_funcs = getattr(img, "_baseline_funcs", None)
+    if base_funcs is None:
+        base_funcs, _ = discover(img)
+        img._baseline_funcs = base_funcs
+    # An address belongs to at most one function here, so a sorted list of
+    # (first, last) intervals is enough: no function nests in another.
+    spans = sorted((min(f.insns), max(f.insns), a) for a, f in base_funcs.items() if f.insns)
+    starts = [s for s, _, _ in spans]
+    keep = set()
+    import bisect
+    for s in seeds:
+        i = bisect.bisect_right(starts, s) - 1
+        inside = None
+        for j in (i, i - 1):
+            if 0 <= j < len(spans):
+                lo_i, hi_i, a = spans[j]
+                if a != s and lo_i <= s <= hi_i:
+                    inside = a
+                    break
+        if inside is None:
+            keep.add(s)
+        elif log is not None:
+            log("seed 0x%08x is inside function 0x%08x -- rejected (a landing pad, not an entry)" % (s, inside))
+    return keep
+
+
+def discover(img, extra=(), log=None):
+    # Seeds first go through the interior test: claiming an address that is
+    # already inside a translated function splits that function and produces a
+    # label the generator never emits.
+    extra = seeds_outside_functions(img, extra, log)
     entries = {c for c, _ in img.opd if img.in_text(c)} | set(extra)
     funcs = {}
     pending = set(entries)

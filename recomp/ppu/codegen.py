@@ -801,7 +801,13 @@ class Emitter:
                 act = f"ctx.lr = 0x{pc + 4:x}; ppu::call_indirect(ctx, base, uint32_t(ctx.ctr));"
             elif pc in f.jump_tables:
                 jt = f.jump_tables[pc]
-                cases = " ".join(f"case 0x{t:x}: goto L_{t:x};" for t in sorted(set(jt["targets"])))
+                # Only emit a case for a target this function actually contains.
+                # A target outside f.insns has no label here, and emitting the
+                # goto anyway fails the compile with "use of undeclared label" --
+                # far from the seed that caused it. Anything dropped is still
+                # reachable through the default arm, which calls indirectly.
+                cases = " ".join(f"case 0x{t:x}: goto L_{t:x};"
+                                 for t in sorted(set(jt["targets"])) if t in f.insns)
                 act = f"switch (uint32_t(ctx.ctr)) {{ {cases} default: ppu::call_indirect(ctx, base, uint32_t(ctx.ctr)); return; }}"
             else:
                 act = "ppu::call_indirect(ctx, base, uint32_t(ctx.ctr)); return;"
@@ -812,8 +818,65 @@ class Emitter:
 HEADER = '#include "ppu/ops.h"\n#include "funcs.h"\n\n'
 
 
-def lift(img):
-    funcs, entries = discover(img)
+def load_static_seeds(out_dir, image_name, text_lo, text_hi):
+    """Seeds the binary states about itself, collected by tools/static_seeds.py.
+
+    Kept separate from the dynamic file so a rebuild can tell which source
+    changed: a static seed set only changes when the binary changes, a dynamic
+    one changes on every run.
+    """
+    path = os.path.join(os.path.dirname(os.path.abspath(out_dir)), "gen", "seeds", image_name + ".txt")
+    if not os.path.exists(path):
+        return []
+    out = []
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            try:
+                a = int(line.split()[0], 16)
+            except ValueError:
+                continue
+            if text_lo <= a < text_hi:
+                out.append(a)
+    return out
+
+
+def load_seeds(path):
+    """Seeds written by a run in discovery mode: one "0xAAAAAAAA name" per line.
+
+    PS3BASE_DISCOVERY makes the runtime record every indirect call target it
+    could not resolve and stop, so the next lift can produce the function. Each
+    seed is an address the game really reaches; without this the lifter would
+    have to guess at it from a jump table or a prologue scan.
+    """
+    if not path or not os.path.exists(path):
+        return []
+    seeds = []
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            tok = line.split()[0]
+            try:
+                seeds.append(int(tok, 16))
+            except ValueError:
+                continue
+    return seeds
+
+
+def lift(img, seeds=(), log=None):
+    """Every function reachable from the OPD, the seeds, and the unclaimed islands.
+
+    The seeds must survive every round: the island loop re-runs discover() with a
+    growing entry set, and passing only the islands dropped whatever the seeds had
+    contributed. That is why a discovery seed looked read and produced nothing --
+    discover() found the function, then the next call forgot it.
+    """
+    seeds = tuple(seeds)
+    funcs, entries = discover(img, seeds, log)
     extra = set()
     while True:
         isl, _ = islands(img, funcs)
@@ -821,7 +884,7 @@ def lift(img):
         if not found:
             break
         extra |= found
-        funcs, entries = discover(img, extra)
+        funcs, entries = discover(img, seeds + tuple(extra), log)
     return funcs, entries
 
 
@@ -831,6 +894,12 @@ NL = "\n"
 def main(manifest_path, nid_db, out_dir, chunk_bytes="0x19000"):
     import json
     nids = json.load(open(nid_db))
+    # Discovery seeds sit next to the output, so a lift -> run -> lift loop keeps
+    # them with the tree it is converging: out/gen/indirect_seeds.txt.
+    seeds_path = os.path.join(os.path.dirname(os.path.abspath(out_dir)), "gen", "indirect_seeds.txt")
+    seed_addrs = load_seeds(seeds_path)
+    if seed_addrs:
+        print("seeds: %d indirect target(s) from %s" % (len(seed_addrs), seeds_path))
     root = os.path.dirname(os.path.abspath(manifest_path))
     manifest = json.load(open(manifest_path))
     os.makedirs(out_dir, exist_ok=True)
@@ -845,7 +914,30 @@ def main(manifest_path, nid_db, out_dir, chunk_bytes="0x19000"):
     unimpl = {}
     for idx, spec in enumerate(manifest):
         img = Image(os.path.join(root, spec["elf"]), nids)
-        funcs, entries = lift(img)
+        # A seed belongs to the image whose code range contains it, not to the
+        # first image. Red Dead Redemption's first missing target was in
+        # libsysutil, an LLE module; handing that address to the game's lift would
+        # seed a range it does not own and produce nothing.
+        static_seeds = []
+        if os.environ.get("PS3BASE_STATIC_SEEDS", "1") != "0":
+            static_seeds = load_static_seeds(out_dir, spec["name"], img.text_lo, img.text_hi)
+        mine = [a for a in seed_addrs if img.text_lo <= a < img.text_hi] + static_seeds
+        mine = sorted(set(mine))
+        if static_seeds:
+            print("%-16s %6d static seed(s), %d dynamic" % (spec["name"], len(static_seeds), len(seed_addrs)))
+        rejected = [0]
+
+        def seed_log(m, _name=spec["name"], _c=rejected):
+            # A 40,000-seed image rejects tens of thousands of interior seeds;
+            # printing each one buries the useful lines. Show the first few, then
+            # a count at the end.
+            _c[0] += 1
+            if _c[0] <= 5:
+                print("%-16s %s" % (_name, m))
+
+        funcs, entries = lift(img, mine, log=seed_log)
+        if rejected[0] > 5:
+            print("%-16s ... and %d more interior seeds rejected" % (spec["name"], rejected[0] - 5))
         em = Emitter(img, funcs, entries, len(imports), idx, img.text_lo)
         for imp in img.imports:
             imports.append(dict(imp, image=idx))
