@@ -18,7 +18,9 @@
 #include "runtime/mem.h"
 #include "runtime/regions.h"
 #include "runtime/thread.h"
-#include "thread.h"  /* spu::status_dump, from runtime/src/spu */
+#if defined(__wasm__) || defined(__EMSCRIPTEN__)
+#include "thread.h"  /* spu::status_dump, from runtime/src/spu; wasm-only path */
+#endif
 #include "runtime/hooks.h"
 #include "runtime/codewatch.h"
 #include "ppu/ops.h"
