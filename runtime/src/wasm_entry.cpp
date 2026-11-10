@@ -20,6 +20,7 @@ void shader_stats(uint64_t*, uint64_t*, uint64_t*);
 void framebuffer_stats(uint64_t*, uint64_t*, uint32_t*, uint32_t*);
 uint32_t bound_texture_mask();
 uint32_t texture_field_writes(uint32_t, uint32_t);
+void draw_shape_stats(uint32_t*, uint32_t*);
 } }
 #include "runtime/image.h"
 #include "runtime/loader.h"
@@ -344,6 +345,14 @@ int main(int argc, char** argv) {
             const uint32_t texmask = gpu::rsx::bound_texture_mask();
             /* Which (unit, field) actually receives writes? A zero mask with
              * non-zero field counts means the hook range was wrong, not the guest. */
+            if ((i % 40) == 39) {
+                uint32_t prims[8] = {}, fmts[4] = {};
+                gpu::rsx::draw_shape_stats(prims, fmts);
+                std::printf("ps3base-wasm: prims quads=%u tris=%u strip=%u fan=%u other=%u "
+                            "| vtxfmt hi=%u %u %u %u\n",
+                            prims[0], prims[1], prims[2], prims[3], prims[7],
+                            fmts[0], fmts[1], fmts[2], fmts[3]);
+            }
             static uint32_t fw[8] = {};
             if ((i % 20) == 19)
                 for (uint32_t u = 0; u < 8; u++) {
