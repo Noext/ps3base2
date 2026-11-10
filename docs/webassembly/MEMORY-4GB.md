@@ -63,16 +63,44 @@ The feasibility study priced wasm32 at 8–12 weeks *including an address
 translation layer*. The measurement removes that layer from the plan: the guest
 map needs compacting, not translating.
 
-The change is confined to `memory.cpp:kRegions` and `mem::reserve`, and it must be
-proven safe before it is adopted: the addresses move, so **every** consumer that
-hardcodes one has to be found. Two are known: `memory.cpp:48` uses
-`0xC0000000` as the upper bound for user-region placement, and the stack region is
-where `stacks.cpp` puts guards. A grep for each old base is the required check,
-and it is the first task of the next round — not something to assume is empty.
+## The grep, done — and the change is bigger than I wrote
+
+I said the change was confined to two places. The grep says otherwise:
+
+| site | what it is |
+|---|---|
+| `memory.cpp:38,39,40` | the region table itself |
+| `memory.cpp:48` | `a + size <= 0xC0000000` — the user-region upper bound |
+| `lv2/rsx.cpp:44` | `constexpr uint32_t LOCAL_BASE = 0xC0000000` |
+| `gpu/presenter.cpp:34` | the same constant, again |
+| `gpu/rsx_renderer.cpp:1653,1655,4362,4422` | display-buffer offsets computed as `0xC0000000u + off` |
+
+**Six places, in four files, not two.** And the RSX ones are not bookkeeping: the
+title reaches RSX-visible memory through `get_address()`, whose `case 0` is
+`return LOCAL_BASE + offset`. Moving the video region moves what every RSX read
+and write resolves to.
+
+The good news, established by reading `io_to_ea` and `get_address`: the base is
+**our constant**, not a value the title supplies. `sys_rsx_context_allocate`
+allocates its area through `vm::alloc(Region::RsxContext, ...)`, so the RSX
+subsystem already uses the region allocator. That means the change is *possible*
+without a rewrite — but it touches the renderer's memory resolution, and it needs
+its own test, not a hopeful edit.
 
 ## What is not established
 
-- Whether any code outside those two places compares a guest address against
-  `0xC0000000`/`0xD0000000`/`0xE0000000` as a magic constant. Must be grepped.
-- Whether the title itself probes those addresses at boot. The log shows no such
-  request, but that is an absence of evidence from one log, not proof.
+- Whether the title itself probes video memory at `0xC0000000` at boot. The log
+  shows no such request, and `sys_rsx_context_allocate` gets its area from our
+  allocator, so the evidence points to "no" — but it is one log, not proof.
+- **Resolved:** the lifted code does not reference these constants at all. Grepping
+  all 98 files of `out/ppu/` for `0xC0000000`, `0xD0000000`, `0xE0000000` and the
+  decimal `3221225472` returns **0 files**. The game accesses these regions only
+  through pointers it obtained from us, never by naming an address. So the entire
+  dependency is the six runtime sites listed above, all of which we control.
+
+## Conclusion
+
+The map can be compacted from 4.0 GiB to 2.25 GiB, leaving 1.75 GiB for the
+runtime inside wasm32, with no address translation and no Memory64. The work is
+six sites in four files, and the guest never observes the move because it never
+names those addresses itself.
