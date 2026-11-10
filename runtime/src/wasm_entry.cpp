@@ -26,7 +26,7 @@
 #include "ppu/ops.h"
 
 #if defined(PS3BASE_COVERAGE) && PS3BASE_COVERAGE
-namespace ppu { void coverage_report(); }
+namespace ppu { void coverage_report(); void coverage_dump(const char*); }
 #endif
 
 #include <atomic>
@@ -410,6 +410,7 @@ int main(int argc, char** argv) {
         }
 #if defined(PS3BASE_COVERAGE) && PS3BASE_COVERAGE
         if (i == 100 || i == 180) ppu::coverage_report();
+        if (i == 181) ppu::coverage_dump("/tmp/cov.txt");
 #endif
         if (main_thread->exited) {
             std::printf("WASM-GUEST-THREAD-EXITED\n");

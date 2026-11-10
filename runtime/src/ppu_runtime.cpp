@@ -1,5 +1,6 @@
 #include "ppu/ops.h"
 #include <cstdint>
+#include <cstdio>
 #include "runtime/critpath.h"
 #include "runtime/hle.h"
 #include "runtime/image.h"
@@ -202,6 +203,27 @@ void coverage_report() {
     for (uint8_t b : g_cov) hit += static_cast<uint64_t>(__builtin_popcount(b));
     LOG_INFO("coverage", "%llu distinct lifted functions executed of %u in the table",
              (unsigned long long)hit, image::function_count);
+}
+
+/* Emit the address of every function this run executed, one per line. That file is
+ * the keep-set for profile-driven dead-code elimination: feeding it back to the
+ * table generator removes the 92 % of the module the boot never reaches.
+ * A file, not an env var: getenv is inert under wasm, and this needs to leave the
+ * process. */
+void coverage_dump(const char* tag) {
+    (void)tag;
+    /* One line to stdout, prefixed so it can be sliced out of the boot log: the
+     * emscripten FS does not survive the process, and this profile has to. */
+    uint64_t n = 0;
+    std::fputs("COVERAGE-BEGIN\n", stdout);
+    for (uint32_t bit = 0; bit < sizeof(g_cov) * 8; bit++) {
+        if (!(g_cov[bit >> 3] & (1u << (bit & 7)))) continue;
+        std::fprintf(stdout, "%08x\n", bit << 2);
+        n++;
+    }
+    std::fputs("COVERAGE-END\n", stdout);
+    std::fflush(stdout);
+    LOG_INFO("coverage", "printed %llu addresses", (unsigned long long)n);
 }
 #endif
 
