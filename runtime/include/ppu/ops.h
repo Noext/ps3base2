@@ -34,7 +34,23 @@ uint32_t vlogefp(uint32_t x, bool nj);
 uint32_t vexptefp(uint32_t x, bool nj);
 
 using BodyFn = void (*)(Context&, uint8_t*);
-extern uint8_t hook_flags[0x800000];
+/* One flag array per guest image (the game, then each LLE module), sized to that
+ * image's code segment by the generator. The lifted code indexes its own image's
+ * array directly with a translation-time constant, so the common path is a
+ * single bounds-known load.
+ *
+ * It used to be one global uint8_t[0x800000], indexed by addr >> 2, which covers
+ * addresses only up to 0x2000000. Red Dead Redemption's liblv2 is placed at
+ * 0x21000000, so its entry stub indexed 0x8405244 -- 124 MB past the end of the
+ * array -- and the resulting write faulted at a garbage address. The firmware
+ * modules had always sat below 0x02000000, so nothing had ever caught it. */
+extern uint8_t* const hook_flags[];
+extern const uint32_t hook_flag_image_count;
+
+/* Look up the flag byte for an arbitrary guest address. Returns nullptr when the
+ * address belongs to no image; callers must handle that and never index past an
+ * array. Defined in hooks.cpp next to the image table. */
+uint8_t* hook_flag_for(uint32_t addr);
 extern void (*hook_impl)(Context& ctx, uint8_t* base, uint32_t addr, BodyFn fn);
 void hook_call(Context& ctx, uint8_t* base, uint32_t addr, BodyFn fn);
 
