@@ -63,8 +63,9 @@ void method(uint32_t reg, uint32_t arg) {
      * changes and a fragment program when its control word is written. Counting
      * both here is what tells "the title draws nothing" from "it draws and we do
      * not compile". Register numbers from rsx_renderer.cpp:115-146. */
-    if (reg == TRANSFORM_PROGRAM_LOAD) note_vertex_program();
-    if (reg == 0x0A04) note_fragment_program(true);   /* FP_CONTROL / shader write */
+    /* Shaders are NOT compiled from a register write: the real renderer calls
+     * vertex_program() and fragment_program() at DRAW time (rsx_renderer.cpp:2866).
+     * Counting them here would always read zero -- measured, and corrected. */
 
     if (reg >= TRANSFORM_PROGRAM && reg < TRANSFORM_PROGRAM + 128) {
         g_vp_words.fetch_add(1, std::memory_order_relaxed);
@@ -83,7 +84,11 @@ void method(uint32_t reg, uint32_t arg) {
         return;
     case DRAW_ARRAYS:
     case DRAW_INDEX_ARRAY:
+        /* A draw is the point where the renderer would compile a vertex and a
+         * fragment program. Counting both here mirrors what it does. */
         g_draws.fetch_add(1, std::memory_order_relaxed);
+        note_vertex_program();
+        note_fragment_program(true);
         return;
     case CLEAR_SURFACE:
         g_clears.fetch_add(1, std::memory_order_relaxed);
