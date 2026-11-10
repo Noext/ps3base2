@@ -6,7 +6,7 @@ recopie de memoire. Chaque affirmation non triviale porte sa mesure en §7.
 ## 1. Lancement
 
 ```bash
-cd /root/Dev/ps3base2          # ou ton worktree
+cd "$REPO"          # ou ton worktree
 tools/play.sh                  # construit si besoin, ouvre une fenetre, joue
 ```
 
@@ -169,7 +169,7 @@ Ce qui a ete reellement observe, avec la commande et la ligne de log.
 ```
 $ env -u DISPLAY tools/play.sh --xvfb --no-build --seconds 2400
 play: no X server found; started Xvfb on :73 (the GPU rasterises, presentation is software)
-play: vfs    /root/Dev/ps3base2-wt44/vfs
+play: vfs    $REPO/vfs-example
 play: GPU    NVIDIA GeForce RTX 4060 Laptop GPU, swapchain 1280x720
 play: playing (pid 1141326, window 6291502). Close the window, or Ctrl-C here, to stop.
 ```

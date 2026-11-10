@@ -281,7 +281,10 @@ add_test(NAME memspace COMMAND memspace)
 # Proves wgpu-native works here and measures the pipeline-cache cost that decides
 # whether the WebGPU port is cheap or expensive. Optional: only built when the
 # library is present, so a machine without it still configures.
-set(WGPU_DIR "/root/Dev/ps2-web-recomp/third_party/wgpu-native" CACHE PATH "wgpu-native prefix")
+# Point this at a wgpu-native prefix to build the smoke test:
+#   cmake -DWGPU_DIR=/path/to/wgpu-native ...
+# Empty by default, so a clean checkout configures without it.
+set(WGPU_DIR "" CACHE PATH "wgpu-native prefix (optional; enables wgpu_smoke)")
 if(EXISTS "${WGPU_DIR}/lib/libwgpu_native.so")
     add_executable(wgpu_smoke tests/wgpu_smoke.cpp)
     target_include_directories(wgpu_smoke PRIVATE "${WGPU_DIR}/include" runtime/include)

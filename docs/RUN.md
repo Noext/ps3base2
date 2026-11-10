@@ -2,12 +2,15 @@
 
 ## The command
 
+Paths below are placeholders: `$REPO` is this checkout, `$DISC` is the folder
+holding the disc you mounted (the one with `PS3_GAME/` in it).
+
 ```
-cd /root/Dev/ps3base2
+cd "$REPO"
 
 DISPLAY=:0 \
-XDG_RUNTIME_DIR=/run/user/0 \
-PS3BASE_DISC_DIR=/root/Dev/mc-port/disc \
+XDG_RUNTIME_DIR=/run/user/$(id -u) \
+PS3BASE_DISC_DIR="$DISC" \
 PS3BASE_LOG=info \
 PS3BASE_DUMP_FRAMES=200 \
 PS3BASE_FRAME_DIR=/tmp/frames \
@@ -87,7 +90,7 @@ re-running `tools/setup.py`.
 ## Building: never trust an incremental tree
 
 ```
-cd /root/Dev/ps3base2
+cd "$REPO"
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
       -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
 cmake --build build -j 8 --target ps3base
@@ -120,7 +123,7 @@ The five-run check that a change has not broken anything:
 ```
 for i in 1 2 3 4 5; do
   DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/$UID \
-  PS3BASE_DISC_DIR=/root/Dev/mc-port/disc PS3BASE_LOG=info \
+  PS3BASE_DISC_DIR="$DISC" PS3BASE_LOG=info \
   timeout 50 ./build/ps3base --no-launcher > /tmp/r$i.log 2>&1
   echo "run $i exit=$? $(grep -a 'rsx: flip' /tmp/r$i.log | tail -1 | grep -oE 'flip [0-9]+')"
 done
@@ -214,7 +217,7 @@ generation:
 
 ```bash
 DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/0 \
-PS3BASE_DISC_DIR=/root/Dev/mc-port/disc \
+PS3BASE_DISC_DIR="$DISC" \
 PS3BASE_LOG=info \
 PS3BASE_FORCE="f216258=1" \
 PS3BASE_INPUT_CMD=/tmp/live.txt \
@@ -236,7 +239,7 @@ game relaunch if it dies, the title itself, a capture every 30 s, and a
 mechanical verdict.
 
 ```bash
-cd /root/Dev/ps3base2-wtN
+cd "$REPO"
 tools/run_world.sh vfs-N --seconds 900 --tag N
 ```
 
@@ -253,7 +256,7 @@ Use `--force SPEC` only to test one deliberately.
 `docs/world-on-main.png` is the proof, and it was taken with **no forcing**.
 
 ```bash
-cd /root/Dev/ps3base2
+cd "$REPO"
 tools/run_world.sh vfs-proof --seconds 1400 --tag proof
 ```
 
