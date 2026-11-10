@@ -14,6 +14,7 @@
 
 #include <cstdio>
 #include <cstdint>
+#include <cstdlib>
 
 using namespace gpu::wgpu;
 
@@ -41,9 +42,12 @@ static PipelineKey make(uint32_t depth_compare, uint32_t blend_src, uint32_t cul
     return k;
 }
 
-int main() {
+int main(int argc, char** argv) {
     constexpr int kFrames = 3600;   /* 60 s at 60 Hz */
     constexpr int kDrawsPerFrame = 400;
+    /* How often the state changes. 64 is the pessimistic default; the sweep below
+     * asks what happens if RSX is far messier than the boot logs suggest. */
+    const int change_every = argc > 1 ? std::atoi(argv[1]) : 64;
 
     PipelineCache cache(512);
     Rng rng;
@@ -53,15 +57,19 @@ int main() {
             /* Most draws in a frame repeat the previous state; every so often a
              * pass boundary changes it. 1 in 64 is a deliberately pessimistic
              * guess -- the boot logs show far fewer changes per draw. */
-            const bool change = (d % 64) == 0;
+            const bool change = (d % change_every) == 0;
             static uint32_t dc = 6, bs = 4, cu = 2, fm = 0;
             if (change) {
-                dc = rng.below(4);
-                bs = rng.below(5);
+                /* Draw from the full ranges make() accepts, so the state space is
+                 * really explored. The earlier version clamped dc to 4 values and
+                 * the sweep then reported the same 180 misses at every frequency,
+                 * which was the harness lying, not the cache being good. */
+                dc = rng.below(8);
+                bs = rng.below(12);
                 cu = rng.below(3);
-                fm = rng.below(3);
+                fm = rng.below(8);
             }
-            const PipelineKey k = make(dc + 4, bs, cu, fm);
+            const PipelineKey k = make(dc, bs, cu, fm);
             if (cache.find(k) == 0) {
                 /* The caller would create the pipeline here. We count, not create:
                  * a fake handle is enough to exercise the cache. */
@@ -72,8 +80,8 @@ int main() {
     }
 
     const PipelineCacheStats& s = cache.stats();
-    std::printf("pipeline cost over %d frames (%d draws each, %d draws total)\n",
-                kFrames, kDrawsPerFrame, kFrames * kDrawsPerFrame);
+    std::printf("pipeline cost over %d frames (%d draws each, %d draws total, change every %d)\n",
+                kFrames, kDrawsPerFrame, kFrames * kDrawsPerFrame, change_every);
     std::printf("  lookups      %llu\n", (unsigned long long)s.lookups);
     std::printf("  hits         %llu\n", (unsigned long long)s.hits);
     std::printf("  MISSES       %llu   <- pipelines created\n", (unsigned long long)s.misses);

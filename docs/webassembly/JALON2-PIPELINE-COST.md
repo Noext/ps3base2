@@ -63,3 +63,54 @@ C'est une **bonne nouvelle** pour le jalon 2 : le point que le prompt identifie 
 | temps CPU du thread de rendu | **non mesuré** — exige le port |
 | cache indexé par état | **fait, testé** |
 | renderer porté | **non** |
+
+---
+
+# Correction : le premier chiffre était un artefact de mon harnais
+
+## Ce que j'ai découvert en testant la sensibilité
+
+J'ai fait varier la fréquence de changement d'état et obtenu **180 misses dans tous les cas**, même à
+changement à chaque draw. Un chiffre constant quelle que soit la fréquence est **impossible** : c'est mon
+harnais qui mentait.
+
+**La cause** : mon générateur d'états n'explorait que **180 combinaisons** — `dc` était limité à 4 valeurs sur
+8, `bs` à 5 sur 12. Le cache ne pouvait pas déborder parce que l'espace d'états était minuscule.
+
+## La mesure corrigée
+
+| changement tous les | misses | pipelines/image | taux de hit |
+|---|---|---|---|
+| **64 draws** | **19 725** | **5,48** | 98,63 % |
+| 8 draws | 140 024 | 38,90 | 90,28 % |
+| 4 draws | 280 080 | 77,80 | 80,55 % |
+| 2 draws | 560 164 | 155,60 | 61,10 % |
+| **1 draw** | **1 120 065** | **311,13** | 22,22 % |
+
+## Ce que ça change complètement
+
+**Le cache déborde avec 512 entrées.** L'espace d'états réel est 8 × 12 × 3 × 8 = **2 304 combinaisons**, et
+512 n'en tient qu'un quart.
+
+| fréquence | verdict |
+|---|---|
+| changement tous les 64 draws | **5,48 pipelines/image** — coûteux mais possible |
+| changement à chaque draw | **311 pipelines/image** — intenable |
+
+## Ce que ça signifie pour le jalon 2
+
+Le coût dépend **entièrement de la cohérence de l'état RSX par passe**. Le prompt dit « RSX change d'état par
+draw » ; si c'est littéralement vrai, le port WebGPU **ne peut pas tenir la cadence**.
+
+Les logs de boot suggèrent le contraire (une primitive, 2,9 M de draws), mais **je n'ai pas mesuré le nombre
+réel de changements d'état par image**.
+
+## La mesure qui manque
+
+Compter les `vkCmdSet*` **par image** dans un run natif. C'est faisable : le renderer a 22 setters, et un
+compteur par nom donnerait la distribution réelle.
+
+## Correction de méthode
+
+**Dixième erreur d'instrument de cette campagne.** Mon harnais ne pouvait pas produire un résultat différent
+de 180, et je l'ai publié comme une mesure.
