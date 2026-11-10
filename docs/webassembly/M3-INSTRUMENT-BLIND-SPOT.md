@@ -71,3 +71,53 @@ de compter les écritures.
 Le jalon 3 reste ouvert. Ce round **découvre un angle mort de mon instrument** : `special[]` ne contient pas
 `0x0200`, donc les écritures de surface par paquet groupé passent directement dans `regs[]` sans être
 comptées. La conclusion « zéro écriture de surface » doit être réexaminée par lecture de `regs[]`.
+
+
+## La mesure correcte, faite dans le même round
+
+J'ai lu le registre de fichier au lieu de compter les écritures :
+
+    regfile clipH=0x00000000 clipV=0x00000000 fmt=0x00000121 caoff=0x00000000 | tex0off=0x00280000
+
+### Ce que ça dit
+
+| registre | valeur | lecture |
+|---|---|---|
+| `0x0200` clipH | **0** | le renderer retournera vide |
+| `0x0204` clipV | **0** | idem |
+| `0x0208` format | **0x121** | écrit ! |
+| `0x0210` caoff | **0** | pas d'offset couleur |
+| **`0x1A00` tex0off** | **0x280000** | **écrit !** |
+
+**Deux corrections majeures :**
+
+1. **Le guest ÉCRIT `0x1A00` (offset de texture)** — mon compteur disait zéro. Il était bien aveugle.
+2. **Le guest écrit aussi `0x0208` (format de surface)** — mon compteur disait zéro.
+
+## Ce que ça invalide définitivement
+
+Les rounds 92, 96, 98 et 100 concluaient « le guest n'écrit aucun registre de texture ni de surface » sur la
+base d'un compteur aveugle. **C'est faux.**
+
+Le guest écrit des registres de texture et de surface — par le chemin groupé que `method()` ne voit pas.
+
+## Ce qui reste vrai
+
+`clipH = 0` et `clipV = 0` sont **lus dans le registre de fichier**, donc c'est une mesure fiable. Le
+renderer retournera bien `color_targets()` vide.
+
+**L'absence de surface tient.** Mais l'explication n'est pas « le guest n'écrit rien » : c'est « le guest
+n'écrit pas les deux registres de clip ».
+
+## La nouvelle question
+
+Pourquoi `0x0200` et `0x0204` restent à zéro alors que `0x0208` (format) et `0x1A00` (texture) sont
+écrits ? Le jeu configure **partiellement** sa surface : format et texture, mais pas les dimensions.
+
+C'est un état étrange — et c'est peut-être précisément l'indice : un jeu qui écrit le format sans les
+dimensions n'a pas terminé sa configuration.
+
+## Correction de méthode
+
+**Compter les écritures d'un registre est insuffisant** quand plusieurs chemins d'écriture existent. La
+mesure fiable est de **lire le registre de fichier final**, ce que le renderer lira réellement.
