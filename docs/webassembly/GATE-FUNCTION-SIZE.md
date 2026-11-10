@@ -62,6 +62,30 @@ Three findings, all from trying rather than reading:
 - The 490 MB peak RSS per large function matters in parallel: eight of those at
   once is 4 GB.
 
+## The two wasm blockers are now fixed and proven
+
+**`_tzcnt_u64`**: replaced by `std::countr_zero` in `reservation.cpp:628`. That
+file now compiles for wasm: **1,105,627-byte object**, no errors. It was the only
+BMI1 use in the tree.
+
+**`__rdtsc` (81 sites)**: rather than editing 81 call sites and making the native
+path diverge from the ported one, `runtime/include/runtime/cycles.h` defines, under
+wasm only:
+
+    uint64_t wasm_rdtsc();
+    #define __rdtsc wasm_rdtsc
+
+Backed by `emscripten_get_now()` — deliberately not `std::chrono`, because
+Emscripten's prebuilt libraries do not satisfy `std::chrono::steady_clock::now()`
+in this toolchain and the link fails. The C-level clock always links.
+
+Proven under Node:
+
+    rdtsc shim: 27154526 then 27158809, non-decreasing=1
+
+Every one of the 81 sites subtracts two readings, so monotonicity is the only
+property they need, and it holds.
+
 ## Consequence for the plan
 
 The gate no longer looks like it will fail on function size. The remaining gate

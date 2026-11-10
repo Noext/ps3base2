@@ -15,6 +15,16 @@
  */
 #include <cstdint>
 
+#if defined(__wasm__) || defined(__EMSCRIPTEN__)
+/* __rdtsc appears 81 times across the runtime and headers. Rewriting every site
+ * would be churn with no benefit, and would make the native path differ from the
+ * ported one. Instead: under wasm, __rdtsc becomes this function, so the same
+ * sources build both ways and every call site keeps its meaning (they all
+ * subtract two readings). */
+uint64_t wasm_rdtsc();
+#define __rdtsc wasm_rdtsc
+#endif
+
 namespace host {
 
 /* Monotonic, non-decreasing. Units are arbitrary but consistent within a run;

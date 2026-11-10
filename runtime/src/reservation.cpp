@@ -625,7 +625,10 @@ int park_alloc() {
     uint64_t used = g_park_used.load();
     for (;;) {
         if (used == ~0ull) return -1;
-        int i = static_cast<int>(_tzcnt_u64(~used));
+        /* _tzcnt_u64 is BMI1 and does not exist in WebAssembly. countr_zero is
+         * the portable spelling of the same operation: index of the lowest set
+         * bit, which is exactly the free slot. */
+        int i = std::countr_zero(~used);
         if (g_park_used.compare_exchange_weak(used, used | (1ull << i))) return i;
     }
 }
