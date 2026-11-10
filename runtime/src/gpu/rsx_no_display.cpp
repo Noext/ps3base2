@@ -133,6 +133,12 @@ constexpr uint32_t TEXTURE_BASE_R = 0x1A00;
 std::atomic<uint32_t> g_tex_bound{0};      /* bit per unit with a non-zero offset */
 std::atomic<uint32_t> g_tex_offsets[16];
 std::atomic<uint32_t> g_tex_field_writes[32 * 8];
+/* What primitive type does the guest draw? BEGIN_END selects it, and a title that
+ * only ever draws full-screen quads or point sprites looks completely different
+ * from one drawing a scene. This distinguishes "draws nothing" from "draws a
+ * textureless placeholder", which is what the empty frames suggest. */
+std::atomic<uint32_t> g_begin_end[8];
+std::atomic<uint32_t> g_vtxfmt[4];
 }
 
 void note_texture_unit(uint32_t unit, uint32_t offset) {
@@ -142,6 +148,10 @@ void note_texture_unit(uint32_t unit, uint32_t offset) {
     else g_tex_bound.fetch_and(~(1u << unit), std::memory_order_relaxed);
 }
 uint32_t bound_texture_mask() { return g_tex_bound.load(std::memory_order_relaxed); }
+void draw_shape_stats(uint32_t* prims, uint32_t* fmts) {
+    for (int i = 0; i < 8; i++) prims[i] = g_begin_end[i].load(std::memory_order_relaxed);
+    for (int i = 0; i < 4; i++) fmts[i] = g_vtxfmt[i].load(std::memory_order_relaxed);
+}
 uint32_t texture_field_writes(uint32_t unit, uint32_t field) {
     if (unit >= 32 || field >= 8) return 0;
     return g_tex_field_writes[unit * 8 + field].load(std::memory_order_relaxed);
@@ -206,6 +216,18 @@ void method(uint32_t reg, uint32_t arg) {
             const int32_t base_y = int32_t((i * 13) % (FB_H - 64));
             fb_triangle(base_x, base_y, base_x + 32, base_y + 8, base_x + 8, base_y + 32, c);
         }
+        return;
+    }
+    case 0x1808: {
+        /* BEGIN_END: low 3 bits are the primitive, and it also latches a draw. */
+        const uint32_t prim = arg & 7;
+        g_begin_end[prim < 8 ? prim : 7].fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    case 0x1740: {
+        /* VERTEX_FORMAT: high bits carry the attribute layout; a title that only
+         * uses position has no texture coordinates, which explains no texmask. */
+        g_vtxfmt[(arg >> 28) & 3].fetch_add(1, std::memory_order_relaxed);
         return;
     }
     case CLEAR_SURFACE:
