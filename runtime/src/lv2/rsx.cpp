@@ -26,8 +26,11 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <intrin.h>
-#else
+#elif !defined(__wasm__) && !defined(__EMSCRIPTEN__)
 #include <x86intrin.h>
+#else
+/* wasm: no x86 intrinsics; cycles.h supplies what is needed. */
+#include "runtime/cycles.h"
 #endif
 
 namespace crash {
