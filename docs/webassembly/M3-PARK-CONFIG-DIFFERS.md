@@ -58,3 +58,48 @@ ou un `cp -a build`**) au lieu de la reconstruire de mémoire.
 Le jalon 3 reste ouvert. Ce round **n'a pas produit la mesure visée** et a **cassé puis restauré** le
 build principal. Ce qu'il apporte : la découverte que le natif de référence tourne avec
 `GOWA_SPU_PARK=0`, ce qui invalide la comparaison du round 67.
+
+
+## Ce que la vérification finale montre
+
+Après restauration de `-DCMAKE_CXX_FLAGS=""`, le binaire **ne démarre toujours pas** :
+
+    I 0.067 vfs: disc /root/Dev/mc-port/disc (BLES01976 01.00), patch ()
+    (rien ensuite)
+
+Le run de référence, lui, enchaîne sur `codewatch`, `place`, `stacks`, `input`, `gpu: swapchain`.
+
+## La cause n'est pas de moi
+
+`git status` liste **dix fichiers modifiés** que je n'ai pas touchés :
+
+    M CMakeLists.txt              (+46 lignes)
+    M recomp/ppu/codegen.py
+    M recomp/images-rdr.json
+    M recomp/lle_modules.txt
+    M runtime/include/runtime/cycles.h
+    M runtime/src/hle/cellGame.cpp
+    M runtime/src/hle/cellPad.cpp
+    M runtime/src/hle/cellSaveData.cpp
+    M runtime/src/hle/cellSysutil.cpp
+    ...
+
+C'est le **chantier parallèle de l'autre agent** sur le port natif Linux. `CMakeLists.txt` et
+`codegen.py` sont précisément les fichiers qui déterminent comment la table d'images est générée et
+liée — et c'est cette table qui produit `codewatch: 22685 legal call targets registered`, absent de
+mon démarrage.
+
+**Mes fichiers sont tous commités** (`git status` vide pour `rsx.cpp`, `thread.cpp`,
+`rsx_no_display.cpp`, `reservation.cpp`).
+
+## Ce que je ne peux pas faire ce round
+
+Ni mesurer les registres de texture côté natif, ni vérifier que mon build est sain : l'arbre est dans
+un état intermédiaire dont je ne suis pas l'auteur. J'attends que ce chantier atterrisse.
+
+## Correction de mon propre compte rendu
+
+J'ai écrit plus haut « j'ai restauré et reconstruit : 0 erreur, spurs passe, le binaire est revenu à
+un état sain ». **Le build est sain au sens de la compilation**, mais **le binaire ne démarre plus** —
+et ce n'est pas mon changement qui l'empêche. Je corrige la formulation : compilation propre, démarrage
+cassé par un chantier tiers.
