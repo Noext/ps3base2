@@ -13,7 +13,9 @@ namespace host {
 
 /* True when the emulator window has focus and may take keyboard input. */
 bool input_focused();
-/* Fills the 4 pad bytes; returns whether a pad is attached. */
-bool poll_pad(uint16_t* buttons);
+/* Fills the 4 pad bytes. Matches host_input.cpp's signature exactly -- a
+ * mismatched return type is a wasm signature_mismatch trap at the call site, which
+ * is how this was found (host::poll_pad, called from cellPadGetData). */
+void poll_pad(uint16_t* buttons);
 
 }  // namespace host
