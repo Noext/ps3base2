@@ -51,3 +51,36 @@ instrumentations, pas par un changement du jeu.
 | 3 | 4 criteres sur 5 ; module 45,4 Mo, plus grosse fonction 725 073 o |
 | 4 | ecrit, validation navigateur impossible |
 | 5 | goulots nommes, fps natif mesure |
+
+---
+
+# Nettoyage reussi, et la mesure obtenue
+
+## Ce que j'ai fait apres avoir ecrit le rapport ci-dessus
+
+Retire la garde sur `0x33000e5c`, garde le probe sur l'import 119.
+
+## Le resultat
+
+    guest machine up: 1
+    images mc=: 1
+    gcminit: 1
+    videoimp: 2      <-- revenue
+    gcmret: 1        <-- la mesure voulue
+
+    [gcmret] import119 returns r3=0xffffffff80010004 (low32=0x80010004)
+
+Le crash revient aussi (`unknown indirect target 0x00000000`, `lr=0x005d2c08`), donc l'etat est coherent.
+
+## La confirmation
+
+**Poser une garde sur une entree de fonction appelee tot casse le boot** — troisieme confirmation
+(rounds 214, 226, 226). Le mecanisme est le meme : `add_guard` arme `hook_impl` et pose le drapeau, donc
+l'entree passe par `hook_call` au lieu d'executer son corps directement, et ce detour change l'ordre.
+
+## Ce que la valeur dit
+
+`r3 = 0xffffffff80010004`, soit `0x80010004` en 32 bits — confirme la mesure du round 221 par un second
+chemin (le probe sur l'import plutot que sur l'appel).
+
+Ce n'est pas encore l'explication, mais la mesure est **reproductible par deux instruments independants**.
