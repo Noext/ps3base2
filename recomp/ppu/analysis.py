@@ -58,6 +58,18 @@ def profile_for(name):
         return Profile('env', [r for r in override.split(',') if r])
     if name in ('rdr',):
         return ALL_RULES
+    # Minecraft needs the per-bctr table detector: its opcode interpreter
+    # dispatches an opcode table through several bcctr, and without those tables
+    # the lift emits switches with no cases and the title stops on 0x00739fb4
+    # inside the table it failed to lift. Measured, the full rule set gives this
+    # title 18298 functions and 127 tables -- exactly what the green 2cf1fe0
+    # produced -- and no table of fewer than three entries.
+    #
+    # Only table_dispatch (bdf5066) stays off: it is a heuristic that accepts any
+    # lwzx through a never-rewritten register, and on this title it contributes
+    # five one-or-two-entry "tables" whose extent it cannot model.
+    if name in ('mc', 'minecraft'):
+        return Profile('mc', ('tables', 'bgtlr', 'rldic'))
     return NO_RULES
 
 class Image:
@@ -218,10 +230,10 @@ def jump_table(img, bctr):
     # The immediate bound can sit further up than the window reaches, so a
     # conditional branch to the default is enough to establish the shape; the
     # entry scan below stops at the first word that is not a code address.
-    if default_off is None:
-        return None
-    if bound is None:
-        bound = 4096
+    # The bound and the branch to a default can both be absent when the table
+    # FOLLOWS its dispatch. That shape is decided by position, below, once the
+    # base is known; see the comment there.
+    positional = False
 
     # 2. Base: lis/addi/addic, or a TOC load.
     base = None
@@ -244,6 +256,42 @@ def jump_table(img, bctr):
                 base, base_reg = v, (w >> 21) & 0x1F
     if base is None:
         return None
+
+    # The table that immediately FOLLOWS its dispatch. 2cf1fe0 recovered these
+    # with one test, base == bctr + 4; 01f9378 replaced it with a bound compare
+    # in the same window, which is right for liblv2's TOC-relocated ABSOLUTE
+    # tables and wrong for this shape: Minecraft's opcode interpreter
+    # f_00739658 dispatches its opcode table from several bcctr, each with its
+    # own mtspr ctr, and the bound compare sits ABOVE the loop that contains
+    # them, outside any window ending at the bctr.
+    #
+    #     739e3c  8162b528  lwz    r11, -0x4ad8(r2)  table pointer, from the TOC
+    #     739e40  540915ba  rlwinm r9, r9, 2, ...    index * 4
+    #     739e44  7c09582e  lwzx   r9, r9, r11       entry is RELATIVE
+    #     739e48  7c0007b4  extsw  r0, r0
+    #     739e4c  7c005a14  add    r0, r0, r11
+    #     739e50  7c0903a6  mtspr  ctr, r0
+    #     739e54  4e800420  bcctr
+    #     739e58  000000a0                      <- base = bctr + 4, first entry
+    #
+    # At HEAD the two tables at 0x739e54 and 0x73a004 were dropped and the title
+    # stopped at 1.2 s on 0x00739fb4, entry 3 of the table at 0x739e58.
+    #
+    # The extent is set by the contiguous run of in-code entries, exactly as
+    # 2cf1fe0 read them, so a neighbouring compare cannot truncate it: f_00881c40
+    # has a 17-entry table at 0x881d74, and the nearest compare at 0x881cf4
+    # (cmpi r0,0 -- the loop's own test) gave bound = 1, so the switch had one
+    # case and 0x88226c was reported as an unknown target. A table whose base is
+    # NOT bctr + 4 still requires both the bound and the default branch.
+    positional = base == bctr + 4
+    if positional:
+        if default_off is None and bound is None:
+            pass                          # position is the whole claim
+        bound = 4096                      # the contiguous run decides the extent
+    elif default_off is None:
+        return None
+    if bound is None:
+        bound = 4096
 
     scaled = load_ok = False
     for a, w in window:
