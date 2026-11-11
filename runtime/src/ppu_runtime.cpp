@@ -239,6 +239,45 @@ void coverage_dump(const char* tag) {
 bool has_code_at(uint32_t addr) { return lookup(addr) != nullptr; }
 
 void call_indirect(Context& ctx, uint8_t* base, uint32_t addr) {
+    /* PS3BASE_CTR_PROBE: print ctr at entry to call_indirect for one lr. An
+     * indirect call whose ctr does not match the word the guest just loaded
+     * from the pointer register means the register file and the dispatch
+     * disagree, and the crash report alone cannot show that. */
+    if (std::getenv("PS3BASE_CTR_PROBE")) {
+        static std::atomic<int> n{0};
+        if (static_cast<uint32_t>(ctx.lr) == 0x3000c9f0u && n.fetch_add(1) < 4)
+            LOG_INFO("ctr", "entry lr=0x%08x addr=0x%08x ctr=0x%08x r0=0x%08x r29=0x%08x",
+                     static_cast<uint32_t>(ctx.lr), addr, static_cast<uint32_t>(ctx.ctr),
+                     static_cast<uint32_t>(ctx.gpr[0]), static_cast<uint32_t>(ctx.gpr[29]));
+    }
+    /* PS3BASE_BC_DUMP: the RAGE script interpreter f_00d19278 reads its opcode
+     * byte with lbzx r3, r6, r28 -- r28 is the bytecode cursor. Dumping around
+     * it answers whether the interpreter is executing real script bytes or a
+     * buffer nobody filled, and that decides which layer is broken. */
+    if (std::getenv("PS3BASE_BC_DUMP")) {
+        static std::atomic<int> n{0};
+        const uint32_t lr32 = static_cast<uint32_t>(ctx.lr);
+        const bool at_call = (lr32 == 0x0085c000u);
+        if (at_call && n.fetch_add(1) < 8) {
+            const uint32_t ptr = static_cast<uint32_t>(ctx.gpr[28]);
+            const uint32_t r6v = static_cast<uint32_t>(ctx.gpr[6]);
+            LOG_INFO("bc", "lr=0x%08x r28(cursor)=0x%08x r6=0x%08x r3=0x%08x r16=0x%08x",
+                     lr32, ptr, r6v, static_cast<uint32_t>(ctx.gpr[3]),
+                     static_cast<uint32_t>(ctx.gpr[16]));
+            for (int base_off = -32; base_off < 224; base_off += 32) {
+                char hex[3 * 33 + 1]; char asc[33];
+                int h = 0;
+                for (int k = 0; k < 32; k++) {
+                    const uint32_t ea = ptr + base_off + k;
+                    const uint8_t v = (ea < 0xC0000000u ? reinterpret_cast<const uint8_t*>(vm::g_base)[ea] : 0xCCu);
+                    h += std::snprintf(hex + h, sizeof hex - h, "%02x ", v);
+                    asc[k] = (v >= 0x20 && v < 0x7f) ? char(v) : '.';
+                }
+                asc[32] = 0;
+                LOG_INFO("bc", "  [0x%08x] %s |%s|", ptr + base_off, hex, asc);
+            }
+        }
+    }
     force::tick();
     /* Log the vtable target and its owners just before dispatch from
      * f_0006ee9c (lr 0x6eec4): the target is what returns the decisive 0. */
@@ -388,6 +427,20 @@ void call_indirect(Context& ctx, uint8_t* base, uint32_t addr) {
                                    vm::range_mapped(ea, 4) ? vm::read32(ea) : 0u);
             }
             LOG_INFO("ppu", "  r%-2d = 0x%08x  around:%s", r, a, words);
+        }
+        /* The dump above reads through vm::read32; the generated code reads
+         * through the base pointer it was handed. If those disagree, every
+         * memory dump in this program describes a different address than the
+         * one the guest read. Print both, same address, same place. */
+        {
+            const uint32_t ea29 = static_cast<uint32_t>(ctx.gpr[29]);
+            LOG_INFO("ppu", "  base=%p vm_g_base=%p same=%d",
+                     static_cast<void*>(base), static_cast<void*>(vm::g_base),
+                     base == vm::g_base ? 1 : 0);
+            if (vm::range_mapped(ea29, 8))
+                LOG_INFO("ppu", "  r29_read vm32=%08x %08x ld32=%08x %08x",
+                         vm::read32(ea29), vm::read32(ea29 + 4),
+                         ppu::ld32(base, ea29), ppu::ld32(base, ea29 + 4));
         }
         LOG_FATAL("ppu",
                   "unknown indirect target 0x%08x (lr=0x%08llx, thread 0x%x) r3=0x%llx r4=0x%llx "
