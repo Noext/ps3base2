@@ -70,6 +70,17 @@ def profile_for(name):
     # five one-or-two-entry "tables" whose extent it cannot model.
     if name in ('mc', 'minecraft'):
         return Profile('mc', ('tables', 'bgtlr', 'rldic'))
+    # GTA needs the same set, and it is not optional: with no rules the lift has
+    # ZERO tables, and the title aborts at 0.46 s on
+    # 'unknown indirect target 0x0064c288 (lr=0x0064b9b4)' -- a dispatch case.
+    # Measured on bin/gta/EBOOT.elf, tables and functions by rule set:
+    #     none                            20081 functions    0 tables
+    #     tables                          20081 functions    8 tables
+    #     tables,rldic,table_dispatch,... 20081 functions   15 tables
+    # The green run used all of them, so all of them come back. It is the same
+    # detector the pre-profile tree used unconditionally.
+    if name in ('gta',):
+        return ALL_RULES
     return NO_RULES
 
 class Image:
