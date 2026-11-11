@@ -86,3 +86,53 @@ La seconde est plausible : `0x00d70000` est dans la plage des buffers RSX/DMA do
 
 Ce n'est plus « une initialisation a manquee » mais **« ce champ vient d'ailleurs que du PPU »**. La prochaine
 mesure doit verifier si `0x00d72800` est dans une region que le jeu envoie au RSX ou au SPU.
+
+
+---
+
+# La cause reelle : la region 0x00d70000 n'est pas mappee
+
+## Les regions mappees au moment du crash
+
+    vm: region 1 placed at 0x10000000
+    vm: region 2 placed at 0x40000000
+    sys_memory_allocate(0x10000)  -> 0x10000000
+    sys_memory_allocate(0x80000)  -> 0x10010000
+    sys_memory_allocate(0x10000)  -> 0x10090000
+    sys_memory_allocate(0x100000) -> 0x40000000
+    sys_memory_allocate(0x300000) -> 0x40100000
+
+**Deux regions seulement : `0x10000000` et `0x40000000`.**
+
+## L'adresse fautive
+
+    ctx.gpr[29] = 0x00d70000;
+    ctx.gpr[3]  = ld32(r29 + 10240);   // 0x00d72800
+
+`0x00d72800` n'est **dans aucune region mappee**. Le backend memoire du wasm rend **zero** pour un acces non",
+mappe, au lieu de lever une faute.
+
+## Pourquoi aucun code n'ecrit ce champ
+
+Ce n'est pas un oubli du lift : **cette zone n'existe pas encore**. Elle serait creee par un `sys_memory_allocate`
+ou un `sys_vm_memory_map` **qui n'a pas eu lieu**.
+
+Le `sys_vm_memory_map` du monde survient a t=120 s chez le natif ; ici le jeu n'y est pas encore. Mais `0x00d70000`
+est bien en dessous de `0x10000000`, donc il devrait etre couvert par une allocation **plus precoce**, faite par",
+le chargeur ou par liblv2.
+
+## Ce que ca etablit
+
+| lecture | statut |
+|---|---|
+| bug de lift | **ecarte** — le code fait ce que le binaire dit |
+| bug de liaison | **ecarte** — plus de symbole manquant sur ce chemin |
+| champ non initialise par un constructeur PPU | **ecarte** — aucune ecriture existe, nulle part |
+| **region non mappee** | **retenu** — la lecture rend zero car la page n'existe pas |
+
+## Le probleme de fond
+
+Un acces a une zone **non mappee rend zero silencieusement** au lieu de faulter. Le jeu continue avec un
+pointeur nul et echoue **loin** de la vraie cause, 2 000 instructions plus tard.
+
+C'est un defaut du backend memoire, pas du jeu.
