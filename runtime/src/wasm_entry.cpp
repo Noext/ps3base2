@@ -195,14 +195,6 @@ int main(int argc, char** argv) {
      * lifted code never consults hook_flags, so PS3BASE_CALL_TRACE would record
      * nothing -- the same inert-guard trap documented in hooks.cpp. */
     hooks::init();
-    /* _cellGcmInitBody's body has no error constant and no error return, yet
-     * import 119 hands back 0x80010004. Watch the LAST instructions of the body to
-     * see what r3 holds there, and what the wrapper does with it. */
-    hooks::add_guard(0x33000e5cu, [](ppu::Context& c) {
-        static int n = 0;
-        if (n++ < 1) std::fprintf(stderr, "[gcmret] entry\n");
-        return false;
-    });
     /* _cellGcmInitBody: the OPD at 0x3300b8ac points at 0x33000e5c (probe
      * [opd-code]). Its return is 0x80010004; guard the entry and the imports it
      * makes, which is where a firmware body fails. */
