@@ -477,6 +477,16 @@ void call_import(Context& ctx, uint8_t* base, uint32_t index) {
     const uint32_t lr = static_cast<uint32_t>(ctx.lr);
     call_import_body(ctx, base, index, slot, st, imp);
     cbwatch::note_import(imp.module, *imp.name ? imp.name : "?", ctx.gpr[3], lr, st >= 0);
+    /* A zero return used as a pointer: print the import, its answer and the
+     * resolution state, which says whether the HLE, the LLE image or the
+     * unresolved trampoline produced it. */
+    if (index == 118) {
+        static std::atomic<int> n{0};
+        if (n.fetch_add(1) < 6)
+            std::fprintf(stderr, "[imp118] %s::%s -> 0x%llx state=%d lr=0x%08x\n",
+                         imp.module, *imp.name ? imp.name : "?",
+                         (unsigned long long)ctx.gpr[3], st, lr);
+    }
 }
 
 void call_import_inner(Context& ctx, uint8_t* base, uint32_t index, ImportSlot& slot, int32_t st, const image::ImportEntry& imp);

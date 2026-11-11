@@ -33,6 +33,14 @@ constexpr size_t kTiledPitchCount = sizeof(kTiledPitches) / sizeof(kTiledPitches
 
 HLE_FUNC(cellGcmSys, cellGcmGetTiledPitchSize) {
     const uint32_t size = a32(ctx, 0);
+    /* A zero return is the reference's "past the end of the table" answer, and the
+     * caller uses the result as a size. Printing both the request and the answer
+     * says whether the title asked for something the table cannot express. */
+    {
+        static std::atomic<int> n{0};
+        if (n.fetch_add(1) < 8)
+            std::fprintf(stderr, "[pitch-probe] request=%u\n", size);
+    }
     /* The smallest pitch strictly greater than the request, as the reference does. */
     for (size_t i = 0; i + 1 < kTiledPitchCount; i++) {
         if (kTiledPitches[i] < size && size <= kTiledPitches[i + 1]) {
