@@ -76,7 +76,9 @@ for f in "$ROOT"/out/ppu/*.cpp; do
 done
 
 echo "== link"
-"$EMCC" "${CXXFLAGS[@]}" -nostdlib++ \
+# PS3BASE_NAMED=1 keeps the name section so a bare "unreachable" can be
+# attributed to a function instead of guessed from wasm-function indices.
+"$EMCC" "${CXXFLAGS[@]}" -nostdlib++ ${PS3BASE_NAMED:+-g} \
     -sPTHREAD_POOL_SIZE=4 -sALLOW_MEMORY_GROWTH=1 \
     -sINITIAL_MEMORY=268435456 -sMAXIMUM_MEMORY=3221225472 \
     -sERROR_ON_UNDEFINED_SYMBOLS=0 \

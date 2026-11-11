@@ -132,14 +132,6 @@ extern "C" void ps3base_store_probe(uint32_t ea, const void* data, size_t size) 
     std::fprintf(stderr, "[d7store] ea=0x%08x size=%zu v=0x%08x\n", ea, size, v);
 }
 
-#if PS3BASE_BLOCK_TRACE
-namespace jsedge {
-/* spu_idle is God of War's job-system edge. ps3base links no job system, so the
- * hook has nothing to donate time to. It must still exist: the SPU thread code
- * calls it unconditionally, and a missing symbol aborts the run. */
-void spu_idle(unsigned) {}
-}  // namespace jsedge
-#endif
 
 /* The linker turns every undefined symbol into an aborting trampoline, which
  * surfaces as a bare "unreachable" with no name -- the trap documented in
@@ -149,13 +141,16 @@ void spu_idle(unsigned) {}
 #include <cstdint>
 namespace jsedge {
 bool enabled() { return false; }
+/* Arrow points the SPU reader at this hook; returning false means "no work was
+ * donated", which is what an inert port must say. */
+bool spu_idle(unsigned) { return false; }
 void init() {}
 void set_prev_guard(bool (*)(ppu::Context&)) {}
 bool on_wait_previous(ppu::Context&) { return false; }
 bool on_set_priorities(ppu::Context&) { return false; }
 }  // namespace jsedge
 namespace jobsys {
-void spu_idle_donate(unsigned) {}
+bool spu_idle_donate(unsigned) { return false; }
 namespace wws {
 using ppu_hook = bool (*)(ppu::Context&);
 using installer = void (*)(unsigned, ppu_hook);
