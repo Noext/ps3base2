@@ -153,6 +153,19 @@ def jump_table(img, bctr):
                 if (w2 >> 26) == 16:
                     default_off = branch_target(a2, w2)
                     break
+                # bgtlr / bltlr / beqlr (opcode 19, XO 16): the out-of-range case
+                # leaves the function instead of jumping to a default label. That
+                # is what Minecraft's f_006f2a58 does -- cmplwi r11,7 then bgtlr --
+                # and demanding an explicit bc target rejected the table.
+                # BO field bits: the same test bo_always() uses, (w>>21)&0x14,
+                # not w&0x14 -- the latter is zero for every bgtlr.
+                # XO 16 is bc*/bclr-family. Any conditional branch-to-LR here is
+                # the out-of-range exit: the compare just above established it.
+                # bo_always() does not apply -- bgt's BO is 12, and (12 & 0x14) is
+                # 4, so requiring 0x14 rejected the one form that occurs.
+                if (w2 >> 26) == 19 and ((w2 >> 1) & 0x3FF) == 16 and not (w2 & 1):
+                    default_off = a2          # the LR; the caller sees the return
+                    break
             break
     # The immediate bound can sit further up than the window reaches, so a
     # conditional branch to the default is enough to establish the shape; the
