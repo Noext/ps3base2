@@ -140,3 +140,47 @@ namespace jsedge {
 void spu_idle(unsigned) {}
 }  // namespace jsedge
 #endif
+
+/* The linker turns every undefined symbol into an aborting trampoline, which
+ * surfaces as a bare "unreachable" with no name -- the trap documented in
+ * docs/webassembly. These are God-of-War-only hooks the Minecraft port links but
+ * never calls usefully; provide inert definitions so a missing one cannot abort.
+ * Signature-agnostic where the type does not matter. */
+#include <cstdint>
+namespace jsedge {
+bool enabled() { return false; }
+void init() {}
+void set_prev_guard(bool (*)(ppu::Context&)) {}
+bool on_wait_previous(ppu::Context&) { return false; }
+bool on_set_priorities(ppu::Context&) { return false; }
+}  // namespace jsedge
+namespace jobsys {
+void spu_idle_donate(unsigned) {}
+namespace wws {
+using ppu_hook = bool (*)(ppu::Context&);
+using installer = void (*)(unsigned, ppu_hook);
+void install(installer) {}
+}  // namespace wws
+}  // namespace jobsys
+namespace wj {
+using ppu_hook = bool (*)(ppu::Context&);
+using installer = void (*)(unsigned, ppu_hook);
+void install(installer) {}
+void install_inplace() {}
+}  // namespace wj
+namespace edge {
+namespace gpu { void on_put(unsigned char*, unsigned, unsigned, unsigned) {} }
+namespace ovl {
+enum class Counter : int;
+unsigned long long count(Counter, unsigned long long) { return 0; }
+}
+}  // namespace edge
+namespace crash {
+void profile_thread(void*, const char*) {}
+void log_here(const char*) {}
+}  // namespace crash
+extern "C" {
+const char* stbi_failure_reason(void) { return "unavailable"; }
+void stbi_image_free(void*) {}
+unsigned char* stbi_load_from_memory(const unsigned char*, int, int*, int*, int*, int) { return nullptr; }
+}
