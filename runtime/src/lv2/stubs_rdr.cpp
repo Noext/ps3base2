@@ -39,27 +39,30 @@ LV2_SYSCALL(306, sys_vm_touch) {
 /* sys_net_infoctl (722) and sys_net_bnet_sysctl (725): configure the network
  * stack, which this runtime does not provide.
  *
- * Both are refused with CELL_ENOTSUP rather than answered CELL_OK. The title's
- * netThreadPool is what calls them; a fake success would tell it the socket
- * layer is configured and it would then wait for data that never arrives, with
- * nothing in the log to say why. ENOTSUP names the reason at the call site and
- * lets the title skip its network paths -- which is what it does, and the game
- * reaches its renderer without them.
+ * BOTH RETURN WHAT THE CONSOLE RETURNS, which is CELL_OK. refs/.../sys_net.cpp:2019
+ * is a todo() followed by CELL_OK, and the infoctl switch at :1908 ends in
+ * CELL_OK for every command it does not handle. An earlier version of this file
+ * refused them with CELL_ENOTSUP on the theory that naming the missing stack was
+ * more honest -- and that is the mistake AGENTS.md now records: the title believed
+ * its networking was up, went looking for data that could never arrive, and the
+ * failure surfaced much later with no connection to the cause. It also cost 7081
+ * frame flips on this very title.
  *
- * The discarded commands are logged once each so the surface stays visible. */
+ * The command numbers are logged once each so the surface stays visible without
+ * claiming the call failed. */
 LV2_SYSCALL(722, sys_net_infoctl) {
     static std::atomic<int> n{0};
     if (n.fetch_add(1) == 0)
-        LOG_WARN("net", "sys_net_infoctl cmd %u refused: no network stack (further calls quiet)",
+        LOG_INFO("net", "sys_net_infoctl cmd %u -> OK (no network stack; command ignored)",
                  static_cast<unsigned>(u32arg(ctx, 0)));
-    return CELL_ENOTSUP;
+    return CELL_OK;
 }
 
 LV2_SYSCALL(725, sys_net_bnet_sysctl) {
     static std::atomic<int> n{0};
     if (n.fetch_add(1) == 0)
-        LOG_WARN("net", "sys_net_bnet_sysctl refused: no network stack (further calls quiet)");
-    return CELL_ENOTSUP;
+        LOG_INFO("net", "sys_net_bnet_sysctl -> OK (no network stack; command ignored)");
+    return CELL_OK;
 }
 
 }  // namespace lv2
