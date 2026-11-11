@@ -19,6 +19,14 @@
 #include <cstring>
 #include <thread>
 
+/* The audio ring's storage, published by the page through Module before the
+ * module starts. Zero means headless: the HLE then counts frames and discards
+ * them, which is what it did before the worklet existed. */
+extern "C" {
+float* g_audio_ring_memory = nullptr;
+uint32_t g_audio_ring_frames = 0;
+}
+
 namespace host {
 
 /* Emscripten branch. Everything the POSIX path gets from Linux -- futex, mmap,

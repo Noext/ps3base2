@@ -21,6 +21,7 @@
 #include <SDL3/SDL.h>
 #endif
 #endif
+#include "runtime/audio_ring.h"
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -106,15 +107,36 @@ struct Output {
     }
 };
 #elif defined(__wasm__) || defined(__EMSCRIPTEN__)
-/* The browser has no SDL audio device. Every other part of the HLE -- port
- * allocation, the index area, the block/offset protocol -- is device-independent,
- * and a title that receives a valid port config proceeds. Only the playback sink
- * is dropped; milestone 4 attaches an AudioWorklet to this same seam. */
+/* The browser has no SDL audio device, but it does have an AudioWorklet, and
+ * milestone 4 feeds it from shared memory. The HLE side is unchanged -- port
+ * allocation, the index area, the block/offset protocol are all device-free --
+ * so the only thing that changes is where the samples go.
+ *
+ * The ring is a fixed block of shared memory handed in by the page; when no page
+ * has attached one yet (a headless run under Node), writes are counted and
+ * discarded exactly as before, which is why the no-device path still works. */
+extern "C" {
+/* Filled in by the page before the module starts: pointer to the ring's float
+ * storage and its capacity in stereo frames. Zero means headless. */
+extern float* g_audio_ring_memory;
+extern uint32_t g_audio_ring_frames;
+}
+
 struct Output {
-    bool open() { return false; }
+    gpu::AudioRing ring{g_audio_ring_memory, g_audio_ring_frames ? g_audio_ring_frames : 1};
+    bool attached = false;
     uint64_t underruns = 0;
+    uint64_t silent_frames = 0;
+
+    bool open() {
+        attached = g_audio_ring_memory != nullptr && g_audio_ring_frames != 0;
+        return attached;
+    }
+
     void write(const float* stereo, uint32_t n) {
-        (void)stereo; (void)n;
+        if (!attached) { silent_frames += n; return; }
+        const uint32_t put = ring.write(stereo, n);
+        if (put < n) underruns++;          /* the worklet is behind, or absent */
     }
 };
 #else
