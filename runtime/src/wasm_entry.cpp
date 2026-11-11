@@ -195,34 +195,29 @@ int main(int argc, char** argv) {
      * lifted code never consults hook_flags, so PS3BASE_CALL_TRACE would record
      * nothing -- the same inert-guard trap documented in hooks.cpp. */
     hooks::init();
+    /* 0x5d2b44 IS a function entry, so this guard fires -- the mid-function
+     * addresses tried in rounds 194-199 never could. The lr at entry is the
+     * caller that passes the null object. */
+    hooks::add_guard(0x5d2b44u, [](ppu::Context& c) {
+        static std::atomic<int> n{0};
+        if (n.fetch_add(1) < 8)
+            std::fprintf(stderr, "[entry544] lr=0x%08x r3=0x%llx r4=0x%llx r5=0x%llx\n",
+                         static_cast<unsigned>(c.lr),
+                         (unsigned long long)c.gpr[3], (unsigned long long)c.gpr[4],
+                         (unsigned long long)c.gpr[5]);
+        return false;
+    });
     std::printf("ps3base-wasm: hooks installed\n");
 
     /* The block is a virtual call on a null vtable pointer at lr 0x005d2c08.
      * Printing the registers there separates a mis-lifted prologue (bad object
      * pointer) from a real missing initialisation (null field of a live object). */
-    hooks::add_guard(0x5d2bf0u, [](ppu::Context& c) {
-        static std::atomic<int> n{0};
-        if (n.fetch_add(1) < 3)
-            std::fprintf(stderr, "[site] r31=0x%llx vtable=0x%llx r3=0x%llx\n",
-                         (unsigned long long)c.gpr[31],
-                         (unsigned long long)ppu::ld32((uint8_t*)c.base, uint32_t(c.gpr[31])),
-                         (unsigned long long)c.gpr[3]);
-        return false;
-    });
     hooks::add_guard(0x5d2b44u, [](ppu::Context& c) {
         static std::atomic<int> n{0};
         if (n.fetch_add(1) < 3)
             std::fprintf(stderr, "[entry] r3=0x%llx r4=0x%llx r31=0x%llx lr=0x%llx\n",
                          (unsigned long long)c.gpr[3], (unsigned long long)c.gpr[4],
                          (unsigned long long)c.gpr[31], (unsigned long long)c.lr);
-        return false;
-    });
-    hooks::add_guard(0x5d2c08u, [](ppu::Context& c) {
-        static std::atomic<int> n{0};
-        if (n.fetch_add(1) < 4)
-            std::fprintf(stderr, "[vcall] r31=0x%llx r9=0x%llx ctr=0x%llx r3=0x%llx\n",
-                         (unsigned long long)c.gpr[31], (unsigned long long)c.gpr[9],
-                         (unsigned long long)c.ctr, (unsigned long long)c.gpr[3]);
         return false;
     });
 
