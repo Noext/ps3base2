@@ -27,8 +27,21 @@
 extern "C" {
 uint16_t g_web_pad_words[4] = {0, 0, 0, 0};
 uint32_t g_web_pad_connected = 0;
+uintptr_t ps3_pad_words_address() { return reinterpret_cast<uintptr_t>(&g_web_pad_words); }
+uintptr_t ps3_pad_connected_address() { return reinterpret_cast<uintptr_t>(&g_web_pad_connected); }
+
+
+
+
+
 float* g_audio_ring_memory = nullptr;
 uint32_t g_audio_ring_frames = 0;
+void ps3_set_audio_ring(uintptr_t ptr, uint32_t frames) {
+    g_audio_ring_memory = reinterpret_cast<float*>(ptr);
+    g_audio_ring_frames = frames;
+}
+uint32_t ps3_audio_ring_frames() { return g_audio_ring_frames; }
+uintptr_t ps3_audio_ring_address() { return reinterpret_cast<uintptr_t>(g_audio_ring_memory); }
 }
 
 namespace host {
