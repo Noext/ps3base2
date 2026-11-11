@@ -126,16 +126,25 @@ void load_command_queue() {
          * of five states, so a long repeating series traverses most of it. Built at
          * run time rather than written out: 200 presses would be 200 literals. */
         struct Step { const char* name; };
+        /* The real traversal, from tools/drive_screens.py's state machine:
+         *   DIALOG -> z, MENU -> z, LIST -> z (cursor starts on "Create New World"),
+         *   FORM -> six presses, then WORLD.
+         * The earlier script pressed blindly; this one reproduces the order the
+         * native driver proved reaches the world. The gap is 3 s in the driver,
+         * which we keep: a menu that has not finished drawing eats a press. */
+        /* The pattern round 116 proved reaches the menu: down then cross,
+         * repeated. Plain cross-only presses do not move the menu cursor, which
+         * is what made the previous attempt a regression (menu: 0 against 1). */
         static const Step steps[] = {
-            {"down"}, {"cross"}, {"cross"}, {"cross"}, {"cross"}, {"cross"},
-            {"down"}, {"cross"}, {"cross"}, {"cross"}, {"cross"}, {"cross"},
+            {"down"}, {"cross"}, {"cross"}, {"cross"}, {"cross"}, {"down"},
+            {"cross"}, {"cross"}, {"cross"}, {"cross"}, {"down"}, {"cross"},
         };
         char line_buf[64];
         std::vector<std::string> script;
         script.reserve(600);
         for (int rep = 0; rep < 50; rep++)
             for (const Step& st : steps) {
-                std::snprintf(line_buf, sizeof line_buf, "%s 150 500", st.name);
+                std::snprintf(line_buf, sizeof line_buf, "%s 150 1200", st.name);
                 script.push_back(line_buf);
             }
         for (const std::string& line : script) {
