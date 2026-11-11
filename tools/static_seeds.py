@@ -172,6 +172,43 @@ def descriptor_seeds(d, phdrs, lo, hi, toc):
     return out
 
 
+def code_tables(d, phdrs, lo, hi):
+    """Runs of code addresses in a data segment: jump tables, not descriptors.
+
+    A {code, toc} descriptor and a jump table look nothing alike in memory. The
+    descriptor alternates code and TOC; a jump table is a run of code addresses
+    with no TOC anywhere near it:
+
+        013f64a8: 00d19ce4  00d19d10  00d19d30  00d19e04  00d19e9c  00d19f48
+
+    Red Dead Redemption dispatches through these, and an indirect target that
+    lives in one is invisible to every other scan: not an OPD (no TOC), not a
+    lis/addi pair (the address is in a table, not in code), not a relocation (a
+    disc ELF has none). That is why 0x00d19e04 and 0x00d1bbec stayed missing while
+    38,522 descriptors were found.
+
+    A run is three or more consecutive 4-byte words inside the code segment.
+    Three rather than two because two code pointers next to each other are
+    common in ordinary data; a run of three is a dispatch table.
+    """
+    out = set()
+    for p in phdrs:
+        if p["type"] != 1 or (p["flags"] & 1) or not p["filesz"]:
+            continue
+        blob = d[p["off"]:p["off"] + p["filesz"]]
+        run = []
+        for k in range(0, len(blob) - 3, 4):
+            code, = struct.unpack_from(">I", blob, k)
+            if lo <= code < hi and code % 4 == 0:
+                run.append(code)
+                continue
+            if len(run) >= 3:
+                out.update(run)
+            run = []
+        if len(run) >= 3:
+            out.update(run)
+    return out
+
 def code_address_seeds(d, phdrs, lo, hi):
     """Addresses built at run time by a lis/addi (or lis/ori) pair in the code.
 
@@ -226,6 +263,12 @@ def main():
     ap.add_argument("--out", default="")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--name", default="")
+    ap.add_argument("--tables", action="store_true",
+                    help="include jump-table targets. OFF by default: the first run of this "
+                         "scan added 3,460 functions at once and the title segfaulted in its "
+                         "renderer. A table word is often a switch LABEL inside a function "
+                         "already found, not a new entry, so lifting it as one splits a "
+                         "function. Enable only with that classification in place.")
     ap.add_argument("--code-addresses", action="store_true",
                     help="also scan lis/addi pairs (useful for an EBOOT, which has no relocations)")
     args = ap.parse_args()
@@ -237,8 +280,10 @@ def main():
     toc = image_toc(d, phdrs, args.elf)
     rel = reloc_seeds(d, phdrs, lo, hi)
     desc = descriptor_seeds(d, phdrs, lo, hi, toc)
+    # Off unless asked for: see --tables. A table word is usually a switch label.
+    tables = code_tables(d, phdrs, lo, hi) if args.tables else set()
     code_addrs = code_address_seeds(d, phdrs, lo, hi) if args.code_addresses else set()
-    allseeds = rel | desc | code_addrs
+    allseeds = rel | desc | code_addrs | tables
 
     name = args.name or os.path.basename(args.elf)
     info = {"image": name, "text_lo": lo, "text_hi": hi, "toc": toc,

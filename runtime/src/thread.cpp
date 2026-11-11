@@ -51,12 +51,23 @@ void body(std::shared_ptr<Thread> t) {
         status = t->ctx.gpr[3];
     } catch (const lv2::ThreadExit& e) {
         status = e.status;
+        /* The lr names the lifted function that asked to exit, which is what
+         * turns "thread X exited 0xdeadc0de" into "this function chose to stop".
+         * The status alone cannot be attributed: the title builds 0xdeadc0de
+         * with lis/oris at 0x005331c0, so it appears nowhere in a file. */
+        LOG_INFO("ppu", "thread 0x%x '%s' sys_ppu_thread_exit(0x%llx) from lr=0x%08x %s",
+                 t->id, t->name.c_str(), static_cast<unsigned long long>(e.status),
+                 static_cast<uint32_t>(t->ctx.lr),
+                 lv2::has_code_at(static_cast<uint32_t>(t->ctx.lr)) ? "(lifted)" : "(not lifted)");
     } catch (const lv2::ProcessExit& e) {
-        LOG_INFO("ppu", "process exit %d from thread 0x%x", e.status, t->id);
+        LOG_INFO("ppu", "process exit %d from thread 0x%x lr=0x%08x %s", e.status, t->id,
+                 static_cast<uint32_t>(t->ctx.lr),
+                 lv2::has_code_at(static_cast<uint32_t>(t->ctx.lr)) ? "(lifted)" : "(not lifted)");
         std::fflush(nullptr);
         std::quick_exit(e.status);
     }
-    LOG_INFO("ppu", "thread 0x%x '%s' exit 0x%llx", t->id, t->name.c_str(), static_cast<unsigned long long>(status));
+    LOG_INFO("ppu", "thread 0x%x '%s' exit 0x%llx lr=0x%08x", t->id, t->name.c_str(),
+             static_cast<unsigned long long>(status), static_cast<uint32_t>(t->ctx.lr));
     {
         std::lock_guard lk(t->lock);
         t->exited = true;

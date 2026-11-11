@@ -309,11 +309,34 @@ int sample_pcs(void* native, void** pcs, int depth) {
 void handle(int sig, void (*fn)(int, siginfo_t*, void*), struct sigaction* old) {
     struct sigaction sa{};
     sa.sa_sigaction = fn;
-    sa.sa_flags = SA_SIGINFO | SA_RESTART | SA_NODEFER;
+    /* SA_ONSTACK: the handler runs on the alternate stack installed by
+     * install_alt_stack(). Without it a fault caused by a stack overflow cannot
+     * be reported at all -- the handler has no room to run and the process dies
+     * with a bare "Segmentation fault" and no log, which is exactly what the
+     * renderer crash produced. */
+    sa.sa_flags = SA_SIGINFO | SA_RESTART | SA_NODEFER | SA_ONSTACK;
     sigemptyset(&sa.sa_mask);
     sigaction(sig, &sa, old);
 }
 
+}
+
+/* One alternate signal stack PER THREAD.
+ *
+ * sigaltstack() is per-thread: calling it once on the main thread leaves every
+ * other thread -- the renderer, the PPU workers, the sysutil pump -- without a
+ * stack for the handler, so their faults cannot be reported. This is called from
+ * install() and again from each thread entry. */
+void install_alt_stack() {
+    static thread_local std::vector<uint8_t> stack;
+    if (!stack.empty()) return;
+    stack.resize(SIGSTKSZ < 64 * 1024 ? 64 * 1024 : SIGSTKSZ);
+    stack_t ss{};
+    ss.ss_sp = stack.data();
+    ss.ss_size = stack.size();
+    ss.ss_flags = 0;
+    if (sigaltstack(&ss, nullptr) != 0)
+        LOG_WARN("crash", "sigaltstack failed on this thread: no fault report here");
 }
 
 void install() {
@@ -327,6 +350,7 @@ void install() {
     }
     void* warm[4];
     backtrace_port::capture(warm, 4);
+    install_alt_stack();
     handle(SIGSEGV, fault_handler, &g_old_segv);
     handle(SIGBUS, fault_handler, &g_old_bus);
     handle(SIGILL, fault_handler, &g_old_ill);
