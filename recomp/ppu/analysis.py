@@ -135,7 +135,7 @@ def jump_table(img, bctr):
       7. every target lands inside the function that contains the bctr
     """
     lo_fn = getattr(img, "current_function", None)
-    window = [(a, img.word(a)) for a in range(max(img.text_lo, bctr - 4 * 24), bctr, 4)]
+    window = [(a, img.word(a)) for a in range(max(img.text_lo, bctr - 4 * 48), bctr, 4)]
     if not window:
         return None
 
@@ -154,8 +154,13 @@ def jump_table(img, bctr):
                     default_off = branch_target(a2, w2)
                     break
             break
-    if bound is None or default_off is None:
+    # The immediate bound can sit further up than the window reaches, so a
+    # conditional branch to the default is enough to establish the shape; the
+    # entry scan below stops at the first word that is not a code address.
+    if default_off is None:
         return None
+    if bound is None:
+        bound = 4096
 
     # 2. Base: lis/addi/addic, or a TOC load.
     base = None
