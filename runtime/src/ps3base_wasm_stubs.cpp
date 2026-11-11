@@ -68,7 +68,10 @@ extern "C" void ps3base_block_trace_at(uint32_t pc, uint32_t bo, uint32_t bi, bo
     /* Attribute by the BLOCK ADDRESS now that the lifter emits it. The lr was the
      * caller of the dispatcher, so every callee entered from the watched range
      * passed the filter and the trace mixed functions. */
-    const bool kWant = pc >= 0x002da36cu && pc < 0x002dac00u;
+    /* Round 223 established that every dependency of _cellGcmInitBody succeeds,
+     * so 0x80010004 is computed inside the body. Watch the body's own branches:
+     * the path that reaches the error return names the check that fails. */
+    const bool kWant = pc >= 0x33000cc0u && pc < 0x33003000u;
     if (kWant && n <= 60) {
         /* The first five branches form a loop. If one of its counters never
          * advances, the loop cannot end and branch 6 is never reached. Print the
