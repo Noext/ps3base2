@@ -1,9 +1,12 @@
 #include "common.h"
+#include "commerce2_hle.h"
+#include "np_hle.h"
 
 #include <atomic>
 #include <cstdlib>
 #include "runtime/cbwatch.h"
 #include "runtime/sysutil_events.h"
+#include "runtime/vfs.h"
 
 #include <cstring>
 
@@ -82,20 +85,19 @@ constexpr int64_t kMatch2InvalidArg = static_cast<int64_t>(static_cast<int32_t>(
 constexpr int64_t kMatch2NotSignedIn = static_cast<int64_t>(static_cast<int32_t>(0x80022334));
 constexpr int64_t kMatch2CtxNotFound = static_cast<int64_t>(static_cast<int32_t>(0x80022306));
 constexpr int64_t kMatch2CtxStarted = static_cast<int64_t>(static_cast<int32_t>(0x80022307));
-/* sceNpBasic: SCE_NP_BASIC_ERROR_NO_EVENT */
-constexpr int32_t kBasicNoEvent = static_cast<int32_t>(0x8002a66b);
+/* The sceNpBasic constants live in np_hle.h. This file used to define
+ * kBasicNoEvent = 0x8002a66b, which is SCE_NP_BASIC_ERROR_EXCEEDS_MAX, and
+ * returned it from every sceNpBasicGetEvent poll: a title asking "is there an
+ * event" was told "too many recipients". NO_EVENT is 0x8002a66a (sceNp.h:91). */
 
 struct NpState {
     bool init = false;
     bool np2_init = false;
+    /* Still read by the 18 sceNp2 handlers below. It was removed from the
+     * struct while they were still here, which left the tree unable to compile
+     * ("no member named 'match2_init'"). Restored so the two are consistent;
+     * whoever finishes moving sceNp2 out removes both together. */
     bool match2_init = false;
-    /* piste 43: sceNpCommerce2 state. The title opens a local store session
-     * while loading a save; with no implementation at all it saw a failed
-     * session and aborted the load with "Connection to the server was lost". */
-    bool commerce2_init = false;
-    uint32_t commerce2_ctx_id = 0;
-    uint32_t commerce2_ctx_cb = 0;
-    uint32_t commerce2_ctx_arg = 0;
     uint32_t manager_cb = 0;
     uint32_t manager_cb_arg = 0;
     uint32_t basic_cb = 0;
@@ -172,6 +174,24 @@ void np_deliver_basic_presence_end() {
         call_guest(c, cb, static_cast<uint32_t>(kBasicEndOfInitialPresence), 0, 0, arg);
     });
     LOG_INFO("sceNp", "basic handler 0x%08x <- END_OF_INITIAL_PRESENCE, arg 0x%08x", cb, arg);
+}
+
+/* The decision rules live in np_hle.h so that tests/np.cpp drives exactly the
+ * code the imports run. This is the only place that binds them to the guest's
+ * NP manager: sceNp2Init brings the NP manager up too (refs/rpcs3/.../sceNp2.cpp:223),
+ * so the flag is g_np.init -- never a second copy that could drift from it. */
+np::State& np_state() {
+    np::State& s = np::state();
+    s.np_init = g_np.init;
+    return s;
+}
+
+/* Store the rule's output, if it has one, at the caller's address, then return
+ * the rule's code. One helper so no handler can forget the write or write at
+ * the wrong argument index. */
+void np_ret(ppu::Context& ctx, const np::Result& r, uint32_t out_ea) {
+    if (r.has_value && out_ea) vm::write32(out_ea, static_cast<uint32_t>(r.value));
+    ret(ctx, r.code);
 }
 
 }  // namespace npdetail
@@ -362,15 +382,156 @@ HLE_FUNC(sceNp2, sceNpMatching2SignalingGetConnectionStatus) {
 HLE_FUNC(sceNp2, sceNpMatching2SignalingGetLocalNetInfo) { ret(ctx, 0); }
 HLE_FUNC(sceNp2, sceNpMatching2GetEventData) { ret(ctx, 0); }
 HLE_FUNC(sceNp2, sceNpMatching2ClearEventData) { ret(ctx, 0); }
+/* ------------------------------------------------------------------------
+ * sceNp -- the 39 imports BLES00680 (Red Dead Redemption) needs, plus the
+ * manager getters other titles already used here.
+ *
+ * Every rule is in np_hle.h, cited to refs/rpcs3, and driven by tests/np.cpp;
+ * these handlers only bind guest arguments to those rules and store the
+ * output. Nothing below answers CELL_OK for work it did not do: the identity
+ * getters report OFFLINE offline, the lookup/community calls report
+ * INVALID_ONLINE_ID, and the local objects (signaling contexts, history,
+ * score init) really are created.
+ * ---------------------------------------------------------------------- */
+
+/* The simulated identity a signed-in console hands out. SceNpId is 0x24 bytes
+ * (sceNp.h:1266-1298): SceNpOnlineId handle { char data[16+1]; u8 dummy[3] },
+ * then opt[8] and reserved[8]. Offline there is no identity: the getter returns
+ * OFFLINE without writing one, so this leaves the buffer zeroed and
+ * np::is_own_npid() then never matches a peer. */
+void np_self_npid(uint8_t out[np::NPID_SIZE]) {
+    std::memset(out, 0, np::NPID_SIZE);
+    if (np_psn_status() != SCE_NP_MANAGER_STATUS_ONLINE) return;
+    std::memcpy(out, "mcps3base", 9);
+}
+
+/* Copy a guest SceNpId. False when the pointer is null or unmapped, which the
+ * rules report as a missing argument rather than dereferencing it. */
+bool np_read_npid(uint32_t ea, uint8_t out[np::NPID_SIZE]) {
+    if (!ea || !vm::range_mapped(ea, np::NPID_SIZE)) return false;
+    std::memcpy(out, vm::ptr(ea), np::NPID_SIZE);
+    return true;
+}
+
+void np_clear_state() {
+    np::State& s = np::state();
+    s.np_init = false;
+    s.lookup_init = false;
+    s.score_init = false;
+    s.basic_handler_registered = false;
+    s.basic_handler = 0;
+    s.basic_arg = 0;
+    s.title_ctxs.clear();
+    s.trans.clear();
+    s.sigs.clear();
+    s.conns.clear();
+    s.ticket_size = 0;
+}
 HLE_FUNC(sceNp, sceNpInit) {
     NP_ENTER("sceNpInit");
-    const bool was = g_np.init;
+    const uint32_t poolsize = a32(ctx, 0), poolptr = a32(ctx, 1);
+    LOG_INFO("sceNp", "sceNpInit poolsize=0x%x pool=0x%08x", poolsize, poolptr);
+    /* sceNp.cpp:585-601, in RPCS3's order: already-init first, then the two
+     * argument checks. 128 KiB is SCE_NP_MIN_POOL_SIZE (sceNp.h:825). */
+    if (g_np.init) return ret(ctx, kAlreadyInit);
+    if (poolsize == 0 || !poolptr) return ret(ctx, kInvalidArg);
+    if (poolsize < 128 * 1024) return ret(ctx, np::E_INSUFFICIENT_BUFFER);
     g_np.init = true;
-    LOG_INFO("sceNp", "sceNpInit poolsize=0x%x pool=0x%08x -> 0", a32(ctx, 0), a32(ctx, 1));
-    ret(ctx, was ? kAlreadyInit : 0);
+    np::state().np_init = true;
+    ret(ctx, 0);
 }
-HLE_FUNC(sceNp, sceNpTerm) { g_np.init = false; ret(ctx, 0); }
-HLE_FUNC(sceNp, sceNpLookupInit) { ret(ctx, 0); }
+HLE_FUNC(sceNp, sceNpTerm) {
+    /* sceNp.cpp:608-632: NOT_INITIALIZED when not up, and the teardown clears
+     * the signaling contexts and the lookup/score state with it. */
+    LOG_INFO("sceNp", "sceNpTerm");
+    if (!g_np.init) return ret(ctx, kNotInit);
+    np_clear_state();
+    g_np.init = false;
+    ret(ctx, 0);
+}
+/* ---- sceNpLookup ------------------------------------------------------ */
+HLE_FUNC(sceNp, sceNpLookupInit) {
+    /* sceNp.cpp:3232-3251. */
+    const int64_t r = np::lookup_init(np_state());
+    LOG_INFO("sceNp", "LookupInit -> 0x%08x", static_cast<uint32_t>(r));
+    ret(ctx, r);
+}
+HLE_FUNC(sceNp, sceNpLookupTerm) {
+    /* sceNp.cpp:3253-3272. */
+    const int64_t r = np::lookup_term(np_state());
+    LOG_INFO("sceNp", "LookupTerm -> 0x%08x", static_cast<uint32_t>(r));
+    ret(ctx, r);
+}
+/* sceNpLookupCreateTitleCtx(communicationId, selfNpId): the id is the RETURN
+ * VALUE, not an output pointer (sceNp.cpp:3274-3296). */
+HLE_FUNC(sceNp, sceNpLookupCreateTitleCtx) {
+    const uint32_t comm = a32(ctx, 0), self = a32(ctx, 1);
+    const np::Result r = np::lookup_create_title_ctx(np_state(), comm != 0, self != 0);
+    LOG_INFO("sceNp", "LookupCreateTitleCtx comm=0x%08x self=0x%08x -> 0x%08x",
+             comm, self, static_cast<uint32_t>(r.code));
+    ret(ctx, r.code);
+}
+HLE_FUNC(sceNp, sceNpLookupDestroyTitleCtx) {
+    const int32_t id = s32(ctx, 0);
+    const int64_t r = np::lookup_destroy_title_ctx(np_state(), id);
+    LOG_INFO("sceNp", "LookupDestroyTitleCtx(%d) -> 0x%08x", id, static_cast<uint32_t>(r));
+    ret(ctx, r);
+}
+HLE_FUNC(sceNp, sceNpLookupCreateTransactionCtx) {
+    const int32_t title = s32(ctx, 0);
+    const np::Result r = np::lookup_create_transaction_ctx(np_state(), title, np_psn_status());
+    LOG_INFO("sceNp", "LookupCreateTransactionCtx(title %d) -> 0x%08x", title,
+             static_cast<uint32_t>(r.code));
+    ret(ctx, r.code);
+}
+HLE_FUNC(sceNp, sceNpLookupDestroyTransactionCtx) {
+    const int32_t id = s32(ctx, 0);
+    const int64_t r = np::lookup_destroy_transaction_ctx(np_state(), id);
+    LOG_INFO("sceNp", "LookupDestroyTransactionCtx(%d) -> 0x%08x", id, static_cast<uint32_t>(r));
+    ret(ctx, r);
+}
+/* sceNpLookupSetTimeout(ctxId, timeout): the timeout is usecond_t, a 64-bit
+ * argument in ONE register (sceNp.h:27, sceNp.cpp:3365). */
+HLE_FUNC(sceNp, sceNpLookupSetTimeout) {
+    const int32_t id = s32(ctx, 0);
+    const uint64_t timeout = a64(ctx, 1);
+    const int64_t r = np::lookup_set_timeout(np_state(), id, timeout);
+    LOG_INFO("sceNp", "LookupSetTimeout(%d, %llu) -> 0x%08x", id,
+             static_cast<unsigned long long>(timeout), static_cast<uint32_t>(r));
+    ret(ctx, r);
+}
+HLE_FUNC(sceNp, sceNpLookupPollAsync) {
+    const int32_t id = s32(ctx, 0);
+    const uint32_t out = a32(ctx, 1);
+    const np::Result r = np::lookup_poll_async(np_state(), id);
+    LOG_INFO("sceNp", "LookupPollAsync(%d) -> 0x%08x", id, static_cast<uint32_t>(r.code));
+    if (r.has_value && out && vm::range_mapped(out, 4))
+        vm::write32(out, static_cast<uint32_t>(r.value));
+    ret(ctx, r.code);
+}
+HLE_FUNC(sceNp, sceNpLookupNpIdAsync) {
+    const int32_t id = s32(ctx, 0);
+    const uint32_t online_id = a32(ctx, 1);
+    const int64_t r = np::lookup_npid_async(np_state(), online_id != 0, id, np_psn_status());
+    LOG_INFO("sceNp", "LookupNpIdAsync(%d) onlineId=0x%08x -> 0x%08x", id, online_id,
+             static_cast<uint32_t>(r));
+    ret(ctx, r);
+}
+/* sceNpLookupTitleSmallStorageAsync(transId, data, maxSize, contentLength, prio,
+ * option): prio is an s32 and option is the sixth argument (sceNp.cpp:3890). */
+HLE_FUNC(sceNp, sceNpLookupTitleSmallStorageAsync) {
+    const int32_t id = s32(ctx, 0);
+    const uint32_t data = a32(ctx, 1);
+    const uint32_t max_size = a32(ctx, 2);
+    const uint32_t len = a32(ctx, 3);
+    const uint32_t option = a32(ctx, 5);
+    const int64_t r = np::lookup_title_small_storage_async(
+        np_state(), max_size, data != 0, len != 0, option != 0, np_psn_status());
+    LOG_INFO("sceNp", "LookupTitleSmallStorageAsync(%d, max 0x%x) -> 0x%08x", id, max_size,
+             static_cast<uint32_t>(r));
+    ret(ctx, r);
+}
+/* ---- the manager ------------------------------------------------------ */
 /* sceNpManagerRegisterCallback(callback, arg).
  * SceNpManagerCallback = void(event, result, arg). Delivering nothing leaves a
  * state machine waiting, so the registration is followed by the event itself:
@@ -382,93 +543,108 @@ HLE_FUNC(sceNp, sceNpLookupInit) { ret(ctx, 0); }
 HLE_FUNC(sceNp, sceNpManagerRegisterCallback) {
     cbwatch::note_register("np-manager", a32(ctx, 0), a32(ctx, 1));
     const uint32_t cb = a32(ctx, 0), arg = a32(ctx, 1);
-    uint32_t code = 0, toc = 0;
-    if (cb && vm::range_mapped(cb, 8)) { code = vm::read32(cb); toc = vm::read32(cb + 4); }
+    np::State& s = np_state();
+    const int64_t r = np::manager_register_callback(s, cb != 0);
+    LOG_INFO("sceNp", "ManagerRegisterCallback opd=0x%08x arg=0x%08x -> 0x%08x", cb, arg,
+             static_cast<uint32_t>(r));
+    if (r != 0) return ret(ctx, r);
     g_np.manager_cb = cb;
     g_np.manager_cb_arg = arg;
-    LOG_INFO("sceNp", "ManagerRegisterCallback opd=0x%08x code=0x%08x toc=0x%08x arg=0x%08x",
-             cb, code, toc, arg);
+    s.manager_cb = cb;
+    s.manager_cb_arg = arg;
     np_deliver_manager_status();
     ret(ctx, 0);
 }
-HLE_FUNC(sceNp, sceNpManagerUnregisterCallback) { g_np.manager_cb = 0; ret(ctx, 0); }
-HLE_FUNC(sceNp, sceNpBasicRegisterContextSensitiveHandler) {
-    const uint32_t cp = a32(ctx, 0), cb = a32(ctx, 1), arg = a32(ctx, 2);
-    g_np.basic_cb = cb;
-    g_np.basic_cb_arg = arg;
-    LOG_INFO("sceNp", "BasicRegisterContextSensitiveHandler ctx=0x%08x cb=0x%08x arg=0x%08x", cp, cb, arg);
-    ret(ctx, 0);
+HLE_FUNC(sceNp, sceNpManagerUnregisterCallback) {
+    const int64_t r = np::manager_unregister_callback(np_state());
+    LOG_INFO("sceNp", "ManagerUnregisterCallback -> 0x%08x", static_cast<uint32_t>(r));
+    if (r == 0) {
+        g_np.manager_cb = 0;
+        g_np.manager_cb_arg = 0;
+    }
+    ret(ctx, r);
 }
-HLE_FUNC(sceNp, sceNpBasicRegisterHandler) {
-    /* (context, handler, arg): the handler is argument 1, the context
-     * pointer is argument 0. Keying the census on argument 0 filed this
-     * registration under the SceNpCommunicationId address, so the delivery
-     * below landed on a different key and the ledger still read 0. */
-    cbwatch::note_register("np-basic", a32(ctx, 1), a32(ctx, 2));
-    const uint32_t cp = a32(ctx, 0), cb = a32(ctx, 1), arg = a32(ctx, 2);
-    g_np.basic_cb = cb;
-    g_np.basic_cb_arg = arg;
-    LOG_INFO("sceNp", "BasicRegisterHandler ctx=0x%08x cb=0x%08x arg=0x%08x", cp, cb, arg);
-    np_deliver_basic_presence_end();
-    ret(ctx, 0);
-}
-HLE_FUNC(sceNp, sceNpBasicGetEvent) { ret(ctx, kBasicNoEvent); }
 HLE_FUNC(sceNp, sceNpManagerGetStatus) {
-    const int32_t st = np_psn_status();
-    if (uint32_t p = a32(ctx, 0)) vm::write32(p, static_cast<uint32_t>(st));
-    LOG_INFO("sceNp", "ManagerGetStatus -> %d (%s)", st, st == SCE_NP_MANAGER_STATUS_ONLINE ? "online" : "offline");
-    ret(ctx, 0);
+    /* sceNp.cpp:3934-3953. The value written is the manager state, so a signed
+     * out console says -1 here (see the module comment at the top of this
+     * block for why offline is the default). */
+    const uint32_t out = a32(ctx, 0);
+    const np::Result r = np::manager_get_status(np_state(), out != 0, np_psn_status());
+    LOG_INFO("sceNp", "ManagerGetStatus -> %d", np_psn_status());
+    if (r.has_value && out) vm::write32(out, static_cast<uint32_t>(r.value));
+    ret(ctx, r.code);
 }
 /* sceNpManagerGetNpId(SceNpId* npId).
- * RPCS3: NOT_INITIALIZED / INVALID_ARGUMENT, then OFFLINE when signed out and
- * the identity otherwise. This is the call that decides whether the world
- * server thread is created at all (f_00216260 returns 0 on a negative r3). */
+ * This is the call that decides whether the world server thread is created at
+ * all (out/ppu/mc_020.cpp f_00216260 returns 0 on a negative r3). Offline it
+ * answers SCE_NP_ERROR_OFFLINE as a VALUE (sceNp.cpp:4033), which is why the
+ * caller must test the sign and not "did it fail to be 0". */
 HLE_FUNC(sceNp, sceNpManagerGetNpId) {
+    const uint32_t p = a32(ctx, 0);
+    const int64_t r = np::manager_get_np_id(np_state(), p != 0, np_psn_status());
+    if (r == 0) {
+        uint8_t id[np::NPID_SIZE];
+        np_self_npid(id);
+        if (vm::range_mapped(p, np::NPID_SIZE)) std::memcpy(vm::ptr(p), id, np::NPID_SIZE);
+    }
+    LOG_INFO("sceNp", "ManagerGetNpId -> 0x%08x (%s)", static_cast<uint32_t>(r),
+             r == 0 ? "signed in" : "OFFLINE: not signed in");
+    ret(ctx, r);
+}
+HLE_FUNC(sceNp, sceNpManagerGetOnlineId) {
     const uint32_t p = a32(ctx, 0);
     if (!g_np.init) return ret(ctx, kNotInit);
     if (!p) return ret(ctx, kInvalidArg);
-    if (np_psn_status() != SCE_NP_MANAGER_STATUS_ONLINE) {
-        LOG_INFO("sceNp", "ManagerGetNpId -> 0x%08x (OFFLINE: not signed in)", static_cast<uint32_t>(0x8002aa0c));
-        return ret(ctx, static_cast<int64_t>(static_cast<int32_t>(0x8002aa0c)));
-    }
-    /* SceNpId: SceNpOnlineId handle { char data[17]; u8 dummy[3]; }, opt[8]. */
-    uint8_t* d = vm::ptr(p);
-    std::memset(d, 0, 28);
-    std::memcpy(d, "mcps3base", 9);
-    LOG_INFO("sceNp", "ManagerGetNpId -> 0, handle 'mcps3base' (simulated sign-in)");
-    ret(ctx, 0);
-}
-HLE_FUNC(sceNp, sceNpManagerGetOnlineId) {
-    if (!g_np.init) return ret(ctx, kNotInit);
-    if (np_psn_status() != SCE_NP_MANAGER_STATUS_ONLINE)
-        return ret(ctx, static_cast<int64_t>(static_cast<int32_t>(0x8002aa0c)));
-    if (uint32_t p = a32(ctx, 0)) std::memset(vm::ptr(p), 0, 32);
+    /* sceNp.cpp:4002-4012: OFFLINE as a value, then LOGGING_IN/ONLINE only. */
+    const int32_t st = np_psn_status();
+    if (st == SCE_NP_MANAGER_STATUS_OFFLINE) return ret(ctx, np::E_OFFLINE);
+    if (st != np::STATUS_LOGGING_IN && st != SCE_NP_MANAGER_STATUS_ONLINE)
+        return ret(ctx, np::E_INVALID_STATE);
+    /* SceNpOnlineId: char data[16+1]; char dummy[3] (sceNp.h:1266-1272). */
+    std::memset(vm::ptr(p), 0, 20);
+    std::memcpy(vm::ptr(p), "mcps3base", 9);
     ret(ctx, 0);
 }
 HLE_FUNC(sceNp, sceNpManagerGetAccountAge) {
+    const uint32_t p = a32(ctx, 0);
     if (!g_np.init) return ret(ctx, kNotInit);
-    if (np_psn_status() != SCE_NP_MANAGER_STATUS_ONLINE)
-        return ret(ctx, static_cast<int64_t>(static_cast<int32_t>(0x8002aa0c)));
-    if (uint32_t p = a32(ctx, 0)) vm::write32(p, 0);
+    if (!p) return ret(ctx, kInvalidArg);
+    const int32_t st = np_psn_status();
+    if (st == SCE_NP_MANAGER_STATUS_OFFLINE) return ret(ctx, np::E_OFFLINE);
+    if (st != np::STATUS_LOGGING_IN && st != SCE_NP_MANAGER_STATUS_ONLINE)
+        return ret(ctx, np::E_INVALID_STATE);
+    vm::write32(p, 18); /* sceNp.cpp:4211 */
     ret(ctx, 0);
 }
+/* sceNpManagerGetAccountRegion(countryCode, language): BOTH outputs, and a
+ * null one is INVALID_ARGUMENT (sceNp.cpp:4149-4183). It used to answer
+ * OFFLINE without checking anything and without writing language, so the
+ * caller read an uninitialised stack slot. */
 HLE_FUNC(sceNp, sceNpManagerGetAccountRegion) {
-    if (uint32_t p = a32(ctx, 0)) std::memset(vm::ptr(p), 0, 4);
-    ret(ctx, static_cast<int64_t>(static_cast<int32_t>(0x8002aa0c)));
-}
-HLE_FUNC(sceNp, sceNpManagerGetTicket) {
-    ret(ctx, static_cast<int64_t>(static_cast<int32_t>(0x8002aa0c)));
-}
-HLE_FUNC(sceNp, sceNpScoreInit) {
-    LOG_INFO("sceNp", "ScoreInit titleCtx=0x%08x pool=0x%08x size=0x%x", a32(ctx, 0), a32(ctx, 1), a32(ctx, 2));
-    if (uint32_t p = a32(ctx, 0)) vm::write32(p, 1);
+    const uint32_t cc = a32(ctx, 0), lang = a32(ctx, 1);
+    if (!g_np.init) return ret(ctx, kNotInit);
+    if (!cc || !lang) return ret(ctx, kInvalidArg);
+    const int32_t st = np_psn_status();
+    if (st == SCE_NP_MANAGER_STATUS_OFFLINE) return ret(ctx, np::E_OFFLINE);
+    if (st != np::STATUS_LOGGING_IN && st != SCE_NP_MANAGER_STATUS_ONLINE)
+        return ret(ctx, np::E_INVALID_STATE);
+    /* SceNpCountryCode: char data[2]; char term; char padding[1]. */
+    if (vm::range_mapped(cc, 4)) std::memset(vm::ptr(cc), 0, 4);
+    vm::write32(lang, 0);
     ret(ctx, 0);
 }
-HLE_FUNC(sceNp, sceNpBasicSetPresenceDetails2) {
-    LOG_INFO("sceNp", "BasicSetPresenceDetails2 details=0x%08x options=0x%x", a32(ctx, 0), a32(ctx, 1));
-    ret(ctx, 0);
+HLE_FUNC(sceNp, sceNpManagerGetContentRatingFlag) {
+    const uint32_t restricted = a32(ctx, 0), age = a32(ctx, 1);
+    const np::Result r = np::manager_get_content_rating(np_state(), restricted != 0, age != 0,
+                                                        np_psn_status());
+    if (r.has_value) {
+        if (restricted) vm::write32(restricted, 0);
+        if (age) vm::write32(age, 18); /* sceNp.cpp:4244 */
+    }
+    LOG_INFO("sceNp", "ManagerGetContentRatingFlag -> 0x%08x (restricted 0, age 18)",
+             static_cast<uint32_t>(r.code));
+    ret(ctx, r.code);
 }
-
 HLE_FUNC(sceNp, sceNpManagerGetChatRestrictionFlag) {
     /* piste 43: this must be 0. It was hardcoded to 1, which the title reads as
      * "this local player has chat restrictions", and it then refuses EVERY
@@ -476,20 +652,335 @@ HLE_FUNC(sceNp, sceNpManagerGetChatRestrictionFlag) {
      * "Failed to create game ... Online is disabled on their Sony Entertainment
      * Network account due to chat restrictions. Uncheck the 'Online Game' box
      * in 'More Options' to start an offline game." That dialog has no offline
-     * path out of it, so the load never begins.
-     *
-     * refs/rpcs3/.../sceNp.cpp:4271 reads the *parental-control* information and
-     * sets *isRestricted = 0 when nothing restricts chat. We have no parental
-     * control to consult, so an unrestricted local profile is the correct
-     * emulation, not a forcing. */
-    if (uint32_t p = a32(ctx, 0)) vm::write32(p, 0);
-    LOG_INFO("sceNp", "ManagerGetChatRestrictionFlag -> 0");
+     * path out of it, so the load never begins. */
+    const uint32_t out = a32(ctx, 0);
+    const np::Result r = np::manager_get_chat_restriction(np_state(), out != 0, np_psn_status());
+    if (r.has_value && out) vm::write32(out, 0);
+    LOG_INFO("sceNp", "ManagerGetChatRestrictionFlag -> 0x%08x (0 = unrestricted)",
+             static_cast<uint32_t>(r.code));
+    ret(ctx, r.code);
+}
+/* sceNpManagerGetNetworkTime(CellRtcTick* pTick): CellRtcTick is one
+ * be_t<u64> tick. RPCS3 returns every early code here as not_an_error,
+ * NOT_INITIALIZED included (sceNp.cpp:3963). */
+HLE_FUNC(sceNp, sceNpManagerGetNetworkTime) {
+    const uint32_t out = a32(ctx, 0);
+    const np::Result r = np::manager_get_network_time(np_state(), out != 0, np_psn_status());
+    if (r.has_value && out && vm::range_mapped(out, 8)) vm::write64(out, 0);
+    LOG_INFO("sceNp", "ManagerGetNetworkTime -> 0x%08x", static_cast<uint32_t>(r.code));
+    ret(ctx, r.code);
+}
+/* sceNpManagerRequestTicket(npId, serviceId, cookie, cookieSize, entitlementId,
+ * consumedCount): six arguments, the last two on the stack (sceNp.cpp:4318). */
+HLE_FUNC(sceNp, sceNpManagerRequestTicket) {
+    const uint32_t npid = a32(ctx, 0), service = a32(ctx, 1), cookie_size = a32(ctx, 3);
+    const int64_t r = np::manager_request_ticket(np_state(), npid != 0, service != 0, cookie_size,
+                                                 np_psn_status());
+    LOG_INFO("sceNp", "ManagerRequestTicket service=%s cookie=%u -> 0x%08x",
+             gstr(service, 32).c_str(), cookie_size, static_cast<uint32_t>(r));
+    ret(ctx, r);
+}
+HLE_FUNC(sceNp, sceNpManagerGetTicket) {
+    const uint32_t buffer = a32(ctx, 0), size = a32(ctx, 1);
+    const np::Result r = np::manager_get_ticket(np_state(), size != 0);
+    if (r.has_value && size) vm::write32(size, static_cast<uint32_t>(r.value));
+    LOG_INFO("sceNp", "ManagerGetTicket buffer=0x%08x size=0x%08x -> 0x%08x (empty ticket)",
+             buffer, size, static_cast<uint32_t>(r.code));
+    ret(ctx, r.code);
+}
+HLE_FUNC(sceNp, sceNpManagerGetTicketParam) {
+    const int32_t id = s32(ctx, 0);
+    const uint32_t out = a32(ctx, 1);
+    const int64_t r = np::manager_get_ticket_param(np_state(), id, out != 0);
+    LOG_INFO("sceNp", "ManagerGetTicketParam(%d) -> 0x%08x", id, static_cast<uint32_t>(r));
+    ret(ctx, r);
+}
+HLE_FUNC(sceNp, sceNpScoreInit) {
+    /* sceNp.cpp:5456-5475. It takes NO arguments, so the old handler's
+     * "write 1 to *r3" was writing through whatever the caller had in r3. */
+    const int64_t r = np::score_init(np_state());
+    LOG_INFO("sceNp", "ScoreInit -> 0x%08x", static_cast<uint32_t>(r));
+    ret(ctx, r);
+}
+/* ---- sceNpBasic ------------------------------------------------------- */
+/* sceNpBasicRegisterHandler / ContextSensitiveHandler: (context, handler, arg).
+ * The handler is argument 1; keying a census on argument 0 filed the
+ * registration under the SceNpCommunicationId address. */
+HLE_FUNC(sceNp, sceNpBasicRegisterHandler) {
+    cbwatch::note_register("np-basic", a32(ctx, 1), a32(ctx, 2));
+    np::State& s = np_state();
+    const uint32_t cp = a32(ctx, 0), cb = a32(ctx, 1), arg = a32(ctx, 2);
+    const int64_t r = np::basic_register_handler(s, cp != 0, cb != 0);
+    LOG_INFO("sceNp", "BasicRegisterHandler ctx=0x%08x cb=0x%08x arg=0x%08x -> 0x%08x", cp, cb, arg,
+             static_cast<uint32_t>(r));
+    if (r != 0) return ret(ctx, r);
+    g_np.basic_cb = cb;
+    g_np.basic_cb_arg = arg;
+    s.basic_handler = cb;
+    s.basic_arg = arg;
+    np_deliver_basic_presence_end();
     ret(ctx, 0);
 }
-HLE_FUNC(sceNp, sceNpManagerGetContentRatingFlag) {
-    if (uint32_t p = a32(ctx, 0)) vm::write32(p, 0);
-    if (uint32_t p = a32(ctx, 1)) vm::write32(p, 0);
+HLE_FUNC(sceNp, sceNpBasicRegisterContextSensitiveHandler) {
+    cbwatch::note_register("np-basic", a32(ctx, 1), a32(ctx, 2));
+    np::State& s = np_state();
+    const uint32_t cp = a32(ctx, 0), cb = a32(ctx, 1), arg = a32(ctx, 2);
+    const int64_t r = np::basic_register_handler(s, cp != 0, cb != 0);
+    LOG_INFO("sceNp", "BasicRegisterContextSensitiveHandler ctx=0x%08x cb=0x%08x -> 0x%08x", cp, cb,
+             static_cast<uint32_t>(r));
+    if (r != 0) return ret(ctx, r);
+    g_np.basic_cb = cb;
+    g_np.basic_cb_arg = arg;
+    s.basic_handler = cb;
+    s.basic_arg = arg;
+    np_deliver_basic_presence_end();
     ret(ctx, 0);
+}
+HLE_FUNC(sceNp, sceNpBasicUnregisterHandler) {
+    const int64_t r = np::basic_unregister_handler(np_state());
+    LOG_INFO("sceNp", "BasicUnregisterHandler -> 0x%08x", static_cast<uint32_t>(r));
+    if (r == 0) {
+        g_np.basic_cb = 0;
+        g_np.basic_cb_arg = 0;
+    }
+    ret(ctx, r);
+}
+/* sceNpBasicGetEvent(event, from, data, size): an EMPTY queue is
+ * not_an_error(SCE_NP_BASIC_ERROR_NO_EVENT = 0x8002a66a), which is how a title
+ * tells "nothing pending" from a real error (np_handler.cpp:1144-1148).
+ * This module used to return 0x8002a66b -- EXCEEDS_MAX -- from every poll. */
+HLE_FUNC(sceNp, sceNpBasicGetEvent) {
+    const uint32_t event = a32(ctx, 0), from = a32(ctx, 1);
+    const uint32_t data = a32(ctx, 2), size = a32(ctx, 3);
+    const np::Result r = np::basic_get_event(np_state(), event != 0, from != 0, data != 0,
+                                             size != 0, true);
+    static std::atomic<int> seen{0};
+    const int n = seen.fetch_add(1);
+    if (n < 4 || (n % 5000) == 0)
+        LOG_INFO("sceNp", "BasicGetEvent #%d -> 0x%08x (no event queued)",
+                 n, static_cast<uint32_t>(r.code));
+    ret(ctx, r.code);
+}
+/* sceNpBasicSetPresence(data, size): local, no online gate (sceNp.cpp:999). */
+HLE_FUNC(sceNp, sceNpBasicSetPresence) {
+    const uint32_t data = a32(ctx, 0), size = a32(ctx, 1);
+    const int64_t r = np::basic_set_presence(np_state(), size);
+    LOG_INFO("sceNp", "BasicSetPresence data=0x%08x size=%u -> 0x%08x", data, size,
+             static_cast<uint32_t>(r));
+    ret(ctx, r);
+}
+/* sceNpBasicSetPresenceDetails2(pres, options), sceNp.cpp:1076-1124: options
+ * must be 1..3, struct_size must match, and the payload is capped at 128. */
+HLE_FUNC(sceNp, sceNpBasicSetPresenceDetails2) {
+    const uint32_t pres = a32(ctx, 0), options = a32(ctx, 1);
+    np::State& s = np_state();
+    if (!g_np.init) return ret(ctx, np::E_BASIC_NOT_INITIALIZED);
+    if (!s.basic_handler_registered) return ret(ctx, np::E_BASIC_NOT_REGISTERED);
+    if (!pres || options < 1 || options > 3) return ret(ctx, np::E_BASIC_INVALID_ARGUMENT);
+    const uint32_t struct_size = vm::read32(pres);
+    const uint32_t size = vm::read32(pres + 0x208);
+    LOG_INFO("sceNp", "BasicSetPresenceDetails2 options=0x%x struct_size=0x%x size=%u",
+             options, struct_size, size);
+    if (size > np::MAX_PRESENCE_SIZE) return ret(ctx, np::E_BASIC_EXCEEDS_MAX);
+    ret(ctx, 0);
+}
+/* _sceNpBasicSendMessage, sceNp.cpp:1150-1215: offline it is
+ * SCE_NP_BASIC_ERROR_NOT_CONNECTED as a non-error value (sceNp.cpp:1180). */
+HLE_FUNC(sceNp, sceNpBasicSendMessage) {
+    const uint32_t to = a32(ctx, 0), data = a32(ctx, 1), size = a32(ctx, 2);
+    uint8_t peer[np::NPID_SIZE];
+    const bool have_to = np_read_npid(to, peer) && peer[0] != 0;
+    const int64_t r = np::basic_send_message(np_state(), have_to, size, np_psn_status());
+    LOG_INFO("sceNp", "BasicSendMessage to=0x%08x data=0x%08x size=%u -> 0x%08x", to, data, size,
+             static_cast<uint32_t>(r));
+    ret(ctx, r);
+}
+/* sceNpBasicAddFriend(contact, body, containerId), sceNp.cpp:1750-1767: it
+ * builds a message with mainType ADD_FRIEND and size 0, and RPCS3's own
+ * send-message composition then rejects a zero size (sceNp.cpp:1306). */
+HLE_FUNC(sceNp, sceNpBasicAddFriend) {
+    const uint32_t contact = a32(ctx, 0), body = a32(ctx, 1), container = a32(ctx, 2);
+    uint8_t peer[np::NPID_SIZE];
+    const bool have = np_read_npid(contact, peer) && peer[0] != 0;
+    const int64_t r = np::basic_add_friend(np_state(), have);
+    LOG_INFO("sceNp", "BasicAddFriend contact=0x%08x body=%s container=%d -> 0x%08x",
+             contact, gstr(body, 64).c_str(), static_cast<int32_t>(container),
+             static_cast<uint32_t>(r));
+    ret(ctx, r);
+}
+/* sceNpBasicAddPlayersHistoryAsync(npids, count, description, reqId): the
+ * history is a LOCAL object, so this succeeds without a network and hands back
+ * a request id (sceNp.cpp:1956-2003, np_handler.cpp:1588-1618). */
+HLE_FUNC(sceNp, sceNpBasicAddPlayersHistoryAsync) {
+    const uint32_t npids = a32(ctx, 0), count = a32(ctx, 1);
+    const uint32_t description = a32(ctx, 2), req_id = a32(ctx, 3);
+    const bool have = npids != 0;
+    bool empty_entry = false;
+    if (have && count > 0 && count <= np::PLAYER_HISTORY_MAX) {
+        for (uint32_t i = 0; i < count; i++) {
+            const uint32_t ea = npids + i * np::NPID_SIZE;
+            if (!vm::range_mapped(ea, np::NPID_SIZE)) { empty_entry = true; break; }
+            if (vm::ptr(ea)[0] == 0) { empty_entry = true; break; }
+        }
+    }
+    const bool long_desc = description != 0 &&
+                           gstr(description, np::DESCRIPTION_CHAR_MAX + 2).size() >
+                               np::DESCRIPTION_CHAR_MAX;
+    np::Result r = np::basic_add_players_history(np_state(), count, have, empty_entry, long_desc);
+    if (r.has_value && req_id) vm::write32(req_id, static_cast<uint32_t>(r.value));
+    LOG_INFO("sceNp", "BasicAddPlayersHistoryAsync count=%u desc=0x%08x reqId=0x%08x -> 0x%08x",
+             count, description, req_id, static_cast<uint32_t>(r.code));
+    ret(ctx, r.code);
+}
+/* sceNpBasicGetFriendPresenceByNpId(npid, pres, options): the argument checks
+ * come before NP init here, and the lookup needs a PSN session
+ * (sceNp.cpp:1880-1903, np_handler.cpp:1835-1847). */
+HLE_FUNC(sceNp, sceNpBasicGetFriendPresenceByNpId) {
+    const uint32_t npid = a32(ctx, 0), pres = a32(ctx, 1), options = a32(ctx, 2);
+    uint8_t peer[np::NPID_SIZE];
+    const bool have = np_read_npid(npid, peer);
+    const int64_t r = np::basic_get_friend_presence(np_state(), pres != 0, have);
+    LOG_INFO("sceNp", "BasicGetFriendPresenceByNpId npid=0x%08x pres=0x%08x opt=0x%x -> 0x%08x",
+             npid, pres, options, static_cast<uint32_t>(r));
+    ret(ctx, r);
+}
+
+/* ---- sceNpSignaling --------------------------------------------------- */
+HLE_FUNC(sceNp, sceNpSignalingCreateCtx) {
+    const uint32_t npid = a32(ctx, 0), handler = a32(ctx, 1);
+    const uint32_t arg = a32(ctx, 2), out = a32(ctx, 3);
+    np::State& s = np_state();
+    np::Result r = np::signaling_create_ctx(s, npid != 0, out != 0);
+    if (r.code == 0) {
+        for (auto& c : s.sigs) {
+            if (c.id != static_cast<uint32_t>(r.value)) continue;
+            c.handler = handler;
+            c.arg = arg;
+        }
+        if (out) vm::write32(out, static_cast<uint32_t>(r.value));
+    }
+    LOG_INFO("sceNp", "SignalingCreateCtx npid=0x%08x handler=0x%08x arg=0x%08x -> 0x%08x (ctx %d)",
+             npid, handler, arg, static_cast<uint32_t>(r.code), r.value);
+    ret(ctx, r.code);
+}
+HLE_FUNC(sceNp, sceNpSignalingDestroyCtx) {
+    const uint32_t id = a32(ctx, 0);
+    const int64_t r = np::signaling_destroy_ctx(np_state(), id);
+    LOG_INFO("sceNp", "SignalingDestroyCtx(%u) -> 0x%08x", id, static_cast<uint32_t>(r));
+    ret(ctx, r);
+}
+HLE_FUNC(sceNp, sceNpSignalingAddExtendedHandler) {
+    const uint32_t ctxid = a32(ctx, 0), handler = a32(ctx, 1), arg = a32(ctx, 2);
+    const int64_t r = np::signaling_add_extended_handler(np_state(), ctxid, handler, arg);
+    LOG_INFO("sceNp", "SignalingAddExtendedHandler ctx=%u handler=0x%08x arg=0x%08x -> 0x%08x",
+             ctxid, handler, arg, static_cast<uint32_t>(r));
+    ret(ctx, r);
+}
+HLE_FUNC(sceNp, sceNpSignalingActivateConnection) {
+    const uint32_t ctxid = a32(ctx, 0), npid = a32(ctx, 1), out = a32(ctx, 2);
+    uint8_t peer[np::NPID_SIZE], self[np::NPID_SIZE];
+    np_self_npid(self);
+    const bool have = np_read_npid(npid, peer);
+    const np::Result r = np::signaling_activate(np_state(), ctxid, peer, self, have, out != 0);
+    if (r.has_value && out) vm::write32(out, static_cast<uint32_t>(r.value));
+    LOG_INFO("sceNp", "SignalingActivateConnection ctx=%u npid=0x%08x -> 0x%08x (conn %d)",
+             ctxid, npid, static_cast<uint32_t>(r.code), r.value);
+    ret(ctx, r.code);
+}
+HLE_FUNC(sceNp, sceNpSignalingTerminateConnection) {
+    const uint32_t ctxid = a32(ctx, 0), conn = a32(ctx, 1);
+    const int64_t r = np::signaling_terminate(np_state(), conn);
+    LOG_INFO("sceNp", "SignalingTerminateConnection ctx=%u conn=%u -> 0x%08x", ctxid, conn,
+             static_cast<uint32_t>(r));
+    ret(ctx, r);
+}
+/* sceNpSignalingGetConnectionStatus(ctx, conn, status, peer_addr, peer_port):
+ * five arguments, and an unknown connection still writes INACTIVE before it
+ * reports CONN_NOT_FOUND (sceNp.cpp:7030-7036). */
+HLE_FUNC(sceNp, sceNpSignalingGetConnectionStatus) {
+    const uint32_t ctxid = a32(ctx, 0), conn = a32(ctx, 1), status = a32(ctx, 2);
+    const uint32_t addr = a32(ctx, 3), port = a32(ctx, 4);
+    const np::Result r = np::signaling_get_conn_status(np_state(), conn, status != 0);
+    if (r.has_value && status) vm::write32(status, static_cast<uint32_t>(r.value));
+    if (r.code == 0) {
+        if (addr) vm::write32(addr, 0);
+        if (port) vm::write16(port, 0);
+    }
+    LOG_INFO("sceNp", "SignalingGetConnectionStatus ctx=%u conn=%u -> 0x%08x (status %d)",
+             ctxid, conn, static_cast<uint32_t>(r.code), r.value);
+    ret(ctx, r.code);
+}
+HLE_FUNC(sceNp, sceNpSignalingGetConnectionInfo) {
+    const uint32_t ctxid = a32(ctx, 0), conn = a32(ctx, 1), code = a32(ctx, 2);
+    const uint32_t info = a32(ctx, 3);
+    const int64_t r = np::signaling_get_conn_info(np_state(), conn, static_cast<int32_t>(code),
+                                                  info != 0);
+    LOG_INFO("sceNp", "SignalingGetConnectionInfo ctx=%u conn=%u code=%d info=0x%08x -> 0x%08x",
+             ctxid, conn, static_cast<int32_t>(code), info, static_cast<uint32_t>(r));
+    ret(ctx, r);
+}
+HLE_FUNC(sceNp, sceNpSignalingGetConnectionFromNpId) {
+    const uint32_t ctxid = a32(ctx, 0), npid = a32(ctx, 1), out = a32(ctx, 2);
+    uint8_t peer[np::NPID_SIZE], self[np::NPID_SIZE];
+    np_self_npid(self);
+    const bool have = np_read_npid(npid, peer);
+    const np::Result r = np::signaling_conn_from_npid(np_state(), peer, self, have, out != 0);
+    if (r.has_value && out) vm::write32(out, static_cast<uint32_t>(r.value));
+    LOG_INFO("sceNp", "SignalingGetConnectionFromNpId ctx=%u -> 0x%08x", ctxid,
+             static_cast<uint32_t>(r.code));
+    ret(ctx, r.code);
+}
+HLE_FUNC(sceNp, sceNpSignalingGetConnectionFromPeerAddress) {
+    const uint32_t ctxid = a32(ctx, 0), addr = a32(ctx, 1), port = a32(ctx, 2), out = a32(ctx, 3);
+    const int64_t r = np::signaling_conn_from_addr(np_state(), out != 0);
+    LOG_INFO("sceNp", "SignalingGetConnectionFromPeerAddress ctx=%u addr=0x%08x port=%u -> 0x%08x",
+             ctxid, addr, port, static_cast<uint32_t>(r));
+    ret(ctx, r);
+}
+/* ---- sceNpUtil -------------------------------------------------------- */
+/* sceNpUtilCmpNpId(id1, id2): equal ids answer CELL_OK, different ids answer
+ * SCE_NP_UTIL_ERROR_NOT_MATCH as a non-error value (sceNp.cpp:7301-7314). */
+HLE_FUNC(sceNp, sceNpUtilCmpNpId) {
+    uint8_t a[np::NPID_SIZE], b[np::NPID_SIZE];
+    const bool have_a = np_read_npid(a32(ctx, 0), a);
+    const bool have_b = np_read_npid(a32(ctx, 1), b);
+    const bool equal = have_a && have_b && np::same_npid(a, b);
+    const int64_t r = np::util_cmp_np_id(have_a, have_b, equal);
+    LOG_INFO("sceNp", "UtilCmpNpId -> 0x%08x", static_cast<uint32_t>(r));
+    ret(ctx, r);
+}
+/* ---- sceNpDrm --------------------------------------------------------- */
+/* sceNpDrmIsAvailable(k_licensee, drm_path), sceNp.cpp:634-753.
+ *
+ * The reference opens the file and dispatches on its first word: "SCE\0" is an
+ * NPDRM self, "NPD\0" an edata/sdata, anything else is treated as unencrypted
+ * and ACCEPTED. Both encrypted forms need a licence verified against a key
+ * this runtime does not hold, so they answer NO_ENTITLEMENT instead of
+ * pretending the file is usable. A missing file is the lv2 open error. */
+HLE_FUNC(sceNp, sceNpDrmIsAvailable) {
+    const uint32_t k_lic = a32(ctx, 0), path = a32(ctx, 1);
+    const std::string guest = gstr(path, 0x100);
+    np::DrmVerdict verdict = np::DrmVerdict::Missing;
+    uint32_t first_word = 0;
+    if (!guest.empty()) {
+        const std::string host = vfs::host_path(guest);
+        FILE* f = host.empty() ? nullptr : std::fopen(host.c_str(), "rb");
+        if (f) {
+            uint8_t word[4] = {};
+            const bool got = std::fread(word, 1, 4, f) == 4;
+            std::fclose(f);
+            if (got) {
+                first_word = (static_cast<uint32_t>(word[0]) << 24) |
+                             (static_cast<uint32_t>(word[1]) << 16) |
+                             (static_cast<uint32_t>(word[2]) << 8) | word[3];
+                verdict = np::drm_verdict_for(first_word);
+            }
+        }
+    }
+    const int64_t r = np::drm_is_available(!guest.empty(), verdict);
+    LOG_INFO("sceNp", "DrmIsAvailable k_licensee=0x%08x path=%s magic=0x%08x -> 0x%08x", k_lic,
+             guest.c_str(), first_word, static_cast<uint32_t>(r));
+    ret(ctx, r);
 }
 
 HLE_FUNC(sceNpTrophy, sceNpTrophyInit) { ret(ctx, 0); }
@@ -561,107 +1052,25 @@ HLE_FUNC(sceNpTrophy, sceNpTrophyGetGameProgress) {
     ret(ctx, 0);
 }
 
-/* piste 43 -- sceNpCommerce2, which had NO implementation at all.
+/* sceNpCommerce2 lives in runtime/src/hle/sceNpCommerce2.cpp.
  *
- * Measured failure: with the chat-restriction flag corrected, pressing Load on
- * an existing save read the whole save (METADATA, THUMB, GAMEDATA 0x3a4eaf
- * bytes) and then the title raised "Network Error -- Connection to the server
- * was lost. Exiting to the main menu." The log at that instant showed three
- * unimplemented imports in a row:
+ * It was here, as seven handlers driven by NpState's commerce2_* fields, from
+ * the loading-43 session that proved the module had to exist (see
+ * docs/loading-43/REPORT.md). It moved out for two reasons:
  *
- *   unimplemented sceNpCommerce2::sceNpCommerce2Init
- *   unimplemented sceNpCommerce2::sceNpCommerce2CreateCtx
- *   unimplemented sceNpCommerce2::sceNpCommerce2CreateSessionStart
+ *   1. the module has 26 imports, not 7, and they share per-context state
+ *      (version, npId, callback, arg) that belongs in one object, not in a
+ *      handful of globals next to an unrelated module's;
+ *   2. those seven registrations collided with the new ones -- two HLE_FUNC
+ *      macros registering the same "sceNpCommerce2::*" key, with the winner
+ *      decided by static-initialisation order across translation units.
  *
- * An unimplemented import resolves nowhere and returns nothing defined, so the
- * title saw a failed store session and abandoned the load. RPCS3 implements
- * these as local, offline objects: Init just sets a flag, CreateCtx allocates an
- * id, CreateSessionStart queues the "session done" callback with no network at
- * all. References:
- *   refs/rpcs3/rpcs3/Emu/Cell/Modules/sceNpCommerce2.cpp:129 (Init),
- *   :157 (CreateCtx), :262 (CreateSessionStart), :306 (CreateSessionFinish).
- * The return codes are RPCS3's: a second Init is ALREADY_INITIALIZED, a call
- * before Init is NOT_INITIALIZED. */
-namespace {
-constexpr int64_t SCE_NP_COMMERCE2_ERROR_NOT_INITIALIZED = static_cast<int32_t>(0x8002b701);
-constexpr int64_t SCE_NP_COMMERCE2_ERROR_ALREADY_INITIALIZED = static_cast<int32_t>(0x8002b702);
-constexpr int64_t SCE_NP_COMMERCE2_ERROR_CTX_NOT_FOUND = static_cast<int32_t>(0x8002b70b);
-constexpr int64_t SCE_NP_COMMERCE2_ERROR_CTX_MAX = static_cast<int32_t>(0x8002b70a);
-constexpr int64_t SCE_NP_COMMERCE2_ERROR_INVALID_ARGUMENT = static_cast<int32_t>(0x8002b703);
-/* SCE_NP_COMMERCE2_EVENT_CREATE_SESSION_DONE, the event RPCS3 delivers. */
-constexpr uint32_t SCE_NP_COMMERCE2_EVENT_CREATE_SESSION_DONE = 0x4;
-}  // namespace
-
-HLE_FUNC(sceNpCommerce2, sceNpCommerce2Init) {
-    LOG_INFO("sceNp", "Commerce2Init");
-    if (g_np.commerce2_init) return ret(ctx, SCE_NP_COMMERCE2_ERROR_ALREADY_INITIALIZED);
-    /* RPCS3 requires the NP manager to be initialised first. Our g_np.init is
-     * set by sceNpInit, which the title calls during boot. */
-    if (!g_np.init) return ret(ctx, SCE_NP_ERROR_NOT_INITIALIZED);
-    g_np.commerce2_init = true;
-    ret(ctx, 0);
-}
-HLE_FUNC(sceNpCommerce2, sceNpCommerce2Term) {
-    LOG_INFO("sceNp", "Commerce2Term");
-    g_np.commerce2_init = false;
-    ret(ctx, 0);
-}
-HLE_FUNC(sceNpCommerce2, sceNpCommerce2CreateCtx) {
-    const uint32_t version = a32(ctx, 0);
-    const uint32_t np_id = a32(ctx, 1);
-    const uint32_t handler = a32(ctx, 2);
-    const uint32_t arg = a32(ctx, 3);
-    const uint32_t ctx_id_out = a32(ctx, 4);
-    LOG_INFO("sceNp", "Commerce2CreateCtx version=%u npId=0x%08x handler=0x%08x arg=0x%08x out=0x%08x",
-             version, np_id, handler, arg, ctx_id_out);
-    if (!g_np.commerce2_init) return ret(ctx, SCE_NP_COMMERCE2_ERROR_NOT_INITIALIZED);
-    if (!np_id) return ret(ctx, SCE_NP_COMMERCE2_ERROR_INVALID_ARGUMENT);
-    /* One context is enough for a single local store session; RPCS3's CTX_MAX
-     * check is a TODO there too. */
-    g_np.commerce2_ctx_id = g_np.commerce2_ctx_id ? g_np.commerce2_ctx_id : 1;
-    g_np.commerce2_ctx_cb = handler;
-    g_np.commerce2_ctx_arg = arg;
-    if (ctx_id_out) vm::write32(ctx_id_out, g_np.commerce2_ctx_id);
-    ret(ctx, 0);
-}
-HLE_FUNC(sceNpCommerce2, sceNpCommerce2DestroyCtx) {
-    LOG_INFO("sceNp", "Commerce2DestroyCtx ctx=%u", a32(ctx, 0));
-    if (!g_np.commerce2_init) return ret(ctx, SCE_NP_COMMERCE2_ERROR_NOT_INITIALIZED);
-    g_np.commerce2_ctx_id = 0;
-    g_np.commerce2_ctx_cb = 0;
-    ret(ctx, 0);
-}
-HLE_FUNC(sceNpCommerce2, sceNpCommerce2CreateSessionStart) {
-    const uint32_t ctx_id = a32(ctx, 0);
-    LOG_INFO("sceNp", "Commerce2CreateSessionStart ctx=%u", ctx_id);
-    if (!g_np.commerce2_init) return ret(ctx, SCE_NP_COMMERCE2_ERROR_NOT_INITIALIZED);
-    if (!g_np.commerce2_ctx_id) return ret(ctx, SCE_NP_COMMERCE2_ERROR_CTX_NOT_FOUND);
-    /* RPCS3 queues the completion callback immediately: the session is a local
-     * object, so it succeeds without touching the network. Deliver the same
-     * event through the sysutil queue, exactly as the context callbacks above. */
-    const uint32_t cb = g_np.commerce2_ctx_cb, arg = g_np.commerce2_ctx_arg;
-    if (cb) {
-        sysutil_post([cb, arg, ctx_id](ppu::Context& c) {
-            call_guest(c, cb, ctx_id, SCE_NP_COMMERCE2_EVENT_CREATE_SESSION_DONE, 0, arg);
-        });
-    }
-    ret(ctx, 0);
-}
-HLE_FUNC(sceNpCommerce2, sceNpCommerce2CreateSessionAbort) {
-    LOG_INFO("sceNp", "Commerce2CreateSessionAbort ctx=%u", a32(ctx, 0));
-    if (!g_np.commerce2_init) return ret(ctx, SCE_NP_COMMERCE2_ERROR_NOT_INITIALIZED);
-    ret(ctx, 0);
-}
-HLE_FUNC(sceNpCommerce2, sceNpCommerce2CreateSessionFinish) {
-    const uint32_t ctx_id = a32(ctx, 0);
-    const uint32_t info = a32(ctx, 1);
-    LOG_INFO("sceNp", "Commerce2CreateSessionFinish ctx=%u info=0x%08x", ctx_id, info);
-    if (!g_np.commerce2_init) return ret(ctx, SCE_NP_COMMERCE2_ERROR_NOT_INITIALIZED);
-    if (!g_np.commerce2_ctx_id) return ret(ctx, SCE_NP_COMMERCE2_ERROR_CTX_NOT_FOUND);
-    /* Currency and decimals, zeroed: no store is reachable offline, and RPCS3
-     * memsets the same 8 bytes for a pre-3.00 SDK title like this one. */
-    if (info) std::memset(vm::ptr(info), 0, 44);
-    ret(ctx, 0);
-}
-
+ * The one thing the new module cannot see from its own file is the NP manager's
+ * flag: sceNpCommerce2Init answers SCE_NP_ERROR_NOT_INITIALIZED when the
+ * manager is down (refs/rpcs3/rpcs3/Emu/Cell/Modules/sceNpCommerce2.cpp:138-139
+ * tests nph.is_NP_init). This is that flag, read-only.
+ */
+namespace commerce2 {
+bool np_manager_initialised() { return g_np.init; }
+}  // namespace commerce2
 }

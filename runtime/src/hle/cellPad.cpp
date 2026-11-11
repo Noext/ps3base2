@@ -1,5 +1,38 @@
+/* ps3base -- sys_io's pad half: cellPad.
+ *
+ * The host's pad is bound to port 0 and its bytes are what host::poll_pad fills
+ * in; fill() below builds them. What this file owns beyond that is the part the
+ * ticket is judged on -- the argument checks, the structure writes and the
+ * return codes -- and those are RPCS3's, line for line:
+ *
+ *   cellPadInit           refs/rpcs3/rpcs3/Emu/Cell/Modules/cellPad.cpp:257-289
+ *   cellPadEnd            refs/rpcs3/rpcs3/Emu/Cell/Modules/cellPad.cpp:291-304
+ *   cellPadGetData        refs/rpcs3/rpcs3/Emu/Cell/Modules/cellPad.cpp:695-723
+ *   cellPadGetInfo2       refs/rpcs3/rpcs3/Emu/Cell/Modules/cellPad.cpp:956-1003
+ *   cellPadSetPortSetting refs/rpcs3/rpcs3/Emu/Cell/Modules/cellPad.cpp:1036-1066
+ *   cellPadSetActDirect   refs/rpcs3/rpcs3/Emu/Cell/Modules/cellPad.cpp:867-902
+ *   cellPadClearBuf       refs/rpcs3/rpcs3/Emu/Cell/Modules/cellPad.cpp:326-353
+ *
+ * The decisions themselves live in sysio_hle.h.
+ *
+ * Corrections over what was here before:
+ *   - cellPadInit clamped max_connect to 7 at init time, so cellPadInit(8)
+ *     reported max_connect 7, and cellPadInit(0) was ACCEPTED. RPCS3 validates
+ *     against CELL_MAX_PADS (127) and clamps only in get_max_connect().
+ *   - cellPadEnd answered CELL_OK without an init; RPCS3 answers
+ *     CELL_PAD_ERROR_UNINITIALIZED.
+ *   - cellPadGetData zeroed the caller's CellPadData even when it answered
+ *     NO_DEVICE; RPCS3 returns before writing anything.
+ *   - cellPadGetInfo2 reported device_capability 0x7 and marked ports 1..6
+ *     connected on a machine with one pad. The standard set is 0x1F
+ *     (refs/.../Emu/Io/PadHandler.cpp:518) and only port 0 is connected.
+ *   - cellPadClearBuf, cellPadSetPortSetting and cellPadSetActDirect checked
+ *     nothing and always answered CELL_OK.
+ */
 #include "common.h"
+#include "runtime/loader.h"
 #include "runtime/msgdialog.h"
+#include "sysio_hle.h"
 #include <cstdio>
 #include <deque>
 #include <vector>
@@ -27,9 +60,13 @@ struct Press {
     uint16_t axis_value;
 };
 
-bool g_init = false;
-uint32_t g_max = 7;
-uint32_t g_setting = 0;
+/* The pad state: one host device on port 0. The decisions that depend on it are
+ * in sysio_hle.h, so tests/sysio.cpp drives the same code the import path runs. */
+sysio::PadState g_pad;
+/* The SDK version gates cellPadSetActDirect's reserved-bit check with a SIGNED
+ * comparison (refs/.../cellPad.cpp:882). It is the title's own process
+ * parameter, read where the reference reads it (g_ps3_process_info.sdk_ver). */
+uint32_t sdk_ver() { return loader::g_process.sdk_version; }
 std::once_flag g_script_once;
 std::vector<Press> g_script;
 uint64_t g_start = 0;
@@ -348,56 +385,140 @@ void fill(uint32_t out) {
      * a separate reader because this is the single place where the pad state
      * is final (host device + queue + script all applied above). */
     msgdialog::on_pad(b);
-    vm::write32(out, 24);
-    for (int i = 0; i < 24; i++) vm::write16(out + 4 + i * 2, b[i]);
+    /* The reported length is a function of the port setting, not a constant:
+     * refs/rpcs3/rpcs3/Emu/Cell/Modules/cellPad.cpp:539-565 selects 24 with
+     * SENSOR_ON, 20 with PRESS_ON and 8 with neither, and clears the part the
+     * caller did not ask for (:577-581). Header word 1 is
+     * "(0x7 << 4) | min(len / 2, 15)" (:570-571). Reporting 24 to a title that
+     * never asked for sensor data hands it fields it does not expect. */
+    const uint32_t len = sysio::PadState::data_len(g_pad.port_setting[0]);
+    b[0] = 0;
+    b[1] = static_cast<uint16_t>((0x7 << 4) | (len / 2 < 15 ? len / 2 : 15));
+    if (len < sysio::PAD_LEN_CHANGE_PRESS_ON) {
+        for (uint32_t i = 8; i < sysio::PAD_LEN_CHANGE_PRESS_ON; i++) b[i] = 0;
+    }
+    if (len < sysio::PAD_LEN_CHANGE_SENSOR_ON) {
+        for (uint32_t i = sysio::PAD_LEN_CHANGE_PRESS_ON; i < sysio::PAD_LEN_CHANGE_SENSOR_ON; i++) b[i] = 0;
+    }
+    vm::write32(out, static_cast<uint32_t>(len));
+    for (uint32_t i = 0; i < len; i++) vm::write16(out + 4 + i * 2, b[i]);
 }
 
 }
 
+/* cellPadInit( u32 max_connect ), refs/.../cellPad.cpp:257.
+ * Returns CELL_OK, CELL_PAD_ERROR_ALREADY_INITIALIZED or
+ * CELL_PAD_ERROR_INVALID_PARAMETER. sys_config_start (:267) is not reproduced:
+ * it creates an lv2 event queue and a PPU thread that only forwards pad connect
+ * events (refs/.../sys_io_.cpp:144-175), and no guest state depends on it. */
 HLE_FUNC(sys_io, cellPadInit) {
-    if (g_init) return ret(ctx, static_cast<int32_t>(0x80121103));
-    g_init = true;
-    g_max = a32(ctx, 0) > 7 ? 7 : a32(ctx, 0);
-    g_start = ppu::timebase();
-    ret(ctx, 0);
+    const uint32_t max_connect = a32(ctx, 0);
+    const int32_t rc = g_pad.init(max_connect);
+    if (rc == 0) {
+        g_start = ppu::timebase();
+        LOG_INFO("sys_io", "cellPadInit(%u): one pad on port 0", max_connect);
+    } else {
+        LOG_WARN("sys_io", "cellPadInit(%u) -> 0x%08x", max_connect, static_cast<uint32_t>(rc));
+    }
+    ret(ctx, rc);
 }
 
+/* cellPadEnd( void ), refs/.../cellPad.cpp:291.
+ * Returns CELL_OK or CELL_PAD_ERROR_UNINITIALIZED -- the reference's
+ * "if (!config.max_connect.exchange(0)) return CELL_PAD_ERROR_UNINITIALIZED". */
 HLE_FUNC(sys_io, cellPadEnd) {
-    g_init = false;
-    ret(ctx, 0);
+    const int32_t rc = g_pad.end();
+    if (rc != 0) LOG_WARN("sys_io", "cellPadEnd() -> 0x%08x", static_cast<uint32_t>(rc));
+    ret(ctx, rc);
 }
 
+/* cellPadGetInfo2( CellPadInfo2* info ), refs/.../cellPad.cpp:956.
+ *
+ * CellPadInfo2 (refs/.../cellPad.h:65-74):
+ *   u32 max_connect, now_connect, system_info;
+ *   u32 port_status[7], port_setting[7], device_capability[7], device_type[7];
+ * which is 124 bytes; RPCS3 memsets that (:970) and then writes every field. */
 HLE_FUNC(sys_io, cellPadGetInfo2) {
-    uint32_t out = a32(ctx, 0);
-    if (!g_init) return ret(ctx, static_cast<int32_t>(0x80121104));
-    std::memset(vm::ptr(out), 0, 4 * 3 + 4 * 7 * 4);
-    vm::write32(out, g_max);
-    vm::write32(out + 4, 1);
-    vm::write32(out + 8, 0);
-    vm::write32(out + 12, 1);
-    vm::write32(out + 12 + 28, g_setting);
-    vm::write32(out + 12 + 56, 0x7);
-    vm::write32(out + 12 + 84, 0);
+    const uint32_t out = a32(ctx, 0);
+    const int32_t rc = g_pad.get_info2(out != 0 && vm::range_mapped(out, sysio::PAD_INFO2_SIZE));
+    if (rc != 0) return ret(ctx, rc);
+
+    std::memset(vm::ptr(out), 0, sysio::PAD_INFO2_SIZE);
+    /* max_connect is the CLAMPED value here ("Here it is forcibly clamped",
+     * :974) -- get_max_connect(), not the raw 127-scale argument. */
+    vm::write32(out + sysio::PAD_INFO2_MAX_CONNECT, g_pad.get_max_connect());
+    vm::write32(out + sysio::PAD_INFO2_NOW_CONNECT, g_pad.now_connect());
+    vm::write32(out + sysio::PAD_INFO2_SYSTEM_INFO, 0);
+    for (uint32_t i = 0; i < sysio::PAD_MAX_PORT_NUM; i++) {
+        vm::write32(out + sysio::PAD_INFO2_PORT_STATUS + i * 4, g_pad.port_status(i));
+        vm::write32(out + sysio::PAD_INFO2_PORT_SETTING + i * 4, g_pad.port_setting[i]);
+        /* Only a reported-connected port carries a capability or a type (:992-996);
+         * a disconnected one keeps the zero the memset wrote. */
+        vm::write32(out + sysio::PAD_INFO2_DEVICE_CAPABILITY + i * 4, g_pad.capability(i));
+        vm::write32(out + sysio::PAD_INFO2_DEVICE_TYPE + i * 4, g_pad.device_type(i));
+    }
     ret(ctx, 0);
 }
 
+/* cellPadGetData( u32 port_no, CellPadData* data ), refs/.../cellPad.cpp:695.
+ *
+ * CellPadData (refs/.../pad_types.h:354-358): s32 len, u16 button[64], 132 bytes.
+ * When the pad is not reported connected the reference answers
+ * not_an_error(CELL_PAD_ERROR_NO_DEVICE) at :717 and writes NOTHING, so the
+ * caller's buffer is left exactly as it was. */
 HLE_FUNC(sys_io, cellPadGetData) {
-    uint32_t port = a32(ctx, 0), out = a32(ctx, 1);
-    if (!g_init) return ret(ctx, static_cast<int32_t>(0x80121104));
-    if (port >= g_max) return ret(ctx, static_cast<int32_t>(0x80121107));
-    std::memset(vm::ptr(out), 0, 4 + 64 * 2);
-    if (port != 0) return ret(ctx, static_cast<int32_t>(0x80121107));
+    const uint32_t port = a32(ctx, 0), out = a32(ctx, 1);
+    const int32_t rc = g_pad.get_data(port, out != 0);
+    if (rc != 0) return ret(ctx, rc);
+    if (!vm::range_mapped(out, sysio::PAD_DATA_SIZE)) return ret(ctx, sysio::PAD_ERROR_INVALID_PARAMETER);
     fill(out);
     ret(ctx, 0);
 }
 
-HLE_FUNC(sys_io, cellPadClearBuf) { ret(ctx, 0); }
-
-HLE_FUNC(sys_io, cellPadSetPortSetting) {
-    if (a32(ctx, 0) == 0) g_setting = a32(ctx, 1);
+/* cellPadClearBuf( u32 port_no ), refs/.../cellPad.cpp:326.
+ * Clears the pad's buffer and marks it for a full re-send. This runtime has no
+ * pad buffer of its own: fill() re-reads the host every call, so the next
+ * cellPadGetData already reports the current state, and there is nothing stale
+ * to discard. The argument checks are the reference's all the same. */
+HLE_FUNC(sys_io, cellPadClearBuf) {
+    const uint32_t port = a32(ctx, 0);
+    if (!g_pad.max_connect) return ret(ctx, sysio::PAD_ERROR_UNINITIALIZED);
+    if (port >= sysio::PAD_MAX_PADS) return ret(ctx, sysio::PAD_ERROR_INVALID_PARAMETER);
+    if (port >= g_pad.get_max_connect()) return ret(ctx, sysio::PAD_ERROR_NO_DEVICE);
+    if (!g_pad.is_reportedly_connected(port)) return ret(ctx, sysio::PAD_ERROR_NO_DEVICE);
     ret(ctx, 0);
 }
 
-HLE_FUNC(sys_io, cellPadSetActDirect) { ret(ctx, 0); }
+/* cellPadSetPortSetting( u32 port_no, u32 port_setting ),
+ * refs/.../cellPad.cpp:1036. Only the PRESS and SENSOR bits are kept (:1054-1062);
+ * cellPadGetData's length selection reads them (:384, :559). */
+HLE_FUNC(sys_io, cellPadSetPortSetting) {
+    const uint32_t port = a32(ctx, 0), setting = a32(ctx, 1);
+    const int32_t rc = g_pad.set_port_setting(port, setting);
+    ret(ctx, rc);
+}
+
+/* cellPadSetActDirect( u32 port_no, CellPadActParam* param ),
+ * refs/.../cellPad.cpp:867. The pad motor values are not reproduced -- this
+ * runtime has no rumble to drive and no host call for it -- but the answer is
+ * the reference's: the reserved bits are validated when the title's SDK version
+ * is above 0x1FFFFF, and the capability test refuses a pad without an actuator
+ * instead of pretending the motors moved. */
+HLE_FUNC(sys_io, cellPadSetActDirect) {
+    const uint32_t port = a32(ctx, 0), param = a32(ctx, 1);
+    /* CellPadActParam (refs/.../cellPad.h:101-105): u8 motor[2]; u8 reserved[6].
+     * A non-null pointer into unmapped memory cannot be inspected, and RPCS3
+     * would fault reading the reserved bytes, so it is refused like a bad
+     * parameter rather than silently passing the check. */
+    bool reserved_clear = true;
+    if (param) {
+        if (!vm::range_mapped(param, 8)) return ret(ctx, sysio::PAD_ERROR_INVALID_PARAMETER);
+        for (uint32_t i = 0; i < 6; i++) {
+            if (vm::ptr(param)[sysio::PAD_ACTUATOR_MAX + i]) reserved_clear = false;
+        }
+    }
+    const int32_t rc = g_pad.set_act_direct(port, sdk_ver(), param != 0, reserved_clear);
+    ret(ctx, rc);
+}
 
 }

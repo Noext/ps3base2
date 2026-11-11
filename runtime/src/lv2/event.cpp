@@ -31,6 +31,32 @@ std::shared_ptr<EventQueue> queue_by_key(uint64_t key) {
     return it == g_keys.end() ? nullptr : get<EventQueue>(it->second);
 }
 
+uint32_t create_queue_by_key(uint64_t key, uint32_t size, const char* name) {
+    auto q = std::make_shared<EventQueue>();
+    q->size = size ? size : 0x40;
+    q->key = key;
+    if (name) q->name = name;
+    const uint32_t id = add_object(0x8D000000, q);
+    {
+        std::lock_guard lk(g_keys_lock);
+        if (g_keys.count(key)) {
+            remove_object(id);
+            return 0;
+        }
+        g_keys[key] = id;
+    }
+    LOG_DEBUG("event", "queue '%s' key 0x%llx size %u -> 0x%x (HLE)", q->name.c_str(),
+              static_cast<unsigned long long>(key), q->size, id);
+    return id;
+}
+
+bool send_event_by_key(uint64_t key, uint64_t source, uint64_t data1, uint64_t data2, uint64_t data3) {
+    auto q = queue_by_key(key);
+    if (!q) return false;
+    push_event(q, {source, data1, data2, data3});
+    return true;
+}
+
 LV2_SYSCALL(128, sys_event_queue_create) {
     uint32_t out = u32arg(ctx, 0);
     uint32_t attr = u32arg(ctx, 1);

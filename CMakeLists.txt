@@ -415,6 +415,50 @@ target_include_directories(savedata PRIVATE runtime/include "${CMAKE_SOURCE_DIR}
 target_compile_options(savedata PRIVATE ${PS3BASE_ARCH_FLAGS})
 add_test(NAME savedata COMMAND savedata)
 
+# sysio: sys_io's keyboard and pad rules (hle/sysio_hle.h), driven through the
+# same header the imports use. Pure host logic -- no guest memory, no PPU runtime
+# -- because the subject is the return codes and the argument-check ORDER, which
+# is where the previous handlers were wrong (cellKbInit AFTER the range test,
+# cellPadInit clamped at 7, cellPadEnd and cellPadClearBuf answering CELL_OK
+# unconditionally).
+add_executable(sysio tests/sysio.cpp)
+target_include_directories(sysio PRIVATE runtime/include "${CMAKE_SOURCE_DIR}/runtime/src")
+target_compile_options(sysio PRIVATE ${PS3BASE_ARCH_FLAGS})
+add_test(NAME sysio COMMAND sysio)
+
+# commerce2: sceNpCommerce2's decision logic (hle/commerce2_hle.h), driven
+# through the same header the handlers use. Pure host logic -- no guest memory,
+# no network -- because the subject is the return codes, their ORDER, and the
+# one thing this module must get right offline: the store is unavailable, so
+# GETTING DATA fails with RPCS3's codes while CREATING a context and a session
+# succeeds. Both halves are asserted, since a session that failed made this
+# title abandon a save load (docs/loading-43/REPORT.md).
+add_executable(commerce2 tests/commerce2.cpp)
+target_include_directories(commerce2 PRIVATE runtime/include "${CMAKE_SOURCE_DIR}/runtime/src")
+target_compile_options(commerce2 PRIVATE ${PS3BASE_ARCH_FLAGS})
+add_test(NAME commerce2 COMMAND commerce2)
+
+# commerce2_hle: the 26 HANDLERS included whole, called the way the import
+# dispatcher calls them, with a real guest context and real guest memory. It
+# checks the registration set (the 26 imported names, and NOT the 26 that would
+# otherwise fabricate answers), the values that land in r3 and in the caller's
+# structures, and the five arguments of the session-done callback. Nothing here
+# executes guest code.
+# The module source is compiled INTO the test: the 26 HLE_FUNC registrations only
+# exist if sceNpCommerce2.cpp is part of the executable, and the test's first
+# assertion is that all 26 imported names are registered. Without it the registry
+# is empty and the two registration checks fail while everything else passes --
+# which reads like a module defect and is a missing translation unit.
+add_executable(commerce2_hle tests/commerce2_hle.cpp
+    runtime/src/hle/sceNpCommerce2.cpp
+    runtime/src/memory.cpp runtime/src/regions.cpp runtime/src/mem.cpp
+    runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/backtrace_port.cpp
+    runtime/src/host.cpp runtime/src/log.cpp)
+target_include_directories(commerce2_hle PRIVATE runtime/include "${CMAKE_SOURCE_DIR}/runtime/src" "${CMAKE_SOURCE_DIR}/runtime/src/hle")
+target_compile_options(commerce2_hle PRIVATE ${PS3BASE_ARCH_FLAGS})
+target_link_libraries(commerce2_hle PRIVATE ${CMAKE_DL_LIBS} pthread)
+add_test(NAME commerce2_hle COMMAND commerce2_hle)
+
 # netctl: the cellNetCtl decision table (hle/netctl_hle.h) plus the ten handlers,
 # called with a real guest context and real guest memory through the same header
 # the imports use. Every answer is the console's OFFLINE answer, which is the
@@ -429,6 +473,35 @@ target_include_directories(netctl PRIVATE runtime/include "${CMAKE_SOURCE_DIR}/r
 target_compile_options(netctl PRIVATE ${PS3BASE_ARCH_FLAGS})
 target_link_libraries(netctl PRIVATE ${CMAKE_DL_LIBS} pthread)
 add_test(NAME netctl COMMAND netctl)
+# np: sceNp's decision rules (hle/np_hle.h), driven through the same header the
+# 47 imports in runtime/src/hle/np.cpp run. Pure host logic -- the header has no
+# guest memory and no PPU context, so this target links nothing at all and runs
+# with no game, no GPU and no network. The subject is the ORDER of the checks
+# and the codes RPCS3 returns offline, which is where the previous handlers were
+# wrong: GetChatRestrictionFlag answering 1, BasicGetEvent answering EXCEEDS_MAX
+# instead of NO_EVENT, LookupInit answering 0 without a state, and ScoreInit
+# writing through an argument it never had.
+add_executable(np tests/np.cpp)
+target_include_directories(np PRIVATE runtime/include "${CMAKE_SOURCE_DIR}/runtime/src")
+target_compile_options(np PRIVATE ${PS3BASE_ARCH_FLAGS})
+add_test(NAME np COMMAND np)
+
+# nptrophy: sceNpTrophy, the twelve functions Red Dead Redemption imports. The
+# suite includes the module and drives the real handlers with a real ppu::Context
+# and real guest memory; hle::Reg, hle::call_guest and hle::sysutil_post are the
+# only seams stubbed (no import table, no PPU scheduler, no callback-queue
+# thread), and the test asserts what the module HANDS them. The trophy files are
+# built by the test -- a synthetic TROPHY.TRP -- so it needs no game data, no GPU
+# and no network.
+add_executable(nptrophy tests/nptrophy.cpp
+    runtime/src/memory.cpp runtime/src/regions.cpp runtime/src/mem.cpp
+    runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/backtrace_port.cpp
+    runtime/src/host.cpp runtime/src/log.cpp runtime/src/vfs.cpp)
+target_include_directories(nptrophy PRIVATE runtime/include "${CMAKE_SOURCE_DIR}/runtime/src" "${CMAKE_SOURCE_DIR}/runtime/src/hle")
+target_compile_options(nptrophy PRIVATE ${PS3BASE_ARCH_FLAGS})
+target_link_libraries(nptrophy PRIVATE ${CMAKE_DL_LIBS} pthread)
+add_test(NAME nptrophy COMMAND nptrophy)
+
 # avconf: cellVideoOutSetGamma's argument order and its three return codes.
 # The identity case is a true CELL_OK; every other in-range gamma is refused
 # with NOT_IMPLEMENTED rather than a success that changed no pixel.
@@ -436,6 +509,20 @@ add_executable(avconf tests/avconf.cpp)
 target_include_directories(avconf PRIVATE runtime/include "${CMAKE_SOURCE_DIR}/runtime/src")
 target_compile_options(avconf PRIVATE ${PS3BASE_ARCH_FLAGS})
 add_test(NAME avconf COMMAND avconf)
+
+# voice: cellVoice (libvoice), the module Red Dead Redemption imports 13
+# functions from. The suite includes the module and drives the real handlers
+# with a real ppu::Context and real guest memory; LV2's queue create/send are
+# the only thing stubbed, so the service's events are checked without a
+# scheduler. No game, no GPU, no network.
+add_executable(voice tests/voice.cpp
+    runtime/src/memory.cpp runtime/src/regions.cpp runtime/src/mem.cpp
+    runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/backtrace_port.cpp
+    runtime/src/host.cpp runtime/src/log.cpp)
+target_include_directories(voice PRIVATE runtime/include "${CMAKE_SOURCE_DIR}/runtime/src" "${CMAKE_SOURCE_DIR}/runtime/src/hle")
+target_compile_options(voice PRIVATE ${PS3BASE_ARCH_FLAGS})
+target_link_libraries(voice PRIVATE ${CMAKE_DL_LIBS} pthread)
+add_test(NAME voice COMMAND voice)
 
 if(EXISTS "${CMAKE_SOURCE_DIR}/out/conformance/tests.cpp")
     add_executable(ppu_conformance tests/ppu_conformance/harness.cpp "${CMAKE_SOURCE_DIR}/out/conformance/tests.cpp")
