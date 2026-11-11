@@ -821,3 +821,40 @@ The stop is gone and the boot continues past the point where it died.
 `call_indirect` for one guest lr, which `addr2line` maps to one line of
 generated code. It reported `ctr=0x00d1bbec r16=0x013f6400`, confirming that
 the dispatch itself was correct and only the switch was empty.
+
+### The I/O audit the 0xcd/0xdf hypothesis asked for -- and what it shows
+
+The premise was that the interpreter read an unfilled buffer, so every read
+around the load was logged with file, offset, size and return. `sys_fs_read`'s
+`PS3BASE_FS_LOG=1` line now carries the guest path and the pre-read offset
+(runtime/src/lv2/fs.cpp); before, it printed only `read fd 4 req N got M`, so
+the file and the hole were both invisible.
+
+Fresh VFS, `PS3BASE_FS_LOG=1`, 60 s:
+
+    16474 sys_fs_read calls, all returning 0x0 (no error)
+    16471 from '/dev_bdvd/PS3_GAME/USRDIR/rdr2_installed.sdat'  (the decrypted
+          .dec, 539174912 bytes, offsets 0x0..0x20232800)
+        3 from '/dev_bdvd/PS3_GAME/ICON0.PNG'
+        0 from '/dev_bdvd/PS3_GAME/USRDIR/rdr2_layer0.rpf'
+
+Two short reads, both legitimate end-of-file: ICON0.PNG req 32768 got 10460,
+and sdat off 0x20230000 req 32768 got 10240 (file ends at 0x20232800).
+
+The archive is opened and announced, and then never read:
+
+    I 2.733487 fs: open '/dev_bdvd/PS3_GAME/USRDIR/rdr2_layer0.rpf' flags 00 -> 4
+    I 2.733772 tty: [0] [PACKFILE] Loading archive 'game:/rdr2_layer0.rpf' from optical layer 0
+
+(`flags 00` is O_RDONLY and correct; both facts reproduce on two independent
+fresh VFS runs.) So on this path there is no missing read to blame for
+uninitialised data -- which agrees with the direct finding that the interpreter
+consumed a valid opcode and the switch was empty. The RPF is the next link, not
+this one: the title mounts the archive, writes its cache, and does its reading
+from the SDAT.
+
+One further observation, recorded but not chased here because it is outside
+this task's frame: `gamedata:/rdr2_installed.sdat` is announced as loaded, and
+the reads all come from the decrypted SDAT, which is the NPDRM path working as
+documented. No unimplemented-syscall, ENOSYS or refusal line appears anywhere
+in the run.
