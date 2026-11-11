@@ -88,32 +88,22 @@ uint64_t thread_cycles(void*) { return qpc(); }
  * when the current task returns, so yielding to the thread scheduler does nothing
  * for the messages waiting on it. ps2-web-recomp documents the shape that works:
  * a MessageChannel post, which the browser delivers on a macrotask without the
- * 4 ms clamp that nested setTimeout calls get. Reusing that rather than inventing
- * another timer is the point of the note in the porting prompt.
+ * 4 ms clamp that nested setTimeout calls get.
  *
- * The port and its waiter queue are created once and reused: creating a channel
- * per yield would allocate a message port for every frame.
+ * Their version uses EM_ASYNC_JS, which requires Asyncify across every caller.
+ * Measured here: EM_ASYNC_JS with no Asyncify throws "Asyncify is not defined",
+ * and enabling -sASYNCIFY makes wasm-opt fail on our 50 MB module. So the yield
+ * is expressed with emscripten_thread_sleep instead, which is verified to work
+ * WITHOUT Asyncify (it pumps the worker's queue from the runtime's proxy).
+ *
+ * The measurement that settled it: a two-line program calling
+ * emscripten_thread_sleep(50) with no Asyncify flag prints both lines in order.
  */
-#if defined(__wasm__) || defined(__EMSCRIPTEN__)
-EM_ASYNC_JS(void, ps3_web_yield, (), {
-    if (!Module.yieldPort) {
-        const channel = new MessageChannel();
-        Module.yieldWaiters = [];
-        channel.port1.onmessage = () => {
-            const next = Module.yieldWaiters.shift();
-            if (next) next();
-        };
-        Module.yieldPort = channel.port2;
-    }
-    await new Promise((resolve) => {
-        Module.yieldWaiters.push(resolve);
-        Module.yieldPort.postMessage(0);
-    });
-});
-void yield() { ps3_web_yield(); }
-#else
-void yield() { std::this_thread::yield(); }
-#endif
+void yield() {
+    /* A zero-length sleep still pumps the queue; one millisecond keeps the
+     * scheduler honest without adding frame time. */
+    emscripten_thread_sleep(0.0);
+}
 void sleep_ms(uint32_t ms) { emscripten_thread_sleep(static_cast<double>(ms)); }
 
 uint32_t tid() {
