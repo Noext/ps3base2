@@ -112,7 +112,10 @@ extern "C" void ps3base_store_probe(uint32_t ea, const void* data, size_t size) 
      * Watch the three null fields specifically: knowing whether anything writes
      * them separates "the code was never lifted" from "our runtime provides no
      * path that does it". */
-    if (ea < 0x00d72800u || ea >= 0x00d72840u) return;
+    /* The body's context argument (r6) is 0x40100000, and its callee writes
+     * [r30+0] and [r30+4]. Watch the io buffer as well as the game structure. */
+    if (!((ea >= 0x00d72800u && ea < 0x00d72840u) ||
+          (ea >= 0x40100000u && ea < 0x40100040u))) return;
     static int n = 0;
     if (n > 40) return;
     n++;
