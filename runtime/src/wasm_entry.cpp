@@ -273,14 +273,17 @@ int main(int argc, char** argv) {
     /* ONE guard, on the single function that emits syscall 300. Round 179 showed
      * that guarding an enclosing function replaces its body via hook_call and
      * removes the very calls being measured, so nothing else is guarded here. */
-    hooks::add_guard(0x523e00u, [](ppu::Context& c) {
-        std::fprintf(stderr, "[callerA] pc=0x%08x\n", static_cast<unsigned>(c.cia));
-        return false;
-    });
-    hooks::add_guard(0x5240d8u, [](ppu::Context& c) {
-        std::fprintf(stderr, "[callerB] pc=0x%08x\n", static_cast<unsigned>(c.cia));
-        return false;
-    });
+    /* Level up again: who calls the two callers. Guarding each function alone --
+     * never an enclosing one -- because round 179 showed hook_call replaces the
+     * body of whatever is guarded, removing the calls being measured. */
+    for (uint32_t a : {0x524034u, 0x185b4cu, 0x524488u, 0x559844u}) {
+        hooks::add_guard(a, [](ppu::Context& c) {
+            std::fprintf(stderr, "[up] pc=0x%08x lr=0x%llx\n",
+                         static_cast<unsigned>(c.cia),
+                         static_cast<unsigned long long>(c.lr));
+            return false;
+        });
+    }
     hooks::add_guard(0x21c470u, [](ppu::Context& c) {
         static std::atomic<int> n{0};
         const int k = n.fetch_add(1);
