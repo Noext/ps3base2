@@ -624,15 +624,18 @@ LV2_SYSCALL(817, sys_fs_fcntl) {
         vm::write32(arg + 0x1C, 4096);
         vm::write64(arg + 0x20, ((40ull << 30) - 1) / 4096);
         return CELL_OK;
+    /* cellFsArcadeHddSerialNumber, despite the struct comment in RPCS3 calling it
+     * "Unknown". refs/.../lv2/sys_fs.cpp:2667 is the authority and its body is
+     * unambiguous: validate the lv2_file_c0000006 header (size 0x20, _x4 0x10,
+     * _x8 0x18), then set out_code = CELL_ENOTSUP and out_id = 0. The commented-out
+     * block in RPCS3 mentions /dev_hdd1, /dev_usb000 and /dev_flash as possible
+     * future special cases; none is implemented there either.
+     *
+     * So ENOTSUP here is not a shortcut and not a runtime opinion -- it is what the
+     * console is emulated to answer, and answering a capacity instead is what broke
+     * Minecraft's boot (assets stopped loading, 0 MediaPS3/pngdec events against
+     * 125). The earlier note in this file said the op was "unresolved"; it is not. */
     case 0xC0000006:
-        /* MEASURED: answering this as a capacity (block size + count) BREAKS the
-         * boot -- assets stop loading entirely (0 MediaPS3/pngdec events instead of
-         * 125) and the pc falls back to 0x003a18b0. The title treats a valid answer
-         * here as a precondition it then tests differently. ENOTSUP is what makes it
-         * take the path that loads assets, so keep it.
-         *
-         * What this op actually queries is unresolved; the retry loop it causes is
-         * downstream of the real stall, not the stall itself. */
         if (size == 0x20 && vm::read32(arg) == 0x20 && vm::read32(arg + 4) == 0x10 && vm::read32(arg + 8) == 0x18) {
             vm::write32(arg + 0x18, CELL_ENOTSUP_CODE);
             vm::write32(arg + 0x1C, 0);
@@ -654,27 +657,40 @@ LV2_SYSCALL(817, sys_fs_fcntl) {
      * starting. That single missing case was the whole of the idle loop.
      *
      * Layout is lv2_file_e0000017 (refs/.../lv2/sys_fs.h:612), CHECK_SIZE 0x28:
-     *   +0x28 size, +0x10 _x4, +0x20 _x8, +0x30 file_path, +0x34 file_size,
-     *   +0x3C out_code. The magic constants are the header's own, not a guess:
-     * RPCS3 checks _x4 == 0x10 and _x8 == 0x20 and rejects anything else. */
+     * LAYOUT, from lv2_file_e0000017 (refs/.../sys_fs.h:612, CHECK_SIZE 0x28) with
+     * lv2_file_op as an EMPTY base class, so the first field is at offset 0:
+     *
+     *   +0x00 u32 size       declared size, equal to 0x28
+     *   +0x04 u32 _x4        must be 0x10
+     *   +0x08 u32 _x8        must be 0x20
+     *   +0x0C u32 reserved
+     *   +0x10 u32 file_path  guest pointer
+     *   +0x18 u64 file_size  (0x14 is padding for the u64 alignment)
+     *   +0x20 u32 out_code
+     *
+     * 0x10 and 0x20 are FIELD OFFSETS the header validates, not addresses to read.
+     * Reading them as offsets into the structure (as this code did) made every
+     * call fail its own validation, so the guest got EINVAL, the cache file was
+     * never created, and the title reported "Allocate file area failed, code
+     * 80010002" -- 0x80010002 being exactly CELL_EINVAL. That is the measured
+     * symptom this fixes. */
     case 0xE0000017: {
-        if (size < 0x28) return CELL_EINVAL;
-        const uint32_t declared = vm::read32(arg + 0x28);
-        const uint32_t x4 = vm::read32(arg + 0x10);
-        const uint32_t x8 = vm::read32(arg + 0x20);
-        if (declared > size || x4 != 0x10 || x8 != 0x20) return CELL_EINVAL;
-        const uint32_t path_ea = vm::read32(arg + 0x30);
-        const uint64_t want = vm::read64(arg + 0x34);
+        const uint32_t declared = vm::read32(arg + 0x00);
+        const uint32_t x4 = vm::read32(arg + 0x04);
+        const uint32_t x8 = vm::read32(arg + 0x08);
+        if (size < declared || x4 != 0x10 || x8 != 0x20) return CELL_EINVAL;
+        const uint32_t path_ea = vm::read32(arg + 0x10);
+        const uint64_t want = vm::read64(arg + 0x18);
         std::string g, h;
         const int64_t e = resolve(path_ea, g, h);
         if (e) {
-            vm::write32(arg + 0x3C, static_cast<uint32_t>(e));
+            vm::write32(arg + 0x20, static_cast<uint32_t>(e));
             LOG_WARN("fs", "AllocateFileArea: cannot resolve the path -> 0x%llx",
                      static_cast<unsigned long long>(e));
             return CELL_OK;
         }
         if (is_ro(g)) {
-            vm::write32(arg + 0x3C, static_cast<uint32_t>(CELL_EROFS));
+            vm::write32(arg + 0x20, static_cast<uint32_t>(CELL_EROFS));
             return CELL_OK;
         }
         std::error_code ec;
@@ -688,7 +704,7 @@ LV2_SYSCALL(817, sys_fs_fcntl) {
             std::filesystem::resize_file(h, static_cast<std::uintmax_t>(want), ec);
         }
         const int32_t rc = ec ? CELL_EIO : CELL_OK;
-        vm::write32(arg + 0x3C, static_cast<uint32_t>(rc));
+        vm::write32(arg + 0x20, static_cast<uint32_t>(rc));
         LOG_INFO("fs", "AllocateFileAreaWithoutZeroFill '%s' size 0x%llx -> %s", g.c_str(),
                  static_cast<unsigned long long>(want), ec ? "EIO" : "OK");
         return CELL_OK;

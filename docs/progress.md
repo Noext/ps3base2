@@ -678,4 +678,57 @@ stall remains behind this one.
 ### Isolation
 
 The WASM agent works in /root/Dev/ps3base2-wasm (branch wasm-main), a separate
-git worktree. It must stay there; the RDR work is /root/Dev/ps3base2 on main.
+git worktree. It must stay there; the RDR work is /root/Dev/ps3base2 on main.## 2026-11-11 -- the fcntl structure offsets were wrong, and the disk error is gone
+
+### The defect
+
+sys_fs_fcntl 0xE0000017 read its argument structure at the wrong offsets. It took
+read32(arg + 0x10) for _x4 and read32(arg + 0x20) for _x8 -- treating the VALUES
+0x10 and 0x20 as offsets into the struct. The real layout, from
+lv2_file_e0000017 (refs/.../sys_fs.h:612, CHECK_SIZE 0x28) whose base
+lv2_file_op is empty:
+
+    +0x00 u32 size        +0x04 u32 _x4 (0x10)    +0x08 u32 _x8 (0x20)
+    +0x0C u32 reserved    +0x10 u32 file_path     +0x18 u64 file_size
+    +0x20 u32 out_code
+
+So every call failed its own validation and returned CELL_EINVAL (0x80010002),
+the exact code the title printed:
+
+    [DiskCache] Error: Allocate file area failed, code 80010002
+
+0x80010002 is CELL_EINVAL, not a storage failure. The disk was never involved.
+
+### Fixed
+
+Offsets corrected with the layout written out in the comment, and a unit test
+(tests/fs_fcntl_e0000017.cpp, 10 checks) that builds the structure byte for byte
+the way a title sends it, asserts a well-formed call passes, and asserts that
+breaking _x4 or _x8 at their real offsets is rejected -- so the offsets are
+proven rather than assumed.
+
+### Effect, measured, fresh VFS
+
+    AllocateFileAreaWithoutZeroFill '/dev_hdd1/cache.dat' size 0x6fe02000 -> OK
+    cache.dat = 1876959232 bytes
+    'Allocate file area failed' : 0 occurrences (was 1)
+    EBADF                       : 0 occurrences (was 1)
+
+and the title moved past the disk entirely:
+
+    [DiskCache] Cache is ready to go in 0.001s (2 valid blocks, cache is NOT primed).
+    ppu: thread '[RAGE] DiskCache Reader' start
+    ppu: thread '[RAGE] DiskCache Worker' start
+    rsx: flip 361, draw 1.3% (30k/s)
+
+against flip 0 / draw 0.0% before. The 'Fatal disc error ... simulating infinite
+retry' line is gone, so f_00550b34 is no longer entered: it is the title's
+fatal-I/O retry routine, not a cache wait.
+
+### The new leaf
+
+    ppu: unknown indirect target 0x00d1bbec (lr=0x0085c000)
+
+Same shape as the previous one (0x00d19e04, now lifted via a discovery seed): an
+indirect call from f_00d19278 to a target the lifter never produced. Worked
+through the discovery loop, one seed at a time.

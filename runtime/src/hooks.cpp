@@ -1029,6 +1029,37 @@ static bool thread_exit_probe(ppu::Context& ctx) {
                  static_cast<uint32_t>(ctx.gpr[31]), static_cast<uint32_t>(ctx.lr));
     return false;
 }
+/* PS3BASE_LOOP_FLAG: the guest byte that decides whether f_00550b34 works or
+ * sleeps forever.
+ *
+ * f_00550b34 loads one byte from guest 0x1669DCC at entry and branches on it:
+ * non-zero runs the real work, zero falls into L_550c10 -> usleep(1000) -> goto,
+ * an unconditional back-edge with no test of its own. So that byte IS the exit
+ * condition, and if nothing sets it the title idles forever.
+ *
+ * The fcntl fix opened this path once; it came back through a different caller
+ * (f_005544d0 -> f_00550b34), so the flag is what to watch, not the caller. */
+static bool loop_flag_probe(ppu::Context& ctx) {
+    static std::atomic<int> n{0};
+    const int k = n.fetch_add(1, std::memory_order_relaxed);
+    if (k < 12) {
+        constexpr uint32_t kFlagEA = 0x01669DCCu;
+        const uint8_t v = vm::range_mapped(kFlagEA, 1) ? vm::ptr(kFlagEA)[0] : 0xFFu;
+        LOG_INFO("loopflag", "#%d th=0x%x flag[0x%08x]=0x%02x lr=0x%08x r3=0x%08x",
+                 k, ctx.thread_id, kFlagEA, static_cast<unsigned>(v),
+                 static_cast<uint32_t>(ctx.lr), static_cast<uint32_t>(ctx.gpr[3]));
+    }
+    return false;
+}
+
+static bool cache_build_probe(ppu::Context& ctx) {
+    static std::atomic<int> n{0};
+    const int k = n.fetch_add(1, std::memory_order_relaxed);
+    if (k < 6) LOG_INFO("cachebuild", "#%d th=0x%x r3=0x%08x r30=0x%08x lr=0x%08x", k, ctx.thread_id,
+        static_cast<uint32_t>(ctx.gpr[3]), static_cast<uint32_t>(ctx.gpr[30]), static_cast<uint32_t>(ctx.lr));
+    return false;
+}
+
 static bool load_probe(ppu::Context& ctx) {
     static const bool on = std::getenv("PS3BASE_LOAD_PROBE") != nullptr;
     if (!on) return false;
@@ -1320,6 +1351,8 @@ void init() {
      * -- the guard was installed, logged "guard installed", and never called.
      * That is why earlier runs reported "0 false alarms": it was not watching.
      * Assign it again after the guard is registered. */
+    if (std::getenv("PS3BASE_CACHE_PROBE")) add_guard(0x5074a4, cache_build_probe);
+    if (std::getenv("PS3BASE_LOOP_FLAG")) add_guard(0x550b34, loop_flag_probe);
     if (std::getenv("PS3BASE_THREAD_PROBE")) {
         add_guard(0x533064, thread_entry_probe);
         add_guard(0x5331e0, thread_exit_probe);

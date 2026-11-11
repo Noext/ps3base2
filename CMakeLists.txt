@@ -436,6 +436,14 @@ add_test(NAME sysio COMMAND sysio)
 # error_codes: every code in runtime/kernel.h against RPCS3 ErrorCodes.h. A
 # wrong code does not crash -- it makes the title take a branch meant for a
 # different failure, which is how ENOTSUP became ENOLICDISC.
+# fs_fcntl_e0000017: the lv2_file_e0000017 layout, built the way a title sends it.
+# The first implementation read _x4 at +0x10 and _x8 at +0x20 (treating the values
+# 0x10/0x20 as offsets), so its own validation failed and the guest got EINVAL.
+add_executable(fs_fcntl_e0000017 tests/fs_fcntl_e0000017.cpp)
+target_include_directories(fs_fcntl_e0000017 PRIVATE runtime/include)
+target_compile_options(fs_fcntl_e0000017 PRIVATE ${PS3BASE_ARCH_FLAGS})
+add_test(NAME fs_fcntl_e0000017 COMMAND fs_fcntl_e0000017)
+
 add_executable(error_codes tests/error_codes.cpp)
 target_include_directories(error_codes PRIVATE runtime/include)
 target_compile_options(error_codes PRIVATE ${PS3BASE_ARCH_FLAGS})
