@@ -508,3 +508,51 @@ No in-game capture. regress.sh is green on Minecraft (6841) and GTA (6481);
 Red Dead Redemption reports alive with zero flips, which the script counts as a
 failure and reports as one.
 
+
+## 2026-11-11 -- the RAGE thread question, answered by measurement
+
+The previous entry blamed `_sys_ppu_thread_exit(0xdeadc0de)` inside liblv2. That
+was wrong twice over, and the correction matters.
+
+First, `0xdeadc0de` is not a runtime sentinel. A search over runtime/, recomp/,
+tools/, the generated tree, EBOOT.elf and liblv2.elf finds nothing: the word never
+exists in a file. The title builds it with two instructions at 0x005331c0 --
+`lis r3, 0xdead` then `oris r3, r3, 0xc0de` -- so it lives in a register and
+nowhere else. That is why both a constant search and a memory search came up
+empty, and it is a good reminder that "not found" is a fact about the search, not
+about the program.
+
+Second, the thread is not failing. `PS3BASE_THREAD_PROBE` (hooks.cpp) hooks the
+worker entry at 0x533064 and prints its registers:
+
+    threadprobe: ENTRY 0x533064 #0 th=0x1000005 r3=0x0165cc20 r2=0x0139ebb0
+    ... eight entries, one exit through 0x5331e0
+
+Eight workers arrive, each with its own work structure in r3 and the image TOC in
+r2. The OPD at 0x01356420 resolves, lookup() finds f_00533064, and that function
+contains its own _sys_ppu_thread_exit at 0x5331cc -- which is why only one thread
+was ever seen leaving through the other trampoline. The machinery is correct.
+
+## The install was never broken either
+
+`GOWA_HDD0_DIR` defaults to `./vfs`, not to PS3BASE_DISC_DIR. The install had
+been writing to `/root/Dev/ps3base2/vfs/dev_hdd0/game/BLES00680` all along and
+succeeded:
+
+    516M  vfs/dev_hdd0/game/BLES00680/USRDIR/rdr2_installed.sdat
+          vfs/dev_hdd0/game/BLES00680/PARAM.SFO
+
+The forcing in docs/forcings.md F-001 pre-placed the archive into a directory the
+runtime never reads, so it documented a problem that did not exist. Removed.
+
+## Where the title actually stops now
+
+The main thread settles into a one-second idle loop:
+
+    sys: 141 sys_timer_usleep lr=0x002a9180 r3=0xf4240     (1 s, forever)
+
+after configuring video (`cellVideoOutConfigure res 2 format 1 pitch 5120`) and
+mounting its cache. No dialog is open, no callback is pending, and the RSX reports
+busy 100% with zero methods. The workers run and leave. Something the title waits
+for never arrives, and it is not the loader: the loader is doing its job.
+
