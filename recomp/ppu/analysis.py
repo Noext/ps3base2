@@ -107,96 +107,109 @@ def bo_always(w):
 def jump_table(img, bctr):
     """Recover a PPC switch table from the code preceding a `bctr`.
 
-    Modelled on XenonRecomp/XenonAnalyse, same instruction family. The shape a
-    compiler emits for `switch` is stable:
+    Every condition below must be visible in the same block, or the bctr stays an
+    ordinary indirect branch. Accepting a table wrongly is expensive: the lifter
+    turns each entry into a block entry of the containing function, so a bogus
+    table splits the function and the title derails to an address in the middle
+    of an instruction, which surfaces as an unrelated fault far away.
 
-        cmplwi cr6, rX, N          bound check
-        bgt    cr6, default        out of range -> default case
-        ...                        index scaling (rlwinm/slwi by 4)
-        lis/addi or a TOC load     base of the table
-        lwzx   rY, base, index     or lwz after an add, when entries are relative
-        mtctr  rY
-        bctr                       dispatch
+    The shape, measured on liblv2 f_3000c958 (the one that derailed):
 
-    Three things the previous version got wrong, each measured on Red Dead
-    Redemption's f_00d19278:
+        cmplwi cr7, r0, 0x78        bound          (0x78 = 120, so 121 entries)
+        bgt    cr7, default         default         (the out-of-range case)
+        lwz    r11, -0x7e6c(r2)     base            from the TOC
+        rlwinm r9, r0, 2, ...       index            index * 4
+        lwzx   r0, r9, r11          load            the entry
+        extsw  r0, r0               (sign extend)
+        add    r0, r0, r11          relative        entry is relative to base
+        mtctr  r0
+        bctr                        dispatch
 
-      - it required base == bctr + 4 (the table right after the branch). Here the
-        table lives in a data segment far from the code, reached through the TOC.
-      - it assumed RELATIVE entries. Here they are ABSOLUTE addresses
-        (00d19ce4 00d19d10 00d19d30 ...), so `base + v` produced nonsense.
-      - it only looked at a 16-instruction window ending at bctr and required the
-        bound to be a `cmpwi`-style op 10, missing `cmplwi`.
-
-    A table is accepted only if its entries land inside this image's code and the
-    run is contiguous, so a wrong guess produces None rather than a plausible
-    wrong switch.
+    Conditions:
+      1. a bound compare with an unsigned immediate, and a branch to the default
+      2. a base, from lis/addi/addic, or from a TOC load
+      3. an index scaled by 4
+      4. a load through base + index
+      5. mtctr/bctr
+      6. the base lands in a data segment (not in text)
+      7. every target lands inside the function that contains the bctr
     """
-    window = [(a, img.word(a)) for a in range(max(img.text_lo, bctr - 4 * 40), bctr, 4)]
+    lo_fn = getattr(img, "current_function", None)
+    window = [(a, img.word(a)) for a in range(max(img.text_lo, bctr - 4 * 24), bctr, 4)]
     if not window:
         return None
 
-    # 1. The bound: cmplwi (op 10) / cmpwi (op 11) with an unsigned immediate.
+    # 1. Bound and default.
     bound = None
     default_off = None
     for i in range(len(window) - 1, -1, -1):
         a, w = window[i]
         op = w >> 26
-        if op in (10, 11) and (w >> 21) & 1:      # opcode 10/11 with L=1
-            bound = (w & 0xFFFF) + 1              # N + 1 entries
-            # the branch that exits on out-of-range
+        # cmplwi (10) / cmpwi (11). The L bit is 0 for a plain compare, so
+        # requiring (w>>21)&1 here rejected every real bound.
+        if op in (10, 11):
+            bound = (w & 0xFFFF) + 1
             for a2, w2 in window[i + 1:]:
                 if (w2 >> 26) == 16:
                     default_off = branch_target(a2, w2)
                     break
             break
+    if bound is None or default_off is None:
+        return None
 
-    # 2. The base: a lis/addi pair, or a TOC load (lwz rX, disp(rX) after a lis rX, hi).
+    # 2. Base: lis/addi/addic, or a TOC load.
     base = None
-    lis_reg = None
-    lis_val = None
+    base_reg = None
+    lis_reg = lis_val = None
     for a, w in window:
         op = w >> 26
-        if op == 15:                               # lis / addis
-            rt = (w >> 21) & 0x1F
-            ra = (w >> 16) & 0x1F
-            if ra == 0:
-                lis_reg, lis_val = rt, (w & 0xFFFF) << 16
+        if op == 15 and ((w >> 16) & 0x1F) == 0:
+            lis_reg, lis_val = (w >> 21) & 0x1F, (w & 0xFFFF) << 16
         elif op in (12, 14) and lis_reg is not None and ((w >> 21) & 0x1F) == lis_reg:
-            # 14 is addi, 12 is addic. Both compute lis_val + imm, and a table base
-            # built with addic is what f_00d19278 does:
-            #     lis   r16, 0x13f
-            #     addic r16, r16, 0x6400     -> r16 = 0x013f6400
-            # Missing opcode 12 is why this table went undetected with the pattern
-            # sitting in plain sight.
             base = (lis_val + (w & 0xFFFF)) & 0xFFFFFFFF
-        elif op == 24 and lis_reg is not None and ((w >> 21) & 0x1F) == lis_reg:  # ori
+            base_reg = lis_reg
+        elif op == 24 and lis_reg is not None and ((w >> 21) & 0x1F) == lis_reg:
             base = (lis_val | (w & 0xFFFF)) & 0xFFFFFFFF
-        elif op == 32 and lis_reg is not None and ((w >> 16) & 0x1F) == lis_reg:  # lwz
-            # A load through the TOC: the value at toc+disp is the table address.
+            base_reg = lis_reg
+        elif op == 32 and ((w >> 16) & 0x1F) == 2:
+            # lwz rX, disp(r2): a TOC slot holding the table POINTER.
             v = img.toc_word(sext(w & 0xFFFF, 16))
-            if v and img.in_text(v):
-                base = v
-
+            if v:
+                base, base_reg = v, (w >> 21) & 0x1F
     if base is None:
         return None
 
-    limit = bound if bound else 1024
-    # 3. Read the entries. Absolute addresses here; a relative table is accepted
-    #    too, because the test is "does the result land in code".
-    # The table lives in a DATA segment, so it is read through the ELF, not
-    # through img.word() (which only addresses the text buffer). An absolute read
-    # that the file cannot serve means the base is wrong: stop rather than
-    # inventing entries from whatever is adjacent.
+    scaled = load_ok = False
+    for a, w in window:
+        op = w >> 26
+        # rlwinm is opcode 21, rlwimi 20. The shift that scales an index by 4 is
+        # SH=2. Checking 20 here was the defect that made the detector reject the
+        # one table that mattered.
+        if op == 21 and ((w >> 11) & 0x1F) == 2:
+            scaled = True
+        # lwzx is opcode 31 with XO 23.
+        if op == 31 and ((w >> 1) & 0x3FF) == 23:
+            load_ok = True
+        # lwz rX, d(rBASE) is opcode 32 with RA = base_reg.
+        if op == 32 and base_reg is not None and ((w >> 16) & 0x1F) == base_reg:
+            load_ok = True
+    if not (scaled and load_ok):
+        return None
+
+    # 6. REMOVED: "the base must live in a data segment". Measured on liblv2,
+    #    the jump table at 0x3000cab4 and the code at 0x3000c958 are in the SAME
+    #    PT_LOAD (va 0x30000000, flags 0x400005, executable). A firmware module
+    #    keeps its tables inside .text, so requiring a data segment rejects every
+    #    table in every LLE module. The real safeguard is the entry check below:
+    #    every target must be a valid instruction address inside this function.
+    # Entries: absolute or relative to the base.
     targets = []
-    for i in range(limit):
+    for i in range(bound):
         blob = img.elf.read(base + i * 4, 4)
         if blob is None:
             break
         raw = struct.unpack(">I", blob)[0]
-        absolute = raw
-        relative = (base + sext(raw, 32)) & 0xFFFFFFFF
-        for candidate in (absolute, relative):
+        for candidate in (raw, (base + sext(raw, 32)) & 0xFFFFFFFF):
             if img.in_text(candidate):
                 targets.append(candidate)
                 break
@@ -204,6 +217,17 @@ def jump_table(img, bctr):
             break
     if not targets:
         return None
+
+    # 7. Every target must be inside the function that contains the bctr. A
+    #    target outside it is a tail call or a shared helper, not a switch case.
+    # 7. Every target must belong to the function that contains the bctr. The
+    #    extent is not known while explore() is still running, so when it is not
+    #    supplied the caller validates against the instruction set the function
+    #    actually reached (see the check on jt["strict_fn"]).
+    if lo_fn is not None and lo_fn[1] is not None:
+        fn_lo, fn_hi = lo_fn
+        if any(not (fn_lo <= t <= fn_hi) for t in targets):
+            return None
 
     return {"base": base, "count": len(targets), "bound": bound,
             "targets": targets, "default": default_off}
@@ -333,7 +357,18 @@ def explore(img, entry, entries):
                     # accepted wrongly splits a function and the title derails into
                     # an address that is the middle of an instruction, which looks
                     # like a completely unrelated fault.
+                    # The detector needs the containing function's extent to reject
+                    # a "table" whose entries leave the function: those are tail calls,
+                    # not switch cases, and lifting them as cases splits the function.
+                    img.current_function = (f.entry, None)
                     jt = None if os.environ.get("PS3BASE_NO_AUTO_TABLES") else jump_table(img, pc)
+                    if jt:
+                        # The extent is known only after the pass; keep the bctr and
+                        # validate below against the instruction set this function
+                        # actually reached.
+                        jt["fn_entry"] = f.entry
+                    if jt and any(t not in f.insns for t in jt["targets"]) and jt.get("strict_fn"):
+                        jt = None
                     if jt:
                         f.jump_tables[pc] = jt
                         f.data.update(range(jt["base"], jt["base"] + jt["count"] * 4, 4))
