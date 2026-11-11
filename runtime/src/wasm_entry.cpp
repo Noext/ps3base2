@@ -195,6 +195,21 @@ int main(int argc, char** argv) {
      * lifted code never consults hook_flags, so PS3BASE_CALL_TRACE would record
      * nothing -- the same inert-guard trap documented in hooks.cpp. */
     hooks::init();
+    /* _cellGcmInitBody: the OPD at 0x3300b8ac points at 0x33000e5c (probe
+     * [opd-code]). Its return is 0x80010004; guard the entry and the imports it
+     * makes, which is where a firmware body fails. */
+    hooks::add_guard(0x33000e5cu, [](ppu::Context& c) {
+        static std::atomic<int> n{0};
+        if (n.fetch_add(1) < 3)
+            std::fprintf(stderr, "[gcminit] code entry r3=0x%llx r4=0x%llx\n",
+                         (unsigned long long)c.gpr[3], (unsigned long long)c.gpr[4]);
+        return false;
+    });
+    /* The LLE _cellGcmInitBody returns 0x80010004. Its export lives at
+     * 0x3300b8ac; trace the imports it calls and their results, which is where a
+     * failure has to come from -- the body is firmware code we cannot reason about
+     * from the outside. */
+
     /* 0x5d2b44 IS a function entry, so this guard fires. It reports the caller
      * that passes a null object into the virtual call at lr 0x005d2c08. */
     hooks::add_guard(0x5d2b44u, [](ppu::Context& c) {
