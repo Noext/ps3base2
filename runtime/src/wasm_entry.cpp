@@ -198,15 +198,6 @@ int main(int argc, char** argv) {
     /* 0x5d2b44 IS a function entry, so this guard fires -- the mid-function
      * addresses tried in rounds 194-199 never could. The lr at entry is the
      * caller that passes the null object. */
-    hooks::add_guard(0x5d2b44u, [](ppu::Context& c) {
-        static std::atomic<int> n{0};
-        if (n.fetch_add(1) < 8)
-            std::fprintf(stderr, "[entry544] lr=0x%08x r3=0x%llx r4=0x%llx r5=0x%llx\n",
-                         static_cast<unsigned>(c.lr),
-                         (unsigned long long)c.gpr[3], (unsigned long long)c.gpr[4],
-                         (unsigned long long)c.gpr[5]);
-        return false;
-    });
     std::printf("ps3base-wasm: hooks installed\n");
 
     /* The block is a virtual call on a null vtable pointer at lr 0x005d2c08.
