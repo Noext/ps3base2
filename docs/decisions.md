@@ -157,3 +157,49 @@ placed in. `mmapper.cpp` now refuses and logs any allocation that overlaps an
 image, and the layout is asserted against the video, stack and SPU regions,
 including the compact layout's `0x50000000`.
 
+## D-010 -- The interpreter's dispatch site is identified by its mtctr, not by bctr-4
+
+The shared-table detector (`recomp/ppu/analysis.py:table_dispatch_bctr`)
+recovers the RAGE script
+interpreter's 256-entry opcode table from the code that dispatches through it.
+It made two assumptions that are false on the title, and each produced a
+different failure about 21 s into the boot.
+
+**Rule 1: mtctr is not always the instruction before bctr.** Of f_00d19208's
+163 bcctr, 130 put mtctr at -1, 26 at -2, 3 at -3 and 4 at -4. The gap holds
+real work, not a nop:
+
+    0xd19e90  mtctr r5
+    0xd19e94  subfc r30, r3, r30
+    0xd19e98  bctr
+
+The old gate, 'if not mtctr at bctr-4: return None', rejected that site, the
+lift emitted a switch with NO cases at all, and the run stopped with the
+CORRECT target already in ctr:
+
+    F ppu: unknown indirect target 0x00d1bbec (lr=0x0085c000)
+      ctr=0xd1bbec r16=0x013f6400 r5=0x00d1bbec
+
+0xd1bbec is table[0x95] at 0x013f6400, and the opcode byte the guest read was
+0x95. The interpreter was working; the switch was empty.
+
+**Rule 2: the feeding lwzx is the one whose RT is the mtctr source.** Ignoring
+RT picked the loop consumer's lwzx (0x00d1a008 lwzx r9, r3, r6) instead of
+0x00d19ff0 lwzx r5, r16, r5, and rebuilt 'a table' at 0x013323f0 with one
+entry.
+
+**Consequence.** The mtctr is now searched for within 8 instructions, the
+feeding lwzx is required to write the mtctr source register, and the look-back
+window is 40 instructions rather than 11. Both rules are pinned by
+tests/ppu_dispatch_table.py (4 checks, registered as the ctest named
+ppu_dispatch_table); reverting either rule stops it at the first check.
+Measured after the fix: 163 of 163 shared-table dispatches in f_00d19208
+resolve to base 0x013f6400.
+
+**The poison was a red herring, and that is worth recording.** The crash dump
+prints cdcdcdcd / dfdfdfdf in several register slots, which is what shaped an
+earlier hypothesis about an unfilled buffer. It is wrong. The bytes the
+interpreter consumed were reconstructed from the dump's own word lines: the
+byte at the read is 0x95, a real opcode. 0xcd/0xdf sit in other heap objects
+printed in the same dump, at unaligned offsets. Nothing was missing from the
+buffer, so no file read, decrypt or SPURS job was skipped on this path.

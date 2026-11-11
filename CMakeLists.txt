@@ -260,6 +260,15 @@ target_include_directories(hook_flags PRIVATE runtime/include)
 target_compile_options(hook_flags PRIVATE ${PS3BASE_ARCH_FLAGS})
 add_test(NAME hook_flags COMMAND hook_flags)
 
+# ppu_dispatch_table: the lifter's shared-table bctr detector, on synthetic
+# words. Pins the two shape rules that cost a session on Red Dead Redemption:
+# mtctr is not always at bctr-4 (26 of f_00d19208's 163 are at -2, 3 at -3 and
+# 4 at -4), and the feeding lwzx is the one whose RT is the mtctr source. It
+# FAILED on both before the fix, so it is a regression test and not a
+# description: reverting either rule stops it at the first check.
+add_test(NAME ppu_dispatch_table
+         COMMAND python3 "${CMAKE_SOURCE_DIR}/tests/ppu_dispatch_table.py")
+
 add_executable(memory_map tests/memory_map.cpp runtime/src/memory.cpp runtime/src/regions.cpp runtime/src/mem.cpp runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/backtrace_port.cpp runtime/src/host.cpp runtime/src/log.cpp)
 target_include_directories(memory_map PRIVATE runtime/include)
 target_compile_options(memory_map PRIVATE ${PS3BASE_ARCH_FLAGS})
