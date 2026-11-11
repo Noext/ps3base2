@@ -38,7 +38,15 @@ enum : int64_t {
     CELL_EMFILE = static_cast<int32_t>(0x8001002C),
     CELL_ENOTDIR = static_cast<int32_t>(0x8001002F),
     CELL_ENOTEMPTY = static_cast<int32_t>(0x8001003C),
-    CELL_ENOTSUP = static_cast<int32_t>(0x8001003D),
+    /* refs/rpcs3/rpcs3/Emu/Cell/ErrorCodes.h:158. NOT 0x8001003D, which is
+     * CELL_ENOLICDISC (:164) -- a different error entirely. The wrong value made
+     * a "not supported" answer indistinguishable from a licence-disc problem, and
+     * it disagreed with runtime/src/lv2/fs.cpp which already had 0x80010037.
+     * tests/error_codes.cpp pins every code in this enum against RPCS3. */
+    CELL_ENOTSUP = static_cast<int32_t>(0x80010037),
+    /* refs/.../ErrorCodes.h:164. Only here so the test can prove it is NOT what
+     * CELL_ENOTSUP means; nothing returns it yet. */
+    CELL_ENOLICDISC = static_cast<int32_t>(0x8001003D),
 };
 
 using SyscallFn = int64_t (*)(ppu::Context& ctx, uint8_t* base);

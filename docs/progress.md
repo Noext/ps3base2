@@ -620,3 +620,62 @@ and "No interface found", then does nothing. cellFsGetFreeSize is imported
 (0xAA3B4BCD, table.cpp) and resolved through libfs's LLE, so the ENOTSUP is
 produced downstream of it in a sys_fs path that has no handler.
 
+## 2026-11-11 (suite) -- two error codes were wrong, and the save-load ordering
+
+### The error codes were not what RPCS3 says they are
+
+tests/error_codes.cpp pins every code in runtime/kernel.h against
+refs/.../ErrorCodes.h. It found one immediately:
+
+    [FAIL] CELL_EBADF: runtime has 0x8001002A, RPCS3 :20 says 0x80010008
+
+The test was wrong, not the runtime -- 0x80010008 is CELL_EDEADLK (:111) and
+CELL_EBADF really is 0x8001002A (:167). But chasing that found a real defect:
+CELL_ENOTSUP was 0x8001003D in kernel.h, and 0x8001003D is CELL_ENOLICDISC
+(:164). The correct value is 0x80010037 (:158), which runtime/src/lv2/fs.cpp had
+already been using -- so the two disagreed, and a title asking "is this
+supported" was being told "your disc licence is wrong".
+
+Both are now right and pinned by a test: 12 checks, 0 failures.
+
+### sys_net_* returned ENOTSUP where the console returns CELL_OK
+
+Found by the 3-minute error sweep: it was one of only four warnings the whole run
+produced. refs/.../sys_net.cpp:2019 is a todo() then CELL_OK, and the infoctl
+switch ends in CELL_OK for every command it does not handle. Both syscalls now
+return CELL_OK and log the ignored command at INFO.
+
+### The save-load ordering was wrong, and that was the retry
+
+Deep-diving the RAGE workers established that they are not skipping work at all:
+the branch at 0x533148 tests the work-structure POINTER, never zero, so the work
+path always runs. Their real leaf is
+
+    cellSaveDataAutoLoad2(version=0, 'BLES00680RDR2OPTIONS_SAV', 0, setBuf)
+    -> 0x8002b40b CELL_SAVEDATA_ERROR_NODATA
+
+and the three saves it asks for are absent, so LoadThread exits at 0x5331cc and
+the main thread recreates one every second, forever.
+
+Our handler returned NODATA BEFORE calling the title's funcStat. RPCS3 calls
+funcStat first (cellSaveData.cpp:1694) and only then decides it has no data
+(:2340), and it reports isNew through statGet so the title can take its
+"create a fresh save" path. Returning first meant the title never entered its own
+callback and could not tell "no save yet" from "the save system is broken".
+
+Fixed: fill_stat, call funcStat, and only then return NODATA for a load.
+
+### Effect, measured
+
+    before:  savedata: load 'BLES00680RDR2OPTIONS_SAV' -> no data
+    after:   savedata: 'BLES00680RDR2OPTIONS_SAV' stat callback result -4
+
+The title's own callback now runs and answers -4, which is
+CELL_SAVEDATA_CBRESULT_ERR_NODATA -- the game's decision, not ours. That is the
+correct shape: it is told the truth and chooses. It still retries, so a third
+stall remains behind this one.
+
+### Isolation
+
+The WASM agent works in /root/Dev/ps3base2-wasm (branch wasm-main), a separate
+git worktree. It must stay there; the RDR work is /root/Dev/ps3base2 on main.

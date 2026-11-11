@@ -433,6 +433,14 @@ add_test(NAME sysio COMMAND sysio)
 # GETTING DATA fails with RPCS3's codes while CREATING a context and a session
 # succeeds. Both halves are asserted, since a session that failed made this
 # title abandon a save load (docs/loading-43/REPORT.md).
+# error_codes: every code in runtime/kernel.h against RPCS3 ErrorCodes.h. A
+# wrong code does not crash -- it makes the title take a branch meant for a
+# different failure, which is how ENOTSUP became ENOLICDISC.
+add_executable(error_codes tests/error_codes.cpp)
+target_include_directories(error_codes PRIVATE runtime/include)
+target_compile_options(error_codes PRIVATE ${PS3BASE_ARCH_FLAGS})
+add_test(NAME error_codes COMMAND error_codes)
+
 add_executable(commerce2 tests/commerce2.cpp)
 target_include_directories(commerce2 PRIVATE runtime/include "${CMAKE_SOURCE_DIR}/runtime/src")
 target_compile_options(commerce2 PRIVATE ${PS3BASE_ARCH_FLAGS})
@@ -520,6 +528,18 @@ target_include_directories(sysutil PRIVATE runtime/include "${CMAKE_SOURCE_DIR}/
 target_compile_options(sysutil PRIVATE ${PS3BASE_ARCH_FLAGS})
 target_link_libraries(sysutil PRIVATE ${CMAKE_DL_LIBS} pthread)
 add_test(NAME sysutil COMMAND sysutil)
+
+# sysutil_handlers: the SAME handlers the imports run (cellSysutil.cpp is
+# included), called with a real ppu::Context, so the argument order and the
+# value that lands in r3 are checked -- not only the rules in the header. The
+# services it calls (msgdialog, osk, vfs, cbwatch) are stubbed, so this runs with
+# no game, no GPU and no threads.
+add_executable(sysutil_handlers tests/sysutil_handlers.cpp runtime/src/memory.cpp runtime/src/regions.cpp runtime/src/mem.cpp runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/backtrace_port.cpp runtime/src/host.cpp runtime/src/log.cpp)
+target_include_directories(sysutil_handlers PRIVATE runtime/include "${CMAKE_SOURCE_DIR}/runtime/src" "${CMAKE_SOURCE_DIR}/runtime/src/hle")
+target_compile_options(sysutil_handlers PRIVATE ${PS3BASE_ARCH_FLAGS})
+target_link_libraries(sysutil_handlers PRIVATE ${CMAKE_DL_LIBS} pthread)
+add_test(NAME sysutil_handlers COMMAND sysutil_handlers)
+
 
 
 # voice: cellVoice (libvoice), the module Red Dead Redemption imports 13
