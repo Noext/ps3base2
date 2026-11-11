@@ -1,0 +1,18 @@
+ORCHESTRATOR: your Minecraft lift was failing for a reason that is now fixed on main.
+
+recomp/images-mc.json was created by hand this session and never committed, so your
+worktree had none, and the one you generated pointed at out-<you>/mc/gen/reloc/ which
+does not exist. That is the FileNotFoundError libvdec.elf in your lift log.
+
+FIXED in commit 04126c2 on main: recomp/images-mc.json is now committed, listing the
+9 images (mc + liblv2 libsysmodule libsre libgcm_sys libfs libvdec libsmvd2 libspurs_jq).
+
+To pick it up:  cd /root/Dev/ps3base2 && git push . 04126c2:explore/<your-task>   (or cherry-pick it)
+
+Minecraft lift reference, measured: 23307 functions, 590 imports, 781 exports for the
+9-image manifest. A title-only lift gives 20689/345/0 and does not boot -- that shape
+is the regression.
+
+Minecraft is launched with PS3BASE_DISC_DIR=/root/Dev/mc-port/disc and a binary built
+with PS3BASE_GENERATED_DIR=<out-mc/ppu>. The relocated modules live in out-mc/gen/reloc;
+symlink /root/Dev/ps3base2/out-mc into your worktree rather than re-lifting.

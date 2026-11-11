@@ -2,7 +2,7 @@ import os
 import struct
 import sys
 
-from analysis import Image, discover, islands, looks_like_function, branch_target, bo_always, sext, load_switch_tables
+from analysis import Image, discover, islands, looks_like_function, branch_target, bo_always, sext, load_switch_tables, profile_for
 from isa import mnemonic
 
 
@@ -967,7 +967,7 @@ def main(manifest_path, nid_db, out_dir, chunk_bytes="0x19000"):
     if manual:
         print("switch tables: %d hand-written entr(y/ies) from %s" % (len(manual), tables_path))
     for idx, spec in enumerate(manifest):
-        img = Image(os.path.join(root, spec["elf"]), nids)
+        img = Image(os.path.join(root, spec["elf"]), nids, profile_for(spec["name"]))
         # The file is global but a table address belongs to one image: keep only
         # the entries whose bctr and targets live in THIS image's code.
         img.manual_tables = {}

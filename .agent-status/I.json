@@ -1,0 +1,29 @@
+{
+  "status": "done",
+  "commit": "37ed4bad38f51d37c1710ef482074bf9b7270ff8",
+  "branch": "agent-I",
+  "worktree": "/root/Dev/wt-I",
+  "results": "/root/Dev/wt-I/RESULTS.md",
+  "commits": [
+    "cea5e8c scriptdump probes + D-010",
+    "75dc132 RESULTS.md",
+    "0ea7111 (cherry-pick of 5015fa7)",
+    "80459c5 case/dispatch probes + D-011",
+    "37ed4bad38f51d37c1710ef482074bf9b7270ff8 RESULTS.md follow-up"
+  ],
+  "summary": "The RAGE interpreter f_00d19278 is running valid bytecode, not 0xCD/0xDF fill: opcode 0x95 (149) at the bytecode pointer selects table[149] = 0x00d1bbec from the 256-entry table at 0x013f6400, exactly the reported stop target, confirmed independently from bin/rdr/EBOOT.elf. The script header is the same object at entry and at the stop, so 0xcd is unwritten memory, not a stomped frame. FOLLOW-UP after cherry-picking 5015fa7 and re-lifting: the detector fix works (130 modelled switches, 0 zero-case, was 126/38) but case 0xd1bbec is NEVER entered -- the probe at its label reports 0x00000000. Two staged probes name the real dispatcher: guest 0xd19e90, a SECOND bctr in the same function whose target is not a table entry (verified from EBOOT.elf), i.e. an internal subroutine return whose r5 is lwzx 5,16,5 (an opcode case address). The generated site tail-calls it and returns, so call_indirect resolves 0xd1bbec as a lifted function entry; it is not one (f_00d1bbec does not exist, only the L_d1bbec label inside f_00d19278_body). Remaining lifter gap: a bctr whose target is a table entry of the function it lives in must be modelled as a switch/goto within the same body. See docs/decisions.md D-010 and D-011.",
+  "evidence": {
+    "opcode_byte": "0x95",
+    "table_index": 149,
+    "table_base": "0x013f6400",
+    "dispatch_target": "0x00d1bbec",
+    "verdict": "valid RAGE bytecode",
+    "after_5015fa7": {
+      "switches": 130,
+      "zero_case_switches": 0,
+      "case_d1bbec_entered": false,
+      "dispatch_site": "0xd19e90",
+      "dispatch_site_is_table_entry": false
+    }
+  }
+}

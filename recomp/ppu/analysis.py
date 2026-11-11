@@ -13,8 +13,55 @@ def sext(v, bits):
     return v - (1 << bits) if v & (1 << (bits - 1)) else v
 
 
+# Per-title detector profile.
+#
+# Every rule added to recomp/ppu/analysis.py since 88d8214 (the last commit where
+# regress.sh passed Minecraft at 6841 flips) is a bet that a bctr is a switch.
+# A bet placed wrongly splits a function or emits a switch that never fires, and
+# Minecraft pays for it with a red regress.
+#
+#   tables            jump_table(): bound + base + index + load + bcctr
+#   rldic             accept rldic (opcode 30) as an index scale
+#   table_dispatch    a base held in a never-rewritten register serves every lwzx
+#   manual            switch_tables.toml entries
+#   bgtlr             a conditional bXlr counts as the bounded exit
+#
+# A title opts in to what it needs. RDR needs all of them. Minecraft and GTA are
+# known good without any of them, so they get none, and regress stays honest.
+
+class Profile:
+    def __init__(self, name, rules):
+        self.name = name
+        self.rules = set(rules)
+
+    def has(self, rule):
+        return rule in self.rules
+
+    def __repr__(self):
+        return 'Profile(%s, %s)' % (self.name, sorted(self.rules))
+
+
+# The default is empty: a title that says nothing gets the conservative lifter
+# that Minecraft and GTA were green with.
+NO_RULES = Profile('none', ())
+ALL_RULES = Profile('all', ('tables', 'rldic', 'table_dispatch', 'manual', 'bgtlr'))
+
+
+def profile_for(name):
+    """The rule set a title gets. Overridable so a bisect can add one rule back."""
+    override = os.environ.get('PS3BASE_TABLE_RULES')
+    if override:
+        if override == 'all':
+            return ALL_RULES
+        if override == 'none':
+            return NO_RULES
+        return Profile('env', [r for r in override.split(',') if r])
+    if name in ('rdr',):
+        return ALL_RULES
+    return NO_RULES
+
 class Image:
-    def __init__(self, path, nids=None):
+    def __init__(self, path, nids=None, profile=None):
         self.elf = Elf(path)
         prx = prx_param(self.elf)
         self.imports = []
@@ -28,6 +75,7 @@ class Image:
         # `lis r16, 0x13f` + `addic r16, r16, 0x6400`, indexes with `lbzx` (a BYTE
         # index) then `slwi` and `lwzx`, and the detector did not follow that
         # combination -- 256 targets including 0x00d1bbec were invisible.
+        self.profile = profile if profile is not None else ALL_RULES
         self.manual_tables = {}
         self.exports = []
         # The code range is the executable PT_LOAD segment, whole. It used to be
@@ -163,7 +211,7 @@ def jump_table(img, bctr):
                 # the out-of-range exit: the compare just above established it.
                 # bo_always() does not apply -- bgt's BO is 12, and (12 & 0x14) is
                 # 4, so requiring 0x14 rejected the one form that occurs.
-                if (w2 >> 26) == 19 and ((w2 >> 1) & 0x3FF) == 16 and not (w2 & 1):
+                if img.profile.has("bgtlr") and (w2 >> 26) == 19 and ((w2 >> 1) & 0x3FF) == 16 and not (w2 & 1):
                     default_off = a2          # the LR; the caller sees the return
                     break
             break
@@ -207,7 +255,9 @@ def jump_table(img, bctr):
         # rldic: 350119b4 79291788 rldic r9, r9, 2, 0x1e. Accepting only rlwinm
         # left that table undetected, and its dispatch reported 0x35011c80 as an
         # unknown indirect target.
-        if op in (21, 30) and ((w >> 11) & 0x1F) == 2:
+        if op == 21 and ((w >> 11) & 0x1F) == 2:
+            scaled = True
+        if op == 30 and img.profile.has("rldic") and ((w >> 11) & 0x1F) == 2:
             scaled = True
         # lwzx is opcode 31 with XO 23.
         if op == 31 and ((w >> 1) & 0x3FF) == 23:
@@ -491,15 +541,19 @@ def explore(img, entry, entries):
                     # a "table" whose entries leave the function: those are tail calls,
                     # not switch cases, and lifting them as cases splits the function.
                     img.current_function = (f.entry, None)
-                    jt = None if os.environ.get("PS3BASE_NO_AUTO_TABLES") else jump_table(img, pc)
-                    if not jt and not os.environ.get("PS3BASE_NO_AUTO_TABLES"):
+                    _prof = img.profile
+                    _off = os.environ.get("PS3BASE_NO_AUTO_TABLES")
+                    jt = None
+                    if not _off and _prof.has("tables"):
+                        jt = jump_table(img, pc)
+                    if not jt and not _off and _prof.has("table_dispatch"):
                         # A bctr that dispatches through a table base held in a
                         # register serves every opcode of an interpreter. The
                         # per-bctr detector above looks for the bound and the base
                         # inside one window and cannot see a base loaded once at
                         # function entry, which is exactly the shape here.
                         jt = table_dispatch_bctr(img, pc, f.entry, min(f.entry + 0x4000, img.text_hi))
-                    if not jt and img.manual_tables.get(pc):
+                    if not jt and _prof.has("manual") and img.manual_tables.get(pc):
                         # A table the detector cannot recover, supplied by hand in
                         # switch_tables.toml. This path was silently dropped during
                         # the seed-store rewrite, so out-rdr/gen/switch_tables.toml

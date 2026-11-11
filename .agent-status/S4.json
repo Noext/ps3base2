@@ -1,0 +1,1 @@
+{"status":"done","agent":"S4","commit":"b202786","summary":"All 74 /dev_bdvd reads byte-identical to the ISO (2175500 bytes, 0 divergences); both disc files identical as whole files; 1676 SDAT reads differ only because of NPDRM plaintext substitution, proved by a hash-refusal control. File I/O is not the 0xd1bbec crash cause."}
