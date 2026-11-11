@@ -40,6 +40,10 @@ LV2_SYSCALL(25, sys_process_get_sdk_version) {
 LV2_SYSCALL(30, _sys_process_get_paramsfo) {
     uint32_t buf = u32arg(ctx, 0);
     std::string id = vfs::disc_sfo().str("TITLE_ID");
+    /* The GCM init body calls this and branches on the result; a failure here is a
+     * plausible source of its CELL_GCM_ERROR_FAILURE. Print the title id so an
+     * empty value stops being invisible. */
+    std::fprintf(stderr, "[paramsfo] TITLE_ID=\"%s\" empty=%d\n", id.c_str(), id.empty() ? 1 : 0);
     if (id.empty()) return CELL_ENOENT;
     std::memset(vm::ptr(buf), 0, 0x40);
     std::memcpy(vm::ptr(buf + 1), id.data(), id.size() < 9 ? id.size() : 9);
