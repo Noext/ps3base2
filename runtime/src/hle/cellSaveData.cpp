@@ -300,11 +300,18 @@ int32_t run_op(Op& op) {
     if (!g_scratch) return ERR_ACCESS;
     uint32_t cb = g_scratch + CB_RESULT, sg = g_scratch + STAT_GET, ss = g_scratch + STAT_SET, fg = g_scratch + FILE_GET, fs = g_scratch + FILE_SET;
     std::error_code ec;
-    bool exists = fsys::exists(op.dir + "/PARAM.SFO", ec);
-    if (!op.save && !exists) {
-        LOG_INFO("savedata", "load '%s' -> no data", op.dir_name.c_str());
-        return ERR_NODATA;
-    }
+    const bool exists = fsys::exists(op.dir + "/PARAM.SFO", ec);
+    /* The stat callback runs BEFORE the data is known to exist, and that ordering is
+     * the specification: refs/.../cellSaveData.cpp:1694 calls funcStat, and only
+     * then does the load path decide it has nothing. RPCS3 also reports the save as
+     * "new" through statGet in that case (isNew = !save_entry.isNew at :1685).
+     *
+     * Returning NODATA first is what stalled Red Dead Redemption: its LoadThread
+     * work function is cellSaveDataAutoLoad2, measured returning
+     * 0x8002b40b NODATA for BLES00680RDR2OPTIONS_SAV without ever entering the
+     * title's own callback, so the title could not tell "no save yet" from "the
+     * save system is broken" and retried forever. A title that IS told ON_NEXT with
+     * isNew set takes its "create a fresh save" path, which is what a first boot is. */
     fill_stat(op, sg, exists);
     if (!vm::range_mapped(op.func_stat, 4) || !vm::range_mapped(op.func_file, 4)) {
         LOG_WARN("savedata", "'%s' callback pointers 0x%08x/0x%08x are not mapped",
@@ -319,6 +326,12 @@ int32_t run_op(Op& op) {
     if (result < 0) {
         LOG_WARN("savedata", "'%s' stat callback result %d", op.dir_name.c_str(), result);
         return ERR_CBRESULT;
+    }
+    /* Now that the title has been consulted, an absent save is the answer
+     * refs/.../cellSaveData.cpp:2340 gives too -- but only for a LOAD. */
+    if (!op.save && !exists) {
+        LOG_INFO("savedata", "load '%s' -> no data (after funcStat, result %d)", op.dir_name.c_str(), result);
+        return ERR_NODATA;
     }
     uint32_t set_param = vm::read32(ss + 0x0);
     uint32_t recreate = vm::read32(ss + 0x4) & 0xFFFF;
@@ -511,63 +524,28 @@ HLE_FUNC(cellSysutil, cellSaveDataAutoSave2) { ret(ctx, auto_op(ctx, true)); }
  * callback says "no data", which is the answer that leads to "create a world".
  * Reference: refs/rpcs3/rpcs3/Emu/Cell/Modules/cellSaveData.cpp, the funcFixed
  * call site in savedata_op. */
-HLE_FUNC(cellSysutil, cellSaveDataUserListAutoLoad) {
-    const uint32_t version = a32(ctx, 0);
-    const uint32_t user = a32(ctx, 1);
-    const uint32_t err_dialog = a32(ctx, 2);
-    const uint32_t set_list = a32(ctx, 3);
-    const uint32_t set_buf = a32(ctx, 4);
-    const uint32_t func_fixed = a32(ctx, 5);
-    const uint32_t func_stat = a32(ctx, 6);
-    const uint32_t func_file = a32(ctx, 7);
-    const uint32_t container = a32(ctx, 8);
-    (void)version;
-    (void)err_dialog;
-    (void)container;
-    /* The ninth and tenth arguments are stack arguments under the PPU ABI, not
-     * registers: container is at sp+0x60 and userdata at sp+0x64. Reading
-     * a32(ctx, 8) picked up r11, which is not an argument at all. */
-    /* 9th+ arguments live at sp+0x70 in the caller's parameter area
-     * (refs/rpcs3 .../PPUThread.cpp:3251 get_stack_arg: gpr[1] + 0x30 + 8*(i-1)).
-     * 0x64 sat inside the r3-r10 save area and read unrelated stack. */
-    /* The parameter area slot is a DOUBLEWORD. The title stores it with
-     * `st64 sp+112, r30` (out/ppu/mc_029.cpp:4201), and on big-endian POWER the
-     * low half of that 8-byte value lives at slot+4. Reading 32 bits at slot+0
-     * returns the HIGH half, which is 0 for every small userdata.
-     * RPCS3 does not make this mistake because get_stack_arg returns a
-     * be_t<u64>* and the caller truncates: (`+*ctx->get_stack_arg(i)` then
-     * ppu_gpr_cast<u32>), i.e. it reads the whole dword and keeps the low bits.
-     * refs/rpcs3/rpcs3/Emu/Cell/PPUThread.cpp:3251 and
-     * refs/rpcs3/rpcs3/Emu/Cell/Modules/sys_libc_.cpp:27. */
-    const uint32_t sp_now = static_cast<uint32_t>(ctx.gpr[1]);
-    const uint64_t slot64 = vm::read64(sp_now + 0x70);
-    const uint32_t stack_userdata = static_cast<uint32_t>(slot64 & 0xffffffffu);
-    LOG_INFO("savedata", "UserListAutoLoad stack arg9: slot64 0x%llx hi 0x%08x lo 0x%08x -> userdata 0x%x",
-             (unsigned long long)slot64, vm::read32(sp_now + 0x70), vm::read32(sp_now + 0x74),
-             stack_userdata);
 
-    LOG_INFO("savedata",
-             "UserListAutoLoad version 0x%x user %u errDialog 0x%x setList 0x%08x setBuf 0x%08x "
-             "funcFixed 0x%08x funcStat 0x%08x funcFile 0x%08x",
-             version, user, err_dialog, set_list, set_buf, func_fixed, func_stat, func_file);
-    if (!set_list || !set_buf || !func_fixed) return ret(ctx, static_cast<int32_t>(ERR_PARAM));
-
-    /* cellSaveDataUserListAutoLoad: enumerate the account's savedata and hand
-     * the title the real list.
-     *
-     * The previous implementation always reported an empty list and returned
-     * ERR_NODATA. That is not a harmless simplification: this title has four
-     * complete world saves on disk (GAMEDATA + PARAM.SFO + ICON0 + THUMB) and
-     * its Start Game panel still said "No Games Found", so every path that
-     * loads an existing world was unreachable no matter what else worked.
-     *
-     * Layout (refs/rpcs3/.../cellSaveData.h):
-     *   CellSaveDataListGet { u32 dirNum; u32 dirListNum; ptr dirList; char reserved[64]; }
-     *   CellSaveDataDirList { char dirName[32]; char listParam[8]; char reserved[8]; }
-     *   CellSaveDataSetBuf { u32 dirListMax; u32 fileListMax; u32 reserved[6];
-     *                        u32 bufSize; ptr buf; }
-     *   CellSaveDataSetList { u32 sortType; u32 sortOrder; ptr dirNamePrefix; ptr reserved; }
-     */
+/* cellSaveDataListAutoLoad and cellSaveDataUserListAutoLoad are the same
+ * operation (SAVEDATA_OP_LIST_AUTO_LOAD) on two account roots
+ * (refs/.../cellSaveData.cpp:2512-2518 and :2598-2604 both end in savedata_op,
+ * differing only in the userId). The enumeration, the funcFixed delivery and the
+ * return value therefore live once, here, so the two imports cannot drift.
+ *
+ * For the LIST variants RPCS3 calls funcFixed with (result, listGet, fixedSet)
+ * BEFORE anything else, and the title decides what to do from that
+ * (refs/.../cellSaveData.cpp:1359-1385). Skipping it left the title waiting on
+ * an empty screen -- the Start Game panel with placeholder icons -- and is the
+ * "callback registered, never delivered" shape the depot names.
+ *
+ * Layout (refs/.../cellSaveData.h):
+ *   CellSaveDataListGet { u32 dirNum; u32 dirListNum; ptr dirList; char reserved[64]; }
+ *   CellSaveDataDirList { char dirName[32]; char listParam[8]; char reserved[8]; }
+ *   CellSaveDataSetBuf { u32 dirListMax; u32 fileListMax; u32 reserved[6];
+ *                        u32 bufSize; ptr buf; }
+ *   CellSaveDataSetList { u32 sortType; u32 sortOrder; ptr dirNamePrefix; ptr reserved; }
+ */
+int32_t list_auto_load_op(ppu::Context& ctx, const std::string& root, uint32_t set_list,
+                          uint32_t set_buf, uint32_t func_fixed, uint32_t stack_userdata) {
     const uint32_t dir_list_max = vm::read32(set_buf + 0x0);
     const uint32_t buf_size = vm::read32(set_buf + 0x20);
     const uint32_t buf = vm::read32(set_buf + 0x24);
@@ -576,7 +554,7 @@ HLE_FUNC(cellSysutil, cellSaveDataUserListAutoLoad) {
 
     std::lock_guard lk(g_lock);
     if (!g_scratch) g_scratch = vm::alloc(vm::Region::Stack, SCRATCH_SIZE, 0x100);
-    if (!g_scratch) return ret(ctx, static_cast<int32_t>(ERR_ACCESS));
+    if (!g_scratch) return ERR_ACCESS;
     const uint32_t cb = g_scratch + CB_RESULT;
     const uint32_t list_get = g_scratch + CB_RESULT + 0x40;
     const uint32_t fixed_set = list_get + 0x60;
@@ -590,7 +568,6 @@ HLE_FUNC(cellSysutil, cellSaveDataUserListAutoLoad) {
      * an empty prefix means "everything on the account". The match is a plain
      * prefix test, exactly as the firmware does it. */
     std::error_code ec;
-    const std::string root = save_root();
     std::vector<std::string> names;
     for (const auto& de : fsys::directory_iterator(root, ec)) {
         if (!de.is_directory()) continue;
@@ -631,27 +608,91 @@ HLE_FUNC(cellSysutil, cellSaveDataUserListAutoLoad) {
     vm::write32(list_get + 0, static_cast<uint32_t>(names.size()));
     vm::write32(list_get + 4, listed);
     LOG_INFO("savedata",
-             "UserListAutoLoad: %zu savedata match prefix '%s' (dirListMax %u bufSize 0x%x buf 0x%08x), listing %u",
+             "ListAutoLoad: %zu savedata match prefix '%s' (dirListMax %u bufSize 0x%x buf 0x%08x), listing %u",
              names.size(), prefix.c_str(), dir_list_max, buf_size, buf, listed);
 
     call_guest(ctx, func_fixed, cb, list_get, fixed_set);
     const int32_t fixed_result = static_cast<int32_t>(vm::read32(cb));
+    LOG_INFO("savedata", "ListAutoLoad: funcFixed returned %d with %zu savedata", fixed_result,
+             names.size());
     /* funcFixed returning OK_NEXT plus a chosen dirName means "the user picked
      * one"; with no saves there is nothing to pick and the firmware reports
      * NODATA. */
     if (fixed_result == CB_OK_NEXT) {
         const uint32_t chosen = vm::read32(fixed_set + 0x0);
         const std::string chosen_name = chosen ? gstr(chosen, 32) : std::string();
-        LOG_INFO("savedata", "UserListAutoLoad: funcFixed chose '%s'", chosen_name.c_str());
-        if (chosen_name.empty() && names.empty())
-            return ret(ctx, static_cast<int32_t>(ERR_NODATA));
-        if (!chosen_name.empty())
-            return ret(ctx, static_cast<int32_t>(ERR_NODATA));  /* the listing call does not load */
+        LOG_INFO("savedata", "ListAutoLoad: funcFixed chose '%s'", chosen_name.c_str());
+        if (!chosen_name.empty()) return ERR_NODATA;   /* the listing call does not load */
     }
-    LOG_INFO("savedata", "UserListAutoLoad: funcFixed returned %d with %zu savedata",
-             fixed_result, names.size());
-    if (names.empty()) return ret(ctx, static_cast<int32_t>(ERR_NODATA));
-    ret(ctx, 0);
+    if (names.empty()) return ERR_NODATA;
+    return 0;
+}
+
+
+/* cellSaveDataListAutoLoad(version, errDialog, setList, setBuf, funcFixed,
+ * funcStat, funcFile, container, userdata): the LIST variant for the CURRENT
+ * account. refs/.../cellSaveData.cpp:2512-2518 hands it to
+ * savedata_op(SAVEDATA_OP_LIST_AUTO_LOAD, ...), which enumerates the saves and
+ * calls funcFixed (refs/.../cellSaveData.cpp:1359-1385).
+ *
+ * The previous body returned CELL_SAVEDATA_ERROR_NODATA without ever calling
+ * funcFixed. That is the "callback registered, never delivered" shape the depot
+ * names as the direct cause of a stall: a title whose list callback never fires
+ * never learns whether its saves exist, and waits on the panel with placeholder
+ * icons. With no save on disk the answer is still NODATA -- but it now arrives
+ * AFTER the callback, which is what firmware does and what the title acts on.
+ *
+ * Argument 9 is on the stack, per the note in cellSaveDataUserListAutoLoad.
+ */
+HLE_FUNC(cellSysutil, cellSaveDataListAutoLoad) {
+    const uint32_t version = a32(ctx, 0);
+    const uint32_t err_dialog = a32(ctx, 1);
+    const uint32_t set_list = a32(ctx, 2);
+    const uint32_t set_buf = a32(ctx, 3);
+    const uint32_t func_fixed = a32(ctx, 4);
+    const uint32_t func_stat = a32(ctx, 5);
+    const uint32_t func_file = a32(ctx, 6);
+    const uint32_t container = a32(ctx, 7);
+    (void)err_dialog;
+    (void)container;
+    const uint32_t sp_now = static_cast<uint32_t>(ctx.gpr[1]);
+    const uint32_t stack_userdata =
+        static_cast<uint32_t>(vm::read64(sp_now + 0x70) & 0xffffffffu);
+    LOG_INFO("savedata",
+             "ListAutoLoad version 0x%x errDialog 0x%x setList 0x%08x setBuf 0x%08x "
+             "funcFixed 0x%08x funcStat 0x%08x funcFile 0x%08x userdata 0x%x",
+             version, err_dialog, set_list, set_buf, func_fixed, func_stat, func_file, stack_userdata);
+    if (!set_list || !set_buf || !func_fixed) return ret(ctx, static_cast<int32_t>(ERR_PARAM));
+    ret(ctx, list_auto_load_op(ctx, save_root(), set_list, set_buf, func_fixed, stack_userdata));
+}
+HLE_FUNC(cellSysutil, cellSaveDataUserListAutoLoad) {
+    const uint32_t version = a32(ctx, 0);
+    const uint32_t user = a32(ctx, 1);
+    const uint32_t err_dialog = a32(ctx, 2);
+    const uint32_t set_list = a32(ctx, 3);
+    const uint32_t set_buf = a32(ctx, 4);
+    const uint32_t func_fixed = a32(ctx, 5);
+    const uint32_t func_stat = a32(ctx, 6);
+    const uint32_t func_file = a32(ctx, 7);
+    const uint32_t container = a32(ctx, 8);
+    (void)err_dialog;
+    (void)container;
+    /* The tenth argument is a STACK argument under the PPU ABI, not a register
+     * (refs/rpcs3/.../PPUThread.cpp:3251 get_stack_arg: gpr[1] + 0x30 + 8*(i-1),
+     * i.e. sp+0x70 for the ninth). Reading a32(ctx, 8) picked up r11, which is
+     * not an argument at all, and reading 32 bits at slot+0 returns the HIGH
+     * half of the doubleword the title stores on big-endian POWER. RPCS3 reads
+     * the whole be_t<u64> and keeps the low bits. */
+    const uint32_t sp_now = static_cast<uint32_t>(ctx.gpr[1]);
+    const uint32_t stack_userdata =
+        static_cast<uint32_t>(vm::read64(sp_now + 0x70) & 0xffffffffu);
+    LOG_INFO("savedata",
+             "UserListAutoLoad version 0x%x user %u errDialog 0x%x setList 0x%08x setBuf 0x%08x "
+             "funcFixed 0x%08x funcStat 0x%08x funcFile 0x%08x userdata 0x%x",
+             version, user, err_dialog, set_list, set_buf, func_fixed, func_stat, func_file,
+             stack_userdata);
+    if (!set_list || !set_buf || !func_fixed) return ret(ctx, static_cast<int32_t>(ERR_PARAM));
+    ret(ctx, list_auto_load_op(ctx, save_root(), set_list, set_buf, func_fixed, stack_userdata));
 }
 
 /* cellSaveDataUserAutoSave(version, userId, dirName, errDialog, setBuf,
