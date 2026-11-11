@@ -255,6 +255,30 @@ def jump_table(img, bctr):
             "targets": targets, "default": default_off}
 
 
+def _register_is_table_base(img, reg, bctr, fn_entry):
+    """True when `reg` is loaded once from lis/addic and never rewritten after.
+
+    A switch table base is materialised at function entry and then only read:
+        lis   r16, 0x13f
+        addic r16, r16, 0x6400
+    An ordinary array pointer is rewritten inside the loop. Walking back to the
+    function entry and stopping at the first write tells them apart.
+
+    The window has to reach the entry: measured, r16 is defined 861 instructions
+    above the failing dispatch 0x00d1a028, so any fixed small window misses it.
+    """
+    for k in range(1, (bctr - fn_entry) // 4 + 2):
+        w = img.word(bctr - 4 * k)
+        op = w >> 26
+        rt = (w >> 21) & 0x1F
+        if rt != reg:
+            continue
+        if op in (12, 14, 15, 24):      # addi/addic/lis/ori: the definition
+            return True
+        if op in (32, 34, 36, 37, 40, 42, 44, 46, 47, 31):   # a load or a write
+            return False
+    return False
+
 def table_dispatch_bctr(img, bctr, lo_fn, hi_fn):
     """A bctr that dispatches through a shared table register.
 
@@ -284,12 +308,20 @@ def table_dispatch_bctr(img, bctr, lo_fn, hi_fn):
     # produces 0x00d1bbec, whose lwzx is five instructions back.
     if not ((img.word(bctr - 4) >> 26) == 31 and ((img.word(bctr - 4) >> 1) & 0x3FF) == 467):
         return None
+    # Find the lwzx that reads THROUGH the table base register, not merely the
+    # first lwzx above the dispatch. Red Dead's failing site has two:
+    #     -14  7cb0282e  lwzx r5, r16, r5     <- through r16, this is the table
+    #      -8  7d23302e  lwzx r9, r3, r6      <- an ordinary array read
+    # Taking the first one found set base_reg to r3, which is not a table, and the
+    # dispatch was emitted with zero cases.
     base_reg = None
-    for k in range(2, 12):
+    for k in range(2, 24):
         w = img.word(bctr - 4 * k)
         if (w >> 26) == 31 and ((w >> 1) & 0x3FF) == 23:
-            base_reg = (w >> 16) & 0x1F
-            break
+            cand = (w >> 16) & 0x1F
+            if _register_is_table_base(img, cand, bctr, lo_fn):
+                base_reg = cand
+                break
     if base_reg is None:
         return None
     if base_reg == 0:
