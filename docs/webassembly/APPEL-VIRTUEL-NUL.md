@@ -56,3 +56,43 @@ initialisation n'a pas eu lieu »**.
 | 3 | 5 criteres sur 6 ; **module officiel : demarre, charge les images, cree des threads** |
 | 4 | ecrit, validation navigateur impossible |
 | 5 | goulots nommes, fps natif mesure |
+
+---
+
+# Round 193, suite : trois obstacles de plus franchis
+
+## Ce qui a change apres le premier rapport
+
+| obstacle | resolution | resultat |
+|---|---|---|
+| `spu::compiled_blocks` | defini a zero (table AOT vide) | franchi |
+| `edge::gpu::g_active` | defini a `false` | franchi |
+| `jsedge::spu_idle` | stub no-op | franchi |
+| erreur de syntaxe dans `cellGcmSys.cpp` | point-virgule manquant (autre agent) | corrigee |
+
+## L'etat mesure
+
+    guest machine up          OK
+    WASM-GUEST-CODE-RAN       OK
+    images mc=                OK
+    threads                   2
+    dernier evenement         sys_memory_allocate(0x300000) -> 0x40100000
+    echec                     unreachable, sans nom de symbole
+
+## Ce que l'absence de nom signifie
+
+`-sERROR_ON_UNDEFINED_SYMBOLS=0` transforme les 18 symboles non definis restants en **trampolines abortifs**.
+Quand l'un est appele, wasm produit `unreachable` **sans nommer le symbole** — contrairement a
+`Aborted(missing function: ...)` qui apparait quand la table d'imports est incomplète.
+
+Le crash est donc tres probablement un **18e symbole GOWA appele a l'execution**.
+
+## Ce qu'il faudrait
+
+Remplacer `-sERROR_ON_UNDEFINED_SYMBOLS=0` par `1` pour obtenir le **nom** du symbole au lieu d'un
+`unreachable` anonyme. C'est une ligne, et elle rendrait les 18 symboles visibles un par un.
+
+## Position inchangee
+
+Le module officiel **demarre, charge les images, cree 2 threads, atteint `sys_memory_allocate`**. Il ne va pas
+plus loin, et le prochain round doit nommer le symbole exact.
