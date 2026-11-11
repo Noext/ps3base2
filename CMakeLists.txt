@@ -45,7 +45,7 @@ add_library(ps3base_ppu_ops STATIC runtime/src/ppu_ops.cpp runtime/src/reservati
 target_include_directories(ps3base_ppu_ops PUBLIC runtime/include "${CMAKE_SOURCE_DIR}/out/include")
 target_compile_options(ps3base_ppu_ops PRIVATE ${PS3BASE_ARCH_FLAGS} ${PS3BASE_EH})
 
-file(GLOB GOWA_RUNTIME_SOURCES CONFIGURE_DEPENDS runtime/src/*.cpp runtime/src/lv2/*.cpp runtime/src/hle/*.cpp runtime/src/media/*.cpp runtime/src/spu/*.cpp runtime/src/spu/edge/*.cpp runtime/src/spu/renjob/*.cpp runtime/src/spu/scream/*.cpp runtime/src/spu/cloth/*.cpp runtime/src/spu/shadows/*.cpp runtime/src/spu/meshprep/*.cpp runtime/src/spu/pm/*.cpp runtime/src/spu/edgejob/*.cpp runtime/src/spu/meshhier/*.cpp runtime/src/spu/anim/*.cpp runtime/src/spu/tasks/*.cpp runtime/src/spu/mpjob/*.cpp runtime/src/jobsys/*.cpp runtime/src/rsx/*.cpp runtime/src/gpu/*.cpp)
+file(GLOB GOWA_RUNTIME_SOURCES CONFIGURE_DEPENDS runtime/src/*.cpp runtime/src/lv2/*.cpp runtime/src/hle/*.cpp runtime/src/media/*.cpp runtime/src/spu/*.cpp runtime/src/spu/edge/*.cpp runtime/src/spu/renjob/*.cpp runtime/src/spu/scream/*.cpp runtime/src/spu/cloth/*.cpp runtime/src/spu/shadows/*.cpp runtime/src/spu/meshprep/*.cpp runtime/src/spu/pm/*.cpp runtime/src/spu/edgejob/*.cpp runtime/src/spu/meshhier/*.cpp runtime/src/spu/anim/*.cpp runtime/src/spu/tasks/*.cpp runtime/src/spu/mpjob/*.cpp runtime/src/jobsys/*.cpp runtime/src/rsx/*.cpp runtime/src/gpu/*.cpp runtime/src/crypto/*.cpp)
 list(REMOVE_ITEM GOWA_RUNTIME_SOURCES "${CMAKE_SOURCE_DIR}/runtime/src/ppu_ops.cpp" "${CMAKE_SOURCE_DIR}/runtime/src/main.cpp" "${CMAKE_SOURCE_DIR}/runtime/src/reservation.cpp" "${CMAKE_SOURCE_DIR}/runtime/src/memory.cpp runtime/src/regions.cpp runtime/src/mem.cpp" "${CMAKE_SOURCE_DIR}/runtime/src/log.cpp" "${CMAKE_SOURCE_DIR}/runtime/src/host.cpp")
 
 set(PS3BASE_SPU_NATIVE_GEN_DIR "${CMAKE_SOURCE_DIR}/out/gen/spu" CACHE PATH "Directory with generated native SPU sources (tools/setup.py)")
@@ -509,6 +509,18 @@ add_executable(avconf tests/avconf.cpp)
 target_include_directories(avconf PRIVATE runtime/include "${CMAKE_SOURCE_DIR}/runtime/src")
 target_compile_options(avconf PRIVATE ${PS3BASE_ARCH_FLAGS})
 add_test(NAME avconf COMMAND avconf)
+
+# sysutil: cellSysutil's audio-out, video-out, system-parameter, BGM, cache, OSK
+# and progress-bar surface. Pure host logic plus guest memory: the header the
+# imports use (runtime/src/hle/sysutil_hle.h) is compiled into the test and its
+# return codes and structure offsets are read back out of guest memory. Runs on
+# a machine with no game, no GPU and no network.
+add_executable(sysutil tests/sysutil.cpp runtime/src/memory.cpp runtime/src/regions.cpp runtime/src/mem.cpp runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/backtrace_port.cpp runtime/src/host.cpp runtime/src/log.cpp)
+target_include_directories(sysutil PRIVATE runtime/include "${CMAKE_SOURCE_DIR}/runtime/src")
+target_compile_options(sysutil PRIVATE ${PS3BASE_ARCH_FLAGS})
+target_link_libraries(sysutil PRIVATE ${CMAKE_DL_LIBS} pthread)
+add_test(NAME sysutil COMMAND sysutil)
+
 
 # voice: cellVoice (libvoice), the module Red Dead Redemption imports 13
 # functions from. The suite includes the module and drives the real handlers

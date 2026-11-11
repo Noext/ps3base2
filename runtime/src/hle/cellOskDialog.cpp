@@ -39,6 +39,7 @@ constexpr uint32_t MAX_TEXT = 512;
 struct Osk {
     std::mutex m;
     bool open = false;
+    bool aborted = false;
     std::string text;
 };
 
@@ -162,9 +163,14 @@ HLE_FUNC(cellSysutil, cellOskDialogUnloadAsync) {
     const uint32_t capacity = vm::read32(result_ea + 4);
     const uint32_t buf = vm::read32(result_ea + 8);
     const uint32_t n = to_guest(buf, capacity, s.text);
-    vm::write32(result_ea + 0, 0);   /* CELL_OSK_DIALOG_INPUT_FIELD_RESULT_OK */
+    /* An aborted dialog reports CELL_OSKDIALOG_INPUT_FIELD_RESULT_ABORT (2,
+     * refs/.../cellOskDialog.h:36); a finished one reports OK (0). The
+     * previous body always wrote 0, so a title could not tell an abort from a
+     * confirmation and took the aborted text as typed input. */
+    vm::write32(result_ea + 0, s.aborted ? 2u : 0u);
     vm::write32(result_ea + 4, n);
     s.open = false;
+    s.aborted = false;
     LOG_INFO("cellOsk", "UnloadAsync -> '%s' (%u chars)", s.text.c_str(), n);
     return ret(ctx, 0);
 }
@@ -178,5 +184,33 @@ HLE_FUNC(cellSysutil, cellOskDialogDisableDimmer) { return ret(ctx, 0); }
 HLE_FUNC(cellOskExtUtility, cellOskDialogExtSetInitialScale) { return ret(ctx, 0); }
 HLE_FUNC(cellOskExtUtility, cellOskDialogExtRegisterKeyboardEventHookCallback) { return ret(ctx, 0); }
 HLE_FUNC(cellOskExtUtility, cellOskDialogExtRegisterConfirmWordFilterCallback) { return ret(ctx, 0); }
+
+/* Exposed to cellSysutil's cellOskDialogAbort, so "is a dialog open" has a
+ * single owner instead of a second copy of the state in another file. */
+namespace osk {
+
+bool is_open() {
+    Osk& s = state();
+    std::lock_guard lk(s.m);
+    return s.open;
+}
+
+/* refs/.../cellOskDialog.cpp:816-825: the abort path sets the ABORT input
+ * result and raises CELL_SYSUTIL_OSKDIALOG_FINISHED, the same event a normal
+ * finish raises; cellOskDialogUnloadAsync then reports result 2 (ABORT,
+ * refs/.../cellOskDialog.h:36) so the title can tell them apart. */
+void abort() {
+    Osk& s = state();
+    {
+        std::lock_guard lk(s.m);
+        s.open = false;
+        s.text.clear();
+        s.aborted = true;
+    }
+    LOG_INFO("cellOsk", "abort -> CELL_SYSUTIL_OSKDIALOG_FINISHED with ABORT result");
+    post_event(EVENT_OSK_FINISHED);
+}
+
+}  // namespace osk
 
 }  // namespace hle

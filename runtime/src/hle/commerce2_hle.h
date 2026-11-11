@@ -171,6 +171,14 @@ public:
          * "-+!base"), so a second context comes back as id 0. */
         if (!has_np_id) return ERR_INVALID_ARGUMENT;
 
+        /* sceNpCommerce2.cpp:175-178: create_commerce2_context is called ONLY
+         * inside the if (ctx_id) branch. With a null ctx_id pointer RPCS3 warns
+         * and creates NOTHING, then returns CELL_OK -- so a caller that passed
+         * null has no context afterwards, and a later CreateSessionStart on any
+         * id is CTX_NOT_FOUND. Allocating anyway would leave an invisible,
+         * never destroyable context behind and consume the single CTX_MAX slot. */
+        if (!has_ctx_id_out || !ctx_id_out) return 0;
+
         uint32_t id = 0;
         for (uint32_t i = 0; i < CTX_MAX; i++) {
             if (!contexts_[i].used) {
@@ -183,7 +191,7 @@ public:
                 break;
             }
         }
-        if (has_ctx_id_out && ctx_id_out) *ctx_id_out = id;
+        *ctx_id_out = id;
         return 0;
     }
 

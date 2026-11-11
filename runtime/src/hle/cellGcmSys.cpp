@@ -1,5 +1,7 @@
 #include "common.h"
 
+#include "runtime/rsx_iomap.h"
+
 /* cellGcmSys: the RSX command interface.
  *
  * The title calls these during boot and treats a zero return as a valid pointer
@@ -75,6 +77,68 @@ HLE_FUNC(cellGcmSys, _cellGcmInitBody) {
      * GPU it only has to report success: the title proceeds to load its shaders
      * and then fails on the first draw, which is a later problem than the boot. */
     ret(ctx, 0);
+}
+
+/* cellGcmMapEaIoAddress / cellGcmMapMainMemory.
+ *
+ * refs/.../cellGcmSys.cpp:1064 and :1132. Both end in sys_rsx_context_iomap,
+ * which is what fills the runtime's io_table. Without them a title can only map
+ * the areas it reserves itself, and any FIFO jump into its own command buffer
+ * lands outside the table:
+ *
+ *     FIFO get 0x1202a180 not IO-mapped (put 0x000013a0)
+ *
+ * That is exactly what Red Dead Redemption hit: it reserved the heap
+ * (io 0 -> ea 0x80000000) and then asked for its own RSX memory, got nothing,
+ * and the walker spent the run reading an address it could not translate.
+ *
+ * The rules are RPCS3's, unchanged: 1 MB granularity on all three arguments, the
+ * guest's io offset must be one it chose, and the call is refused rather than
+ * approximated when it does not fit.
+ */
+HLE_FUNC(cellGcmSys, cellGcmMapEaIoAddress) {
+    const uint32_t ea = a32(ctx, 0);
+    const uint32_t io = a32(ctx, 1);
+    const uint32_t size = a32(ctx, 2);
+    LOG_INFO("gcm", "cellGcmMapEaIoAddress(ea=0x%x, io=0x%x, size=0x%x)", ea, io, size);
+    return ret(ctx, gcm_map_ea_io(ea, io, size));
+}
+
+HLE_FUNC(cellGcmSys, cellGcmMapEaIoAddressWithFlags) {
+    const uint32_t ea = a32(ctx, 0);
+    const uint32_t io = a32(ctx, 1);
+    const uint32_t size = a32(ctx, 2);
+    const uint32_t flags = a32(ctx, 3);
+    LOG_INFO("gcm", "cellGcmMapEaIoAddressWithFlags(ea=0x%x, io=0x%x, size=0x%x, flags=0x%x)",
+             ea, io, size, flags);
+    /* CELL_GCM_IOMAP_FLAG_STRICT_ORDERING is the only defined flag. Ordering on
+     * the host is already serialised by the FIFO thread, so the flag changes
+     * nothing here -- but an unknown value is refused, not ignored. */
+    if (flags != 0x1) return ret(ctx, CELL_GCM_ERROR_FAILURE);
+    return ret(ctx, gcm_map_ea_io(ea, io, size));
+}
+
+HLE_FUNC(cellGcmSys, cellGcmMapMainMemory) {
+    const uint32_t ea = a32(ctx, 0);
+    const uint32_t size = a32(ctx, 1);
+    const uint32_t offset_ea = a32(ctx, 2);
+    if (!size || (ea & 0xFFFFF) || (size & 0xFFFFF)) return ret(ctx, CELL_GCM_ERROR_FAILURE);
+    if (!offset_ea) return ret(ctx, CELL_GCM_ERROR_FAILURE);
+    /* RPCS3 walks the offset table for the first free run of size>>20 pages and
+     * maps there (:1142-1160). The runtime's equivalent is the io table itself,
+     * so the search is the same shape: start at io 0, skip a page that is taken. */
+    for (uint32_t io = 0; io + size <= 0x10000000u; io += 0x100000) {
+        if (!rsx_io_page_taken(io)) {
+            const int32_t e = gcm_map_ea_io(ea, io, size);
+            if (e == 0) {
+                vm::write32(offset_ea, io);
+                LOG_INFO("gcm", "cellGcmMapMainMemory(ea=0x%x, size=0x%x) -> io 0x%x", ea, size, io);
+                return ret(ctx, 0);
+            }
+            return ret(ctx, e);
+        }
+    }
+    return ret(ctx, CELL_GCM_ERROR_FAILURE);
 }
 
 }  // namespace hle

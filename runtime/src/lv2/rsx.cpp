@@ -1,4 +1,5 @@
 #include "runtime/critpath.h"
+#include "runtime/rsx_iomap.h"
 #include "runtime/host.h"
 #include "runtime/regions.h"
 #include "runtime/placement.h"
@@ -42,19 +43,6 @@ namespace rdcapture { void maybe_capture(uint64_t flips); }
 
 namespace lv2 {
 
-namespace {
-#if defined(PS3BASE_RSX_METHOD_TRACE) && PS3BASE_RSX_METHOD_TRACE
-std::atomic<uint32_t> g_texunit_writes[64];
-std::atomic<uint32_t> g_tex_first_reg{0};
-std::atomic<int> g_tex_first_count{0};
-#endif
-
-
-constexpr uint32_t CONTEXT_ID = 0x55555555;
-/* Now taken from the region table: PS3BASE_MEMORY=compact moves video memory
- * down to close the 1792 MB hole, and every RSX access resolves through this. */
-const uint32_t LOCAL_BASE = vm::region_bases().video;
-
 struct RsxState {
     std::mutex m;
     uint32_t local_size = 0;
@@ -84,6 +72,54 @@ struct RsxState {
 
 RsxState g_rsx;
 
+uint32_t io_to_ea(uint32_t io) {
+    uint32_t page = g_rsx.io_table[(io >> 20) & 511];
+    if (!page) return 0;
+    return (page << 20) | (io & 0xFFFFF);
+}
+/* The two primitives cellGcmSys needs to place a guest buffer in the RSX address
+ * space. Kept here rather than in the HLE module because io_table is private to
+ * this file and the mapping must stay consistent with what the FIFO walker reads.
+ */
+
+/* Map ea -> io for size bytes, 1 MB at a time. Mirrors gcmMapEaIoAddress
+ * (refs/.../cellGcmSys.cpp:1064): all three arguments are 1 MB aligned, and the
+ * only thing that makes it a mapping is the io_table write. */
+int32_t gcm_map_ea_io(uint32_t ea, uint32_t io, uint32_t size) {
+    if (!size || (ea & 0xFFFFF) || (io & 0xFFFFF) || (size & 0xFFFFF)) return CELL_GCM_ERROR_FAILURE;
+    /* A guest buffer this runtime has not mapped is a caller bug, not a request
+     * to satisfy: mapping it would make the walker read memory that is not there. */
+    if (!vm::range_mapped(ea, size)) {
+        LOG_WARN("gcm", "MapEaIoAddress(ea=0x%x, io=0x%x, size=0x%x): ea is not mapped", ea, io, size);
+        return CELL_GCM_ERROR_FAILURE;
+    }
+    for (uint32_t off = 0; off < size; off += 0x100000)
+        g_rsx.io_table[((io + off) >> 20) & 511] = (ea + off) >> 20;
+    LOG_INFO("gcm", "MapEaIoAddress ea=0x%x io=0x%x size=0x%x", ea, io, size);
+    return CELL_OK;
+}
+
+/* Is this 1 MB io page already spoken for? */
+bool rsx_io_page_taken(uint32_t io) {
+    return g_rsx.io_table[(io >> 20) & 511] != 0;
+}
+
+
+
+namespace {
+#if defined(PS3BASE_RSX_METHOD_TRACE) && PS3BASE_RSX_METHOD_TRACE
+std::atomic<uint32_t> g_texunit_writes[64];
+std::atomic<uint32_t> g_tex_first_reg{0};
+std::atomic<int> g_tex_first_count{0};
+#endif
+
+
+constexpr uint32_t CONTEXT_ID = 0x55555555;
+/* Now taken from the region table: PS3BASE_MEMORY=compact moves video memory
+ * down to close the 1792 MB hole, and every RSX access resolves through this. */
+const uint32_t LOCAL_BASE = vm::region_bases().video;
+
+
 struct DummyPort : Object {};
 
 uint32_t head_addr(uint32_t head) { return g_rsx.driver_info + 0x10B8 + head * 0x40; }
@@ -96,11 +132,8 @@ void send_event(uint64_t bits) {
     for (int i = 0; i < 100 && push_event(q, {(uint64_t(1) << 32) | g_rsx.port_id, 0, bits, 0}) == CELL_EBUSY; i++) host::sleep_ms(1);
 }
 
-uint32_t io_to_ea(uint32_t io) {
-    uint32_t page = g_rsx.io_table[(io >> 20) & 511];
-    if (!page) return 0;
-    return (page << 20) | (io & 0xFFFFF);
-}
+
+
 
 uint32_t get_address(uint32_t offset, uint32_t loc) {
     switch (loc) {

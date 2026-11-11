@@ -95,14 +95,14 @@ int main() {
               "an unknown id is INVALID_ID (sceNp.cpp:3391)");
 
         /* PollAsync: incomplete is not_an_error(1), not an error. */
-        np::Result p = np::lookup_poll_async(s, trans, true);
+        np::Result p = np::lookup_poll_async(s, trans);
         CHECK(p.code == 1 && !p.has_value,
               "PollAsync on a running transaction returns 1 as not_an_error (sceNp.cpp:3464)");
         for (auto& c : s.trans) if (c.id == trans) { c.complete = true; c.result = 0x2aaaaaaa; }
-        p = np::lookup_poll_async(s, trans, true);
+        p = np::lookup_poll_async(s, trans);
         CHECK(p.code == 0 && p.has_value && p.value == 0x2aaaaaaa,
               "a completed transaction writes its result (sceNp.cpp:3467)");
-        CHECK(np::lookup_poll_async(s, 4242, true).code == np::E_COMM_INVALID_ID,
+        CHECK(np::lookup_poll_async(s, 4242).code == np::E_COMM_INVALID_ID,
               "PollAsync on an unknown id is INVALID_ID");
 
         CHECK(np::lookup_destroy_transaction_ctx(s, trans) == 0, "DestroyTransactionCtx succeeds");
@@ -165,21 +165,24 @@ int main() {
               "a status that is neither LOGGING_IN nor ONLINE is INVALID_STATE (sceNp.cpp:4040)");
 
         /* Content rating: TWO outputs, the second is the AGE. */
-        r = np::manager_get_content_rating(s, true, true, np::STATUS_OFFLINE);
-        CHECK(r.code == np::E_OFFLINE && r.has_value && r.value == 0,
-              "GetContentRatingFlag offline reports OFFLINE and restriction 0 (sceNp.cpp:4234)");
-        CHECK(np::manager_get_content_rating(s, false, true, np::STATUS_ONLINE).code ==
-                  np::E_INVALID_ARGUMENT,
-              "either null output is INVALID_ARGUMENT (sceNp.cpp:4227)");
-        r = np::manager_get_content_rating(s, true, true, np::STATUS_ONLINE);
+        /* A parental control is a LOCAL property. The reference writes 0/18 and
+         * the negative OFFLINE return put this title on its chat-restriction
+         * dialog, whose only exit is "uncheck Online Game"
+         * (docs/loading-43/REPORT.md). Both must be CELL_OK with no network. */
+        r = np::manager_get_content_rating(s, true, true);
         CHECK(r.code == 0 && r.has_value && r.value == 0,
-              "online, restriction is 0 (sceNp.cpp:4243)");
+              "GetContentRatingFlag answers CELL_OK, restriction 0, with no session (sceNp.cpp:4243)");
+        CHECK(np::manager_get_content_rating(s, false, true).code == np::E_INVALID_ARGUMENT,
+              "either null output is INVALID_ARGUMENT (sceNp.cpp:4227)");
+        np::State down;
+        CHECK(np::manager_get_content_rating(down, true, true).code == np::E_NOT_INITIALIZED,
+              "before NP init it is NOT_INITIALIZED (sceNp.cpp:4222)");
 
-        r = np::manager_get_chat_restriction(s, true, np::STATUS_OFFLINE);
-        CHECK(r.code == np::E_OFFLINE && r.has_value && r.value == 0,
-              "GetChatRestrictionFlag offline still writes 0, never 1 (sceNp.cpp:4276)");
-        r = np::manager_get_chat_restriction(s, true, np::STATUS_ONLINE);
-        CHECK(r.code == 0 && r.has_value && r.value == 0, "online it writes 0");
+        r = np::manager_get_chat_restriction(s, true);
+        CHECK(r.code == 0 && r.has_value && r.value == 0,
+              "GetChatRestrictionFlag answers CELL_OK and 0, never OFFLINE and never 1 (sceNp.cpp:4276)");
+        CHECK(np::manager_get_chat_restriction(s, false).code == np::E_INVALID_ARGUMENT,
+              "a null output is INVALID_ARGUMENT (sceNp.cpp:4260)");
 
         /* Network time: NOT_INITIALIZED is a VALUE here, and OFFLINE is not an error either. */
         np::State fresh_np;
