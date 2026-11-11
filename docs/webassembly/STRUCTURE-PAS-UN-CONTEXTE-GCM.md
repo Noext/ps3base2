@@ -53,3 +53,36 @@ probable.
 | 3 | 4 criteres sur 5 ; module 45,4 Mo, plus grosse fonction 737 751 o |
 | 4 | ecrit, validation navigateur impossible |
 | 5 | goulots nommes, fps natif mesure |
+
+---
+
+# Les trois pointeurs ne sont pas des entrees de table
+
+    python3 -c "..."  sur table.cpp
+
+| valeur | entree de table ? |
+|---|---|
+| `0x00bcf278` | **non** |
+| `0x00bcf3a0` | **non** |
+| `0x00bcf3a8` | **non** |
+
+Ce ne sont donc ni des fonctions liftées ni des exports. Ce sont des adresses de **donnees** dans l'image `mc`
+(qui s'etend jusqu'a `0x8af1ec` pour le texte, mais `0xbcxxxx` est dans sa zone de donnees).
+
+Trois pointeurs consecutifs vers des donnees de `mc` a `0xd7280c`, `+0x10`, `+0x14` : c'est une structure du
+**jeu**, pas du firmware GCM.
+
+## Ce que ca implique pour la these du wrapper
+
+Le wrapper `f_005d27d0` charge `gpr[3] = ld32(r2 - 12164)`, c'est-a-dire une valeur globale du jeu. Si cette
+globale pointe vers une structure du jeu a `0xd72800`, alors **le jeu passe bien sa propre structure** et c'est
+conforme : `_cellGcmInitBody` recoit un `CellGcmContextData` qui doit etre rempli par le jeu avant l'appel.
+
+Or seuls trois champs **au-dela** de `+0x08` sont remplis. Les trois premiers — ceux que le corps GCM lit — ne
+le sont pas.
+
+## La question, resserree encore
+
+Le jeu remplit `+0x0c`, `+0x10`, `+0x14` mais pas `+0x00`, `+0x04`, `+0x08`. Si le jeu devait remplir les six,
+alors **l'ecriture des trois premiers est du code non atteint** — et c'est la piste de la decouverte
+indirecte, jamais relancee depuis le round 187.
