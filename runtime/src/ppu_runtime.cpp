@@ -553,9 +553,21 @@ void call_import(Context& ctx, uint8_t* base, uint32_t index) {
     /* Arguments must be read BEFORE the handler: afterwards r3 carries the return,
      * which is how an earlier round read 0x80010004 as if it were an argument. */
     if (index == 119) {
-        std::fprintf(stderr, "[gcmargs] context=0x%x cmdSize=0x%x ioSize=0x%x ioAddr=0x%x\n",
-                     static_cast<unsigned>(ctx.gpr[3]), static_cast<unsigned>(ctx.gpr[4]),
-                     static_cast<unsigned>(ctx.gpr[5]), static_cast<unsigned>(ctx.gpr[6]));
+        {
+            /* RPCS3 takes vm::pptr<CellGcmContextData>: a pointer TO a pointer. If
+             * our guest passes the structure's address where the firmware expects
+             * that address to CONTAIN a pointer, the body reads garbage and fails.
+             * Read the first four words at the context so the two cases are told
+             * apart instead of guessed. */
+            const uint32_t c0 = static_cast<unsigned>(ctx.gpr[3]);
+            std::fprintf(stderr,
+                         "[gcmargs] context=0x%x cmdSize=0x%x ioSize=0x%x ioAddr=0x%x\n"
+                         "[gcmargs] mem[0x%x]=0x%08x 0x%08x 0x%08x 0x%08x\n",
+                         c0, static_cast<unsigned>(ctx.gpr[4]),
+                         static_cast<unsigned>(ctx.gpr[5]), static_cast<unsigned>(ctx.gpr[6]),
+                         c0, vm::read32(c0), vm::read32(c0 + 4), vm::read32(c0 + 8),
+                         vm::read32(c0 + 12));
+        }
     }
     call_import_body(ctx, base, index, slot, st, imp);
     cbwatch::note_import(imp.module, *imp.name ? imp.name : "?", ctx.gpr[3], lr, st >= 0);
