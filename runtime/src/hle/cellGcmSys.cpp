@@ -97,9 +97,15 @@ HLE_FUNC(cellGcmSys, _cellGcmInitBody) {
     const uint32_t cmd_size = static_cast<uint32_t>(ctx.gpr[4]);
     const uint32_t io_size = static_cast<uint32_t>(ctx.gpr[5]);
     const uint32_t io_addr = static_cast<uint32_t>(ctx.gpr[6]);
+    std::fprintf(stderr, "[gcmstub] context=0x%x cmd=0x%x io=0x%x/0x%x ctx_mapped=%d\n",
+                 context, cmd_size, io_size, io_addr,
+                 (context && vm::range_mapped(context, 16)) ? 1 : 0);
     if (context && vm::range_mapped(context, 16)) {
         const uint32_t buf = io_addr ? io_addr : context + 0x40;
-        if (buf && vm::range_mapped(buf, cmd_size ? cmd_size : 0x1000)) {
+        /* Do not demand that the WHOLE window be mapped: the io buffer is allocated
+         * by the guest and a partial tail must not turn this into a silent failure.
+         * Only the header matters here -- the stub never writes into the buffer. */
+        if (buf) {
             vm::write32(context + 0, buf);
             vm::write32(context + 4, buf + (cmd_size ? cmd_size : 0x1000));
             vm::write32(context + 8, buf);
