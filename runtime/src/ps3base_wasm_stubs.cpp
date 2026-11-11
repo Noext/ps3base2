@@ -112,9 +112,9 @@ extern "C" void ps3base_store_probe(uint32_t ea, const void* data, size_t size) 
      * Watch the three null fields specifically: knowing whether anything writes
      * them separates "the code was never lifted" from "our runtime provides no
      * path that does it". */
-    if (ea < 0x00d72800u || ea >= 0x00d72810u) return;
+    if (ea < 0x00d72800u || ea >= 0x00d72840u) return;
     static int n = 0;
-    if (n > 20) return;
+    if (n > 40) return;
     n++;
     const uint8_t* d = static_cast<const uint8_t*>(data);
     uint32_t v = 0;
