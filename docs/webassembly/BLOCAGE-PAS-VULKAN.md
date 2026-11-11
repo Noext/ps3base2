@@ -72,3 +72,38 @@ Ce que le round 175 a etabli : le blocage n'est pas Vulkan (il persiste avec le 
 Ce qu'il n'a pas etabli : quel thread ni quelle attente.
 
 Ce qu'il faudrait : ptrace_scope=0, ou lancer sans setsid, ou une trace futex resymbolisee.
+
+---
+
+# Round 176 : deuxieme tentative de pile d'appels
+
+## Ce que j'ai verifie
+
+| verite | detail |
+|---|---|
+| `ptrace_scope` | **1**, non modifiable (pas de droit d'ecriture) |
+| `setsid` dans le runtime | **absent** — c'etait mon propre lancement qui detachait |
+
+Le round 175 attribuait le detachement au runtime. **C'etait faux** : c'est `nohup setsid` dans *mes*
+commandes de lancement.
+
+## La tentative
+
+Lancer le jeu **sous gdb** (gdb devient le parent, `ptrace_scope=1` ne s'applique plus), dormir 10 s,
+interrompre, capturer la pile.
+
+**Resultat : aucun fichier produit.** Le `timeout 60` a tue gdb avant qu'il n'ecrive.
+
+## Ce que je ne peux pas conclure
+
+Le blocage est **dans notre code** sur un `futex` (etabli au round 175). Je n'ai **pas** identifie le thread.
+
+## Ce que je vais faire
+
+Arreter d'insister sur cette trace : c'est un probleme d'outillage, pas de diagnostic, et quatre rounds y ont
+deja ete consacres. Je reprends le travail mesurable.
+
+## Note pour la suite
+
+Pour reprendre : `ptrace_scope=0` en root, ou `gdb --args` sans `timeout`, avec une redirection vers un fichier
+persistant hors de `/tmp`.
