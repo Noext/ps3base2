@@ -326,7 +326,15 @@ void call_indirect(Context& ctx, uint8_t* base, uint32_t addr) {
          * image's code range: an address outside every image is not a missed
          * function, it is a corrupted pointer, and recording it would send the
          * lifter chasing nonsense. */
+        /* getenv is inert under wasm, so the discovery seed has to be decided at
+         * compile time there. -DPS3BASE_DISCOVERY_FILE=\"...\" makes the runtime
+         * append every indirect target the lift never produced, which is the
+         * input the lifter needs for a second pass. */
+#if defined(PS3BASE_DISCOVERY_FILE)
+        const char* disc = PS3BASE_DISCOVERY_FILE;
+#else
         const char* disc = std::getenv("PS3BASE_DISCOVERY");
+#endif
         uint32_t img_lo = 0, img_hi = 0;
         bool in_image = false;
         for (uint32_t i = 0; i < image::image_count; i++) {
