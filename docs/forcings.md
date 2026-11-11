@@ -6,27 +6,21 @@ and the condition that would let it be removed.
 
 ## F-001 -- rdr2_installed.sdat pre-placed under dev_hdd0
 
-**What.** The 539 MB archive is copied from the disc to
-`dev_hdd0/game/BLES00680/USRDIR/rdr2_installed.sdat` before the first run,
-instead of being written by the title's own install step.
+**RETIRED 2026-11-11. It documented a problem that did not exist.**
 
-**Why.** Without it the title stops at startup:
+The archive was copied by hand into
+`PS3BASE_DISC_DIR/dev_hdd0/game/BLES00680/USRDIR/`, which the runtime never reads:
+`GOWA_HDD0_DIR` defaults to `./vfs/dev_hdd0` (runtime/src/vfs.cpp:86), a directory
+of its own. The title's own install step had already written the real one:
 
-    [PACKFILE] Loading archive 'gamedata:/rdr2_installed.sdat' from hard drive
-    [FATAL] Cannot load archive 'gamedata:/rdr2_installed.sdat'
-    _sys_process_exit(0x1)
+    516M  vfs/dev_hdd0/game/BLES00680/USRDIR/rdr2_installed.sdat
+          vfs/dev_hdd0/game/BLES00680/PARAM.SFO
 
-The install step opens both the source and the destination, then writes nothing:
-the destination file exists but stays at 0 bytes while the title expects
-0x6fe02000. The installer thread is created and immediately parks in
-sys_timer_usleep, and no sys_fs_write is ever issued.
+was created in a directory the runtime never reads. The install had succeeded, in
+`vfs/dev_hdd0/game/BLES00680`, and the FATAL that prompted the forcing was caused
+by reading the wrong directory, not by a failed copy.
 
-**What it hides.** cellGameDataCheck and cellGameContentPermit both report
-success and hand back `/dev_hdd0/game/BLES00680`, but the directory contents the
-console would have created are absent. Any later failure that depends on those
-files will look like a game bug.
-
-**Removed when.** The install step runs normally: the title's own copy loop
-issues sys_fs_write on the destination and the file reaches 0x6fe02000 bytes
-without help. That is the acceptance test for F-001.
+The lesson is in the record rather than deleted: a forcing that "fixes" a failure
+must first prove the failure is real by reading the state the runtime actually
+uses, not the state a human assumed it uses.
 
