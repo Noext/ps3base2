@@ -117,3 +117,12 @@ extern "C" void ps3base_store_probe(uint32_t ea, const void* data, size_t size) 
     for (size_t i = 0; i < size && i < 4; i++) v |= uint32_t(d[i]) << (8 * i);
     std::fprintf(stderr, "[d7store] ea=0x%08x size=%zu v=0x%08x\n", ea, size, v);
 }
+
+#if PS3BASE_BLOCK_TRACE
+namespace jsedge {
+/* spu_idle is God of War's job-system edge. ps3base links no job system, so the
+ * hook has nothing to donate time to. It must still exist: the SPU thread code
+ * calls it unconditionally, and a missing symbol aborts the run. */
+void spu_idle(unsigned) {}
+}  // namespace jsedge
+#endif
