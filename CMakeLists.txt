@@ -293,6 +293,8 @@ add_executable(command_ring tests/command_ring.cpp runtime/src/gpu/command_ring.
 target_include_directories(command_ring PRIVATE runtime/include)
 add_executable(audio_ring tests/audio_ring.cpp runtime/src/gpu/audio_ring.cpp)
 target_include_directories(audio_ring PRIVATE runtime/include)
+add_executable(hook_guard tests/hook_guard.cpp)
+target_include_directories(hook_guard PRIVATE runtime/include)
 target_include_directories(wgpu_map PRIVATE runtime/include)
 target_compile_options(wgpu_map PRIVATE ${PS3BASE_ARCH_FLAGS})
 add_test(NAME wgpu_map COMMAND wgpu_map)
