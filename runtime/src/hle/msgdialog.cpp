@@ -183,6 +183,32 @@ bool is_open() {
     return g_dlg.state != State::Closed;
 }
 
+uint32_t dialog_type() {
+    std::lock_guard lk(g_lock);
+    return g_dlg.type;
+}
+
+namespace {
+/* Values the open dialog's progress bars hold. RPCS3's overlay keeps the same
+ * numbers and draws with them; nothing here draws a message dialog, so the
+ * stored value is what the calls can honestly produce. */
+float g_bar_value[2] = {0.0f, 0.0f};
+}
+
+void progress_bar_inc(uint32_t index, uint32_t delta) {
+    if (index >= 2) return;
+    std::lock_guard lk(g_lock);
+    g_bar_value[index] += static_cast<float>(delta);
+}
+
+void progress_bar_reset(uint32_t index) {
+    if (index >= 2) return;
+    std::lock_guard lk(g_lock);
+    g_bar_value[index] = 0.0f;
+}
+
+float progress_bar_value(uint32_t index) { return index < 2 ? g_bar_value[index] : 0.0f; }
+
 uint32_t opens_seen() { return g_opens.load(); }
 uint32_t resolves_seen() { return g_resolves.load(); }
 uint32_t last_button_value() { return static_cast<uint32_t>(g_last_button.load()); }

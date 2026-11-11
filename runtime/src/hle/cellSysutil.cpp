@@ -1,7 +1,15 @@
 #include "common.h"
+#include "sysutil_hle.h"
 
 #include <atomic>
 #include <cstdio>
+#include <cstring>
+#include <deque>
+#include <filesystem>
+#include <fstream>
+#include <functional>
+#include <mutex>
+#include <string>
 
 #include "avconf_hle.h"
 #include "runtime/cbwatch.h"
@@ -9,12 +17,9 @@
 #include "runtime/sysutil_events.h"
 #include "runtime/vfs.h"
 
-#include <deque>
-#include <filesystem>
-#include <functional>
-#include <mutex>
-
 namespace hle {
+
+namespace su = sysutil;
 
 namespace {
 
@@ -32,7 +37,17 @@ void post(std::function<void(ppu::Context&)> fn) {
     g_pending.push_back(std::move(fn));
 }
 
+/* The guest pointer a structure write needs is checked before the write, not
+ * inside it. RPCS3 faults on an unmapped pointer; this runtime cannot let a
+ * title's bad pointer take the host down, so it reports the same code an
+ * illegal argument gets and names the address in the log. */
+bool mapped(uint32_t ea, uint32_t size) {
+    if (ea && vm::range_mapped(ea, size)) return true;
+    LOG_WARN("cellSysutil", "guest pointer 0x%08x is not mapped for %u bytes", ea, size);
+    return false;
 }
+
+}  // namespace
 
 /* Exposed so other modules can raise sysutil events (cellNetCtl's dialogs do). */
 uint32_t callback_function(int slot) {
@@ -49,9 +64,15 @@ void sysutil_post(std::function<void(ppu::Context&)> fn) {
     post(std::move(fn));
 }
 
+/* --- cellSysutilRegisterCallback / UnregisterCallback --------------------
+ * refs/.../cellSysutil.cpp:719-746: slot >= 4 is CELL_SYSUTIL_ERROR_VALUE
+ * (0x8002b102), otherwise the callback pair is stored or cleared and CELL_OK is
+ * returned. The previous body returned TYPE (0x8002b101) for a bad slot, which
+ * is a code this function does not return.
+ */
 HLE_FUNC(cellSysutil, cellSysutilRegisterCallback) {
     uint32_t slot = a32(ctx, 0);
-    if (slot > 3) return ret(ctx, static_cast<int32_t>(0x8002b101));
+    if (slot > 3) return ret(ctx, su::SYSUTIL_ERR_VALUE);   /* :723-726 */
     std::lock_guard lk(g_lock);
     g_callbacks[slot] = {a32(ctx, 1), a32(ctx, 2)};
     cbwatch::note_register("sysutil", a32(ctx, 1), a32(ctx, 2));
@@ -66,17 +87,21 @@ HLE_FUNC(cellSysutil, cellSysutilRegisterCallback) {
         LOG_INFO("sysutil", "RegisterCallback slot %u opd 0x%08x -> code 0x%08x toc 0x%08x arg 0x%08x",
                  slot, opd, code, toc, a32(ctx, 2));
     }
-    ret(ctx, 0);
+    ret(ctx, 0);                                            /* :732 */
 }
 
 HLE_FUNC(cellSysutil, cellSysutilUnregisterCallback) {
     uint32_t slot = a32(ctx, 0);
-    if (slot > 3) return ret(ctx, static_cast<int32_t>(0x8002b101));
+    if (slot > 3) return ret(ctx, su::SYSUTIL_ERR_VALUE);   /* :739-742 */
     std::lock_guard lk(g_lock);
     g_callbacks[slot] = {};
-    ret(ctx, 0);
+    ret(ctx, 0);                                            /* :745 */
 }
 
+/* cellSysutilCheckCallback: drain the queue the system posted into, calling
+ * each guest callback with its own arguments. refs/.../cellSysutil.cpp:685-717.
+ * The queue and the delivery are the same ones cellMsgDialog and cellOskDialog
+ * use (runtime/src/hle/msgdialog.cpp, cellOskDialog.cpp). */
 HLE_FUNC(cellSysutil, cellSysutilCheckCallback) {
     for (;;) {
         std::function<void(ppu::Context&)> fn;
@@ -91,110 +116,525 @@ HLE_FUNC(cellSysutil, cellSysutilCheckCallback) {
     ret(ctx, 0);
 }
 
+/* --- cellSysutilGetSystemParamInt ---------------------------------------
+ * refs/.../cellSysutil.cpp:515-612. A null value pointer is ERROR_VALUE, an
+ * unknown id is ERROR_VALUE (not a silent zero), and a known id writes its
+ * answer. Every value is the one RPCS3 reports for the equivalent setting, and
+ * every one is also what a console with no network and no signed-in account
+ * answers.
+ */
 HLE_FUNC(cellSysutil, cellSysutilGetSystemParamInt) {
-    uint32_t id = a32(ctx, 0), out = a32(ctx, 1);
-    uint32_t v = 0;
-    switch (id) {
-    case 0x111: v = 1; break;
-    case 0x112: v = 1; break;
-    case 0x114: v = 1; break;
-    case 0x115: v = 1; break;
-    case 0x116: v = 0; break;
-    case 0x117: v = 0; break;
-    case 0x121: v = 9; break;
-    case 0x123: v = 0; break;
-    case 0x141: v = 0; break;
-    case 0x151: v = 1; break;
-    case 0x152: v = 1; break;
-    case 0x156: v = 0; break;
-    default: LOG_WARN("cellSysutil", "unknown system param int 0x%x", id); break;
+    const uint32_t id = a32(ctx, 0), out = a32(ctx, 1);
+    if (!out) return ret(ctx, su::SYSUTIL_ERR_VALUE);       /* :519-522 */
+    int32_t value = 0;
+    const int32_t rc = su::system_param_int(id, value);
+    if (rc < 0) {
+        LOG_WARN("sysutil", "cellSysutilGetSystemParamInt: unknown id 0x%x -> ERROR_VALUE", id);
+        return ret(ctx, rc);
     }
-    if (out) vm::write32(out, v);
+    vm::write32(out, static_cast<uint32_t>(value));
     ret(ctx, 0);
 }
 
+/* --- cellSysutilGetSystemParamString ------------------------------------
+ * refs/.../cellSysutil.cpp:614-683. The caller's bufsize must EQUAL the id's
+ * size (not be at least it), an unknown id is ERROR_VALUE, and the string is
+ * copied NUL-terminated. The previous body answered "Kratos" for id 0x131 and
+ * an empty string for everything else, both regardless of the size argument.
+ */
 HLE_FUNC(cellSysutil, cellSysutilGetSystemParamString) {
-    uint32_t id = a32(ctx, 0), buf = a32(ctx, 1), size = a32(ctx, 2);
-    put_str(buf, id == 0x131 ? "Kratos" : "", size);
+    const uint32_t id = a32(ctx, 0), buf = a32(ctx, 1), size = a32(ctx, 2);
+    if (!buf) return ret(ctx, su::SYSUTIL_ERR_VALUE);       /* :618-621 */
+    const int32_t rc = su::system_param_string_check(id, size);
+    if (rc < 0) {
+        LOG_WARN("sysutil", "cellSysutilGetSystemParamString: id 0x%x size %u -> 0x%x", id, size,
+                 static_cast<unsigned>(rc));
+        return ret(ctx, rc);
+    }
+    /* The current username lives in the account's file, exactly as RPCS3 reads
+     * it (:635-648). An absent file leaves RPCS3's own "Unknown" fallback. */
+    std::string username;
+    if (id == su::PARAM_ID_CURRENT_USERNAME) {
+        const std::string path = vfs::host_path("/dev_hdd0/home/00000001/localusername");
+        std::ifstream f(path, std::ios::binary);
+        if (f) std::getline(f, username);
+    }
+    const std::string value = su::system_param_string(id, username);
+    put_str(buf, value, size);
+    ret(ctx, 0);                                            /* :682 */
+}
+
+/* --- cellVideoOutGetState ------------------------------------------------
+ * refs/.../cellVideoOut.cpp:125-163. A null state is ILLEGAL_PARAMETER, a
+ * deviceIndex past the count is DEVICE_NOT_FOUND, the secondary reports
+ * DISABLED with a zeroed display mode, and any other videoOut is
+ * UNSUPPORTED_VIDEO_OUT.
+ *
+ * The previous body ignored videoOut and deviceIndex entirely and returned a
+ * hardcoded 720p mode with a fabricated refreshRates; a title asking for the
+ * secondary output got the primary's answer.
+ */
+HLE_FUNC(cellSysutil, cellVideoOutGetState) {
+    const uint32_t video_out = a32(ctx, 0), device_index = a32(ctx, 1), out = a32(ctx, 2);
+    if (!out) return ret(ctx, su::VIDEO_OUT_ERR_ILLEGAL_PARAMETER);   /* :129-132 */
+    if (!mapped(out, su::VIDEO_OUT_STATE_SIZE)) return ret(ctx, su::VIDEO_OUT_ERR_ILLEGAL_PARAMETER);
+
+    su::DisplayMode mode;
+    int32_t color_space = 0, output_state = 0;
+    const int32_t rc = su::video_out_get_state(video_out, device_index, mode, color_space, output_state);
+    if (rc < 0) return ret(ctx, rc);
+
+    su::write_video_out_state(out, mode, color_space, output_state);
+    ret(ctx, 0);                                                      /* :162 */
+}
+
+/* --- cellVideoOutGetResolution -------------------------------------------
+ * refs/.../cellVideoOut.cpp:165-183: a null pointer is ILLEGAL_PARAMETER, an id
+ * outside the table is ILLEGAL_PARAMETER, and the entry is the table's.
+ *
+ * The previous body had four entries and answered UNSUPPORTED_DISPLAY_MODE
+ * (0x8002b226) for anything else -- a code this function never returns -- so
+ * a title asking for 1600x1080 or 960x1080 was told its display request was
+ * unsupported rather than the resolution it asked about.
+ */
+HLE_FUNC(cellSysutil, cellVideoOutGetResolution) {
+    const uint32_t id = a32(ctx, 0), out = a32(ctx, 1);
+    if (!out) return ret(ctx, su::VIDEO_OUT_ERR_ILLEGAL_PARAMETER);   /* :170-173 */
+    uint16_t w = 0, h = 0;
+    if (!su::resolution_info(id, w, h)) {
+        LOG_WARN("sysutil", "cellVideoOutGetResolution: unknown resolution id 0x%x", id);
+        return ret(ctx, su::VIDEO_OUT_ERR_ILLEGAL_PARAMETER);           /* :178 */
+    }
+    if (!mapped(out, su::VIDEO_OUT_RESOLUTION_SIZE)) return ret(ctx, su::VIDEO_OUT_ERR_ILLEGAL_PARAMETER);
+    su::write_video_out_resolution(out, w, h);
+    ret(ctx, 0);                                                      /* :181 */
+}
+
+/* --- cellVideoOutGetResolutionAvailability ------------------------------
+ * refs/.../cellVideoOut.cpp:438-490. The result is a BOOLEAN (1/0), not an
+ * error, and it depends on the aspect and on the active mode; only a videoOut
+ * that is neither primary nor secondary is an error. The previous body ignored
+ * the aspect and the configured mode.
+ */
+HLE_FUNC(cellSysutil, cellVideoOutGetResolutionAvailability) {
+    const uint32_t video_out = a32(ctx, 0);
+    const uint32_t id = a32(ctx, 1);
+    const uint32_t aspect = a32(ctx, 2);
+    ret(ctx, su::video_out_resolution_availability(video_out, id, aspect));
+}
+
+/* --- cellVideoOutConfigure ----------------------------------------------
+ * refs/.../cellVideoOut.cpp:185-236. A null config is ILLEGAL_PARAMETER, a zero
+ * pitch is PARAMETER_OUT_OF_RANGE, ids 0x92/0xa1 are ILLEGAL_CONFIGURATION, an
+ * unknown or 3D-without-stereo id is UNSUPPORTED_DISPLAY_MODE.
+ *
+ * There is no mode-set to perform here: the presenter blits whatever surface
+ * the guest produces onto the swapchain (runtime/src/gpu/presenter.cpp:609,
+ * :649), so the stored configuration is the whole of what this call can
+ * truthfully do -- and it is what the title reads back through
+ * cellVideoOutGetConfiguration, so the two agree.
+ */
+HLE_FUNC(cellSysutil, cellVideoOutConfigure) {
+    const uint32_t cfg = a32(ctx, 1);
+    if (!cfg) return ret(ctx, su::VIDEO_OUT_ERR_ILLEGAL_PARAMETER);   /* :189-192 */
+    if (!mapped(cfg, su::VIDEO_OUT_CONFIGURATION_SIZE)) return ret(ctx, su::VIDEO_OUT_ERR_ILLEGAL_PARAMETER);
+    const uint32_t words[4] = {vm::ptr(cfg)[0], vm::ptr(cfg)[1], vm::ptr(cfg)[2], vm::read32(cfg + 12)};
+    const int32_t rc = su::video_out_configure(words);
+    if (rc < 0) {
+        LOG_WARN("sysutil", "cellVideoOutConfigure: res 0x%x format %u aspect %u pitch %u -> 0x%x",
+                 words[0], words[1], words[2], words[3], static_cast<unsigned>(rc));
+    } else {
+        LOG_INFO("sysutil", "cellVideoOutConfigure: res 0x%x format %u aspect %u pitch %u", words[0],
+                 words[1], words[2], words[3]);
+    }
+    ret(ctx, rc);                                                      /* :235 */
+}
+
+/* --- cellVideoOutGetConfiguration ---------------------------------------
+ * refs/.../cellVideoOut.cpp:242-274: a null config is ILLEGAL_PARAMETER, the
+ * option is zeroed when present, the secondary returns CELL_OK with a zeroed
+ * configuration, and any other videoOut is UNSUPPORTED_VIDEO_OUT.
+ */
+HLE_FUNC(cellSysutil, cellVideoOutGetConfiguration) {
+    const uint32_t video_out = a32(ctx, 0), cfg = a32(ctx, 1), option = a32(ctx, 2);
+    if (!cfg) return ret(ctx, su::VIDEO_OUT_ERR_ILLEGAL_PARAMETER);   /* :246-249 */
+    if (!mapped(cfg, su::VIDEO_OUT_CONFIGURATION_SIZE)) return ret(ctx, su::VIDEO_OUT_ERR_ILLEGAL_PARAMETER);
+    if (option && vm::range_mapped(option, su::VIDEO_OUT_OPTION_SIZE)) {
+        vm::write32(option, 0);                                       /* :251 */
+    }
+    su::State view;
+    bool zeroed = false;
+    const int32_t rc = su::video_out_get_configuration(video_out, view, zeroed);
+    if (rc < 0) {
+        LOG_WARN("sysutil", "cellVideoOutGetConfiguration: videoOut %u -> 0x%x", video_out,
+                 static_cast<unsigned>(rc));
+        return ret(ctx, rc);
+    }
+    if (zeroed) {
+        std::memset(vm::ptr(cfg), 0, su::VIDEO_OUT_CONFIGURATION_SIZE);
+    } else {
+        su::write_video_out_configuration(cfg, view);
+    }
+    LOG_INFO("sysutil", "cellVideoOutGetConfiguration(%u): res 0x%x format %u aspect %u pitch %u",
+             video_out, view.video_resolution, view.video_format, view.video_aspect, view.video_pitch);
     ret(ctx, 0);
 }
 
-HLE_FUNC(cellSysutil, cellVideoOutGetState) {
-    uint32_t out = a32(ctx, 2);
-    if (!out) return ret(ctx, static_cast<int32_t>(0x8002b222));
-    std::memset(vm::ptr(out), 0, 16);
-    if (a32(ctx, 0) != 0) {
-        vm::ptr(out)[0] = 2;
+/* --- cellAudioOutGetSoundAvailability -----------------------------------
+ * refs/.../cellAudioOut.cpp:226-253. A non-primary output answers 0 (a success
+ * carrying zero channels); otherwise the answer is the largest channel count
+ * among the modes matching (type, fs).
+ *
+ * The previous body returned 2 for every type == 0 and ignored fs, so a title
+ * asking for AC3 or for 192 kHz was told two channels were available.
+ */
+HLE_FUNC(cellSysutil, cellAudioOutGetSoundAvailability) {
+    const uint32_t audio_out = a32(ctx, 0), type = a32(ctx, 1), fs = a32(ctx, 2);
+    const uint32_t available = su::audio_out_sound_availability(audio_out, type, fs);
+    LOG_INFO("sysutil", "cellAudioOutGetSoundAvailability(%u, type %u, fs 0x%x) -> %u", audio_out, type, fs,
+             available);
+    ret(ctx, static_cast<int64_t>(available));               /* not_an_error(available), :252 */
+}
+
+/* --- cellAudioOutGetNumberOfDevice --------------------------------------
+ * refs/.../cellAudioOut.cpp:472-487: primary 1, secondary 0, anything else
+ * ILLEGAL_PARAMETER. A console with an AV cable has one audio device, so 1 is
+ * the console's answer and not a placeholder.
+ */
+HLE_FUNC(cellSysutil, cellAudioOutGetNumberOfDevice) {
+    const uint32_t audio_out = a32(ctx, 0);
+    uint32_t count = 0;
+    const int32_t rc = su::audio_out_number_of_device(audio_out, count);
+    if (rc < 0) return ret(ctx, rc);
+    ret(ctx, static_cast<int64_t>(count));
+}
+
+/* --- cellAudioOutGetState ------------------------------------------------
+ * refs/.../cellAudioOut.cpp:282-337. A null state is ILLEGAL_PARAMETER; an
+ * unsupported audioOut is ILLEGAL_PARAMETER; a deviceIndex past the end is
+ * PARAMETER_OUT_OF_RANGE for the primary, and for the SECONDARY it is CELL_OK
+ * with the odd constant state 0x10 and layout 0xD00C1680 the console actually
+ * returns (:302-311).
+ *
+ * There is no audio device behind this runtime, but that does not make the call
+ * an error: a console with an AV cable reports a stereo LPCM output ENABLED,
+ * and this writes exactly that from the stored configuration, so a
+ * cellAudioOutConfigure the title made is reflected here.
+ */
+HLE_FUNC(cellSysutil, cellAudioOutGetState) {
+    const uint32_t audio_out = a32(ctx, 0), device_index = a32(ctx, 1), out = a32(ctx, 2);
+    if (!out) return ret(ctx, su::AUDIO_OUT_ERR_ILLEGAL_PARAMETER);    /* :286-289 */
+    if (!mapped(out, su::AUDIO_OUT_STATE_SIZE)) return ret(ctx, su::AUDIO_OUT_ERR_ILLEGAL_PARAMETER);
+
+    su::AudioOut view;
+    bool secondary_past_end = false;
+    const int32_t rc = su::audio_out_get_state(audio_out, device_index, view, secondary_past_end);
+    if (rc < 0) return ret(ctx, rc);
+    if (secondary_past_end) {
+        su::write_audio_out_secondary_past_end(out);
         return ret(ctx, 0);
     }
-    uint8_t* p = vm::ptr(out);
-    p[0] = 0;
-    p[1] = 1;
-    p[8] = 2;
-    p[9] = 1;
-    p[10] = 0;
-    p[11] = 2;
-    vm::write16(out + 14, 1);
+    su::write_audio_out_state(out, view);
+    LOG_INFO("sysutil", "cellAudioOutGetState(%u, %u): state %u encoder %u downMixer %u ch %u",
+             audio_out, device_index, view.state, view.encoder, view.downmixer, view.sound_mode.channel);
     ret(ctx, 0);
 }
 
-HLE_FUNC(cellSysutil, cellVideoOutGetResolution) {
-    uint32_t id = a32(ctx, 0), out = a32(ctx, 1);
-    uint16_t w = 0, h = 0;
-    switch (id) {
-    case 1: w = 1920; h = 1080; break;
-    case 2: w = 1280; h = 720; break;
-    case 4: w = 720; h = 480; break;
-    case 5: w = 720; h = 576; break;
-    default: return ret(ctx, static_cast<int32_t>(0x8002b224));
+/* --- cellAudioOutGetDeviceInfo ------------------------------------------
+ * refs/.../cellAudioOut.cpp:489-536. The structure is CellAudioOutDeviceInfo:
+ * portType, availableModeCount, state, reserved[3], latency, then up to 16
+ * CellAudioOutSoundMode entries (cellAudioOut.h:142-150), which is 0x88 bytes
+ * -- NOT the 0x1C8 of the video-out structure, which is the size that once
+ * overran a caller's frame in this tree.
+ *
+ * A deviceIndex past the end is PARAMETER_OUT_OF_RANGE for the primary and
+ * CELL_OK with a ZEROED structure for the secondary (:505-513).
+ */
+HLE_FUNC(cellSysutil, cellAudioOutGetDeviceInfo) {
+    const uint32_t audio_out = a32(ctx, 0), device_index = a32(ctx, 1), info = a32(ctx, 2);
+    if (!info) return ret(ctx, su::AUDIO_OUT_ERR_ILLEGAL_PARAMETER);   /* :493-496 */
+    if (!mapped(info, su::AUDIO_OUT_DEVICE_INFO_SIZE)) return ret(ctx, su::AUDIO_OUT_ERR_ILLEGAL_PARAMETER);
+
+    su::AudioOut view;
+    bool zeroed_past_end = false;
+    const int32_t rc = su::audio_out_get_device_info(audio_out, device_index, view, zeroed_past_end);
+    if (rc < 0) return ret(ctx, rc);
+    if (zeroed_past_end) {
+        std::memset(vm::ptr(info), 0, su::AUDIO_OUT_DEVICE_INFO_SIZE);
+        return ret(ctx, 0);
     }
-    vm::write16(out, w);
-    vm::write16(out + 2, h);
+    su::write_audio_out_device_info(info, view);
+    LOG_INFO("sysutil", "cellAudioOutGetDeviceInfo(%u, %u): port %s, %u modes, first type %u ch %u fs 0x%x",
+             audio_out, device_index, "HDMI", view.modes.count, view.modes.modes[0].type,
+             view.modes.modes[0].channel, view.modes.modes[0].fs);
     ret(ctx, 0);
 }
 
-HLE_FUNC(cellSysutil, cellVideoOutGetResolutionAvailability) {
-    uint32_t id = a32(ctx, 1);
-    ret(ctx, (id == 1 || id == 2) ? 1 : 0);
-}
-
-HLE_FUNC(cellSysutil, cellVideoOutConfigure) {
-    uint32_t cfg = a32(ctx, 1);
-    if (cfg) LOG_INFO("cellSysutil", "cellVideoOutConfigure res %u format %u aspect %u pitch %u", vm::ptr(cfg)[0], vm::ptr(cfg)[1], vm::ptr(cfg)[2], vm::read32(cfg + 12));
+/* --- cellAudioOutGetConfiguration ---------------------------------------
+ * refs/.../cellAudioOut.cpp:437-470: a null config is ILLEGAL_PARAMETER, the
+ * secondary is UNSUPPORTED_AUDIO_OUT (it has one fixed format and cannot be
+ * reconfigured), anything else is ILLEGAL_PARAMETER, and the primary reports
+ * the ACTIVE configuration -- which is what a preceding cellAudioOutConfigure
+ * stored, so the two agree.
+ */
+HLE_FUNC(cellSysutil, cellAudioOutGetConfiguration) {
+    const uint32_t audio_out = a32(ctx, 0), cfg = a32(ctx, 1);
+    if (!cfg) return ret(ctx, su::AUDIO_OUT_ERR_ILLEGAL_PARAMETER);    /* :441-444 */
+    if (!mapped(cfg, su::AUDIO_OUT_CONFIGURATION_SIZE)) return ret(ctx, su::AUDIO_OUT_ERR_ILLEGAL_PARAMETER);
+    su::AudioOut view;
+    const int32_t rc = su::audio_out_get_configuration(audio_out, view);
+    if (rc < 0) {
+        LOG_WARN("sysutil", "cellAudioOutGetConfiguration(%u) -> 0x%x", audio_out, static_cast<unsigned>(rc));
+        return ret(ctx, rc);
+    }
+    su::write_audio_out_configuration(cfg, view);
+    LOG_INFO("sysutil", "cellAudioOutGetConfiguration(%u): channel %u encoder %u downMixer %u", audio_out,
+             view.channel, view.encoder, view.downmixer);
     ret(ctx, 0);
 }
 
-HLE_FUNC(cellSysutil, cellAudioOutGetSoundAvailability) {
-    uint32_t type = a32(ctx, 1);
-    ret(ctx, type == 0 ? 2 : 0);
-}
-
-/* cellAudioOutSetCopyControl(mode): the copy-protection flag on the audio
- * output. Nothing we can act on, but the title calls it during startup and an
- * unimplemented import returns 0 without setting its out-parameter. */
-HLE_FUNC(cellSysutil, cellAudioOutSetCopyControl) {
-    ret(ctx, 0);
-}
-
+/* --- cellAudioOutConfigure ----------------------------------------------
+ * refs/.../cellAudioOut.cpp:339-435. A null config is ILLEGAL_PARAMETER, the
+ * secondary is UNSUPPORTED_AUDIO_OUT, anything else ILLEGAL_PARAMETER. On the
+ * primary the configuration is stored, an invalid downMixer keeps the previous
+ * value, a matching sound mode follows the new channel/encoder, and the output
+ * state is cycled DISABLED -> ENABLED, which cellAudioOutGetState then reports.
+ *
+ * There is no device to reopen: the mixer in runtime/src/hle/cellAudio.cpp
+ * mixes whatever channel count the title opened on its own ports (1, 2, 6 or
+ * 8), so nothing in the sample path depends on this value. Storing it is the
+ * whole of the console behaviour that is observable to the guest.
+ */
 HLE_FUNC(cellSysutil, cellAudioOutConfigure) {
+    const uint32_t audio_out = a32(ctx, 0), cfg = a32(ctx, 1);
+    if (!cfg) return ret(ctx, su::AUDIO_OUT_ERR_ILLEGAL_PARAMETER);    /* :343-346 */
+    if (!mapped(cfg, su::AUDIO_OUT_CONFIGURATION_SIZE)) return ret(ctx, su::AUDIO_OUT_ERR_ILLEGAL_PARAMETER);
+
+    /* CellAudioOutConfiguration: u8 channel, u8 encoder, u8 reserved[10],
+     * be u32 downMixer (cellAudioOut.h:123-129). */
+    su::AudioOut requested;
+    requested.channel = vm::ptr(cfg)[0];
+    requested.encoder = vm::ptr(cfg)[1];
+    requested.downmixer = vm::read32(cfg + 12);
+
+    const int32_t rc = su::audio_out_configure(audio_out, requested);
+    if (rc < 0) {
+        LOG_WARN("sysutil", "cellAudioOutConfigure(%u): channel %u encoder %u downMixer %u -> 0x%x", audio_out,
+                 requested.channel, requested.encoder, requested.downmixer, static_cast<unsigned>(rc));
+    } else {
+        LOG_INFO("sysutil", "cellAudioOutConfigure(%u): channel %u encoder %u downMixer %u", audio_out,
+                 requested.channel, requested.encoder, requested.downmixer);
+    }
+    ret(ctx, rc);
+}
+
+/* --- cellAudioOutSetCopyControl -----------------------------------------
+ * refs/.../cellAudioOut.cpp:538-563: the control range is checked BEFORE the
+ * output, then the secondary is refused and any other value is
+ * ILLEGAL_PARAMETER. The copy-protection flag has no effect on this runtime's
+ * audio path, but the call is a validation plus a stored value, which is what
+ * the reference is, so success is the truthful answer -- and an out-of-range
+ * control is refused instead of ignored, which the previous body did not do.
+ */
+HLE_FUNC(cellSysutil, cellAudioOutSetCopyControl) {
+    const uint32_t audio_out = a32(ctx, 0), control = a32(ctx, 1);
+    const int32_t rc = su::audio_out_set_copy_control(audio_out, control);
+    if (rc < 0) {
+        LOG_WARN("sysutil", "cellAudioOutSetCopyControl(%u, %u) -> 0x%x", audio_out, control,
+                 static_cast<unsigned>(rc));
+    }
+    ret(ctx, rc);
+}
+
+/* --- cellSysutilGetBgmPlaybackStatus ------------------------------------
+ * refs/.../cellSysutil.cpp:838-852: a null pointer is
+ * CELL_SYSUTIL_BGMPLAYBACK_ERROR_PARAM (0x8002b101); otherwise the manager's
+ * status is copied into the caller's CellSysutilBgmPlaybackStatus -- 32 bytes:
+ * playerState, enableState, contentId[16], currentFadeRatio, reserved[13]
+ * (refs/.../cellSysutil.h:289-296).
+ *
+ * The status is not invented: enable/disable only move enableState
+ * (:764-773, :799-812) and the manager starts STOPPED+DISABLED (:757-761), so
+ * what a title reads back here is the state its own calls produced.
+ */
+HLE_FUNC(cellSysutil, cellSysutilGetBgmPlaybackStatus) {
+    const uint32_t out = a32(ctx, 0);
+    if (!out) return ret(ctx, su::BGM_ERR_PARAM);                    /* :842-845 */
+    if (!mapped(out, su::BGM_STATUS_SIZE)) return ret(ctx, su::BGM_ERR_PARAM);
+    su::write_bgm_status(out);
+    ret(ctx, 0);                                                     /* :851 */
+}
+
+/* cellSysutilEnableBgmPlayback / Disable: refs/.../cellSysutil.cpp:764-773 and
+ * :799-812 move the manager's enableState and return CELL_OK. Nothing plays
+ * background music here, but the call has a real, observable effect --
+ * cellSysutilGetBgmPlaybackStatus reports it -- so success is truthful rather
+ * than fabricated. */
+HLE_FUNC(cellSysutil, cellSysutilEnableBgmPlayback) {
+    su::bgm_enable();
+    LOG_INFO("sysutil", "cellSysutilEnableBgmPlayback -> ENABLE");
     ret(ctx, 0);
 }
 
+HLE_FUNC(cellSysutil, cellSysutilDisableBgmPlayback) {
+    su::bgm_disable();
+    LOG_INFO("sysutil", "cellSysutilDisableBgmPlayback -> DISABLE");
+    ret(ctx, 0);
+}
+
+/* --- cellSysCacheMount --------------------------------------------------
+ * refs/.../cellSysCache.cpp:178-262. A null param is CELL_SYSCACHE_ERROR_PARAM
+ * (0x8002bc03); an invalid cache id is the same; the id and the title id joined
+ * by '_' name the directory (:204); the guest-visible path is "/dev_hdd1"
+ * (:210) and not a path inside the cache; mounting the same id again is
+ * RET_OK_RELAYED (1), a new one is RET_OK_CLEARED (0).
+ *
+ * Two defects in the previous body are fixed here: the path it wrote into
+ * getCachePath was "/dev_hdd1/caches/<id>" instead of "/dev_hdd1", and it
+ * returned 0 for every id without ever reporting RELAYED, so a title could not
+ * tell a fresh cache from a reused one.
+ *
+ * What this runtime cannot do: RPCS3 mounts /dev_hdd1 onto that directory. The
+ * VFS here has one fixed mapping for /dev_hdd1 (runtime/src/vfs.cpp:101-110)
+ * and no mount call, so the directory is created inside the shared /dev_hdd1
+ * tree and the log says so. The guest still gets a valid, writable path.
+ */
 HLE_FUNC(cellSysutil, cellSysCacheMount) {
-    uint32_t param = a32(ctx, 0);
-    std::string id = gstr(param, 32);
-    /* A cache path labelled with one specific title id makes every other disc
-     * share that title's cache -- and silently, because the path is internal. */
-    std::string guest = "/dev_hdd1/caches/" + (id.empty() ? std::string("ps3base") : id);
+    const uint32_t param = a32(ctx, 0);
+    if (!param) return ret(ctx, su::SYSCACHE_ERR_PARAM);             /* :187-190 */
+    if (!mapped(param, su::SYSCACHE_PARAM_SIZE)) return ret(ctx, su::SYSCACHE_ERR_PARAM);
+    const std::string id = gstr(param, su::SYSCACHE_ID_SIZE);
+    std::string dir;
+    /* The title id is the disc's, read from PARAM.SFO by the VFS -- never a
+     * value baked into this source, which would make one disc's cache every
+     * disc's cache. */
+    const std::string title_id = vfs::disc_sfo().str("TITLE_ID");
+    const int32_t rc = su::cache_mount(id, title_id, dir);
+    if (rc < 0) {
+        LOG_WARN("sysutil", "cellSysCacheMount('%s') -> 0x%x", id.c_str(), static_cast<unsigned>(rc));
+        return ret(ctx, rc);
+    }
+    const std::string host = "/dev_hdd1/caches";
     std::error_code ec;
-    std::filesystem::create_directories(vfs::host_path(guest), ec);
-    put_str(param + 32, guest, 1024);
-    LOG_INFO("cellSysutil", "cellSysCacheMount('%s') -> %s", id.c_str(), guest.c_str());
+    std::filesystem::create_directories(vfs::host_path(host + "/" + dir), ec);
+    put_str(param + su::SYSCACHE_PARAM_PATH_OFFSET, "/dev_hdd1", su::SYSCACHE_PATH_MAX);
+    LOG_INFO("sysutil",
+             "cellSysCacheMount('%s'): cache id '%s' created under /dev_hdd1/caches; "
+             "the VFS mapping of /dev_hdd1 is fixed, so the guest path stays /dev_hdd1",
+             id.c_str(), dir.c_str());
+    ret(ctx, rc);
+}
+
+/* cellSysCacheClear: refs/.../cellSysCache.cpp:155-176. Before any mount this
+ * is CELL_SYSCACHE_ERROR_NOTMOUNTED (0x8002bc04), not a success -- the previous
+ * body returned CELL_OK for a cache that was never mounted. */
+HLE_FUNC(cellSysutil, cellSysCacheClear) {
+    const int32_t rc = su::cache_clear();
+    if (rc < 0) LOG_WARN("sysutil", "cellSysCacheClear before any mount -> NOTMOUNTED");
+    else LOG_INFO("sysutil", "cellSysCacheClear -> %d", rc);
+    ret(ctx, rc);
+}
+
+/* --- cellMsgDialogProgressBar* -----------------------------------------
+ * refs/.../cellMsgDialog.cpp:599-696 and the overlay's own range checks
+ * (refs/.../RSX/Overlays/overlay_message_dialog.cpp:551-597). The dialog type's
+ * bits 12-13 hold the number of progress bars (refs/.../cellMsgDialog.h:82), so
+ * an index past that count is CELL_MSGDIALOG_ERROR_PARAM, and any of these
+ * calls with no dialog open is CELL_MSGDIALOG_ERROR_DIALOG_NOT_OPENED. The
+ * previous bodies returned CELL_OK unconditionally, including for a call made
+ * with no dialog at all -- the exact shape of a fake success: the title's own
+ * progress bookkeeping then believed a bar existed.
+ *
+ * A bar's VALUE only affects the overlay's drawing, and this runtime draws no
+ * overlay for the message dialog (msgdialog.cpp models open/close and pad
+ * input, not pixels), so the visible bar is unchanged either way; what a caller
+ * can act on -- open or not, valid index or not -- is answered exactly.
+ */
+HLE_FUNC(cellSysutil, cellMsgDialogProgressBarInc) {
+    const uint32_t index = a32(ctx, 0);
+    const int32_t rc = su::msg_progress_bar_check(msgdialog::is_open(), msgdialog::dialog_type(), index);
+    if (rc < 0) return ret(ctx, rc);
+    /* delta is a u32; RPCS3 casts it to f32 for the overlay's bar
+     * (refs/.../cellMsgDialog.cpp:668-677). */
+    msgdialog::progress_bar_inc(index, a32(ctx, 1));
     ret(ctx, 0);
 }
 
-HLE_FUNC(cellSysutil, cellSysCacheClear) {
+HLE_FUNC(cellSysutil, cellMsgDialogProgressBarSetMsg) {
+    const uint32_t index = a32(ctx, 0);
+    const uint32_t msg = a32(ctx, 1);
+    const std::string text = msg ? gstr(msg, su::MSG_PROGRESSBAR_STRING_SIZE + 1) : std::string();
+    const int32_t rc = su::msg_progress_bar_set_msg_check(msgdialog::is_open(), msgdialog::dialog_type(),
+                                                          index, msg != 0, text.size());
+    if (rc < 0) return ret(ctx, rc);
     ret(ctx, 0);
+}
+
+HLE_FUNC(cellSysutil, cellMsgDialogProgressBarReset) {
+    const uint32_t index = a32(ctx, 0);
+    const int32_t rc = su::msg_progress_bar_check(msgdialog::is_open(), msgdialog::dialog_type(), index);
+    if (rc < 0) return ret(ctx, rc);
+    msgdialog::progress_bar_reset(index);
+    ret(ctx, 0);
+}
+
+HLE_FUNC(cellSysutil, cellSaveDataListAutoLoad) {
+    ret(ctx, static_cast<int32_t>(0x8002b40b));
+}
+
+HLE_FUNC(cellSysutil, cellSaveDataListLoad2) {
+    ret(ctx, static_cast<int32_t>(0x8002b40b));
+}
+
+/* cellSaveDataDelete2(container): refs/.../cellSaveData.cpp:2527-2532 hands the
+ * call to select_and_delete (:295-340), which shows the save-data list, and
+ * returns CELL_CANCEL (1, refs/.../ErrorCodes.h:68) when nothing is selected.
+ * This runtime has no save-data selection UI, so nothing is ever selected and
+ * that is the answer. The previous body returned CELL_OK, telling the title a
+ * deletion had happened that never did -- and the duplicate registration in
+ * cellSaveData.cpp is removed so the two cannot disagree.
+ */
+HLE_FUNC(cellSysutil, cellSaveDataDelete2) {
+    LOG_INFO("sysutil", "cellSaveDataDelete2: no save-data selection UI -> CELL_CANCEL, nothing deleted");
+    ret(ctx, su::CELL_CANCEL);
+}
+
+/* cellSaveDataFixedDelete: the same select_and_delete path
+ * (refs/.../cellSaveData.cpp:2534-2540), so it also answers CELL_CANCEL. */
+HLE_FUNC(cellSysutil, cellSaveDataFixedDelete) {
+    LOG_INFO("sysutil", "cellSaveDataFixedDelete: no save-data selection UI -> CELL_CANCEL, nothing deleted");
+    ret(ctx, su::CELL_CANCEL);
+}
+
+/* --- cellOskDialogAbort -------------------------------------------------
+ * refs/.../cellOskDialog.cpp:792-828: with no dialog open it returns
+ * CELL_MSGDIALOG_ERROR_DIALOG_NOT_OPENED (0x8002b302); otherwise it closes with
+ * the ABORT input result and raises CELL_SYSUTIL_OSKDIALOG_FINISHED (:818-825).
+ *
+ * The OSK state lives in cellOskDialog.cpp; this asks it, so "is a dialog open"
+ * has one owner instead of a second copy here.
+ */
+HLE_FUNC(cellSysutil, cellOskDialogAbort) {
+    const int32_t rc = su::osk_abort_check(osk::is_open());
+    if (rc < 0) {
+        LOG_WARN("sysutil", "cellOskDialogAbort with no dialog open -> DIALOG_NOT_OPENED");
+        return ret(ctx, rc);
+    }
+    osk::abort();
+    ret(ctx, 0);
+}
+
+/* --- cellOskDialogSetDeviceMask ----------------------------------------
+ * refs/.../cellOskDialog.cpp:830-858: the only accepted mask is
+ * CELL_OSKDIALOG_DEVICE_MASK_PAD (0xff); anything above it is
+ * CELL_OSKDIALOG_ERROR_PARAM (0x8002b504). The previous registration of this
+ * import did not exist at all.
+ */
+HLE_FUNC(cellSysutil, cellOskDialogSetDeviceMask) {
+    const uint32_t mask = a32(ctx, 0);
+    const int32_t rc = su::osk_set_device_mask(mask);
+    if (rc < 0) LOG_WARN("sysutil", "cellOskDialogSetDeviceMask(0x%x) -> PARAM", mask);
+    ret(ctx, rc);
 }
 
 namespace {
@@ -205,21 +645,17 @@ constexpr uint32_t CELL_MSGDIALOG_TYPE_BUTTON_OK = 2u << 4;
 
 /* --- cellMsgDialog*: a real system dialog, not an auto-answer -------------
  *
- * The old handler answered the callback on the spot with a guessed button and
- * never had an "open" state. See runtime/include/runtime/msgdialog.h for what
- * replaces it and which RPCS3 lines the button values come from. The short
- * version: the dialog now opens, the SYSTEM reads the pad, the callback fires
- * when -- and only when -- a button that the dialog type accepts is pressed,
- * and while a dialog is open a second open2 returns CELL_SYSUTIL_ERROR_BUSY
- * exactly as firmware does.
+ * See runtime/include/runtime/msgdialog.h for the state machine and which RPCS3
+ * lines the button values come from. The dialog opens, the SYSTEM reads the
+ * pad, the callback fires when -- and only when -- a button that the dialog type
+ * accepts is pressed, and while a dialog is open a second open2 returns
+ * CELL_SYSUTIL_ERROR_BUSY exactly as firmware does.
  *
- * Measurement that motivated this: the "level autosave feature" dialog this
- * title shows is NOT one of ours. No cellMsgDialog* import is ever called in a
- * run that displays it (grep 'msgdialog' game.log -> 0 lines before this
- * change), and no cellSaveData error dialog is raised either. The title draws
- * that box itself. This rewrite is still the right thing for every OTHER
- * title dialog, and it makes the import's behaviour correct instead of a
- * guess; it cannot, on its own, remove the game's own autosave box. */
+ * Measurement that motivated it: the "level autosave feature" dialog this title
+ * shows is NOT one of ours. No cellMsgDialog* import is ever called in a run
+ * that displays it, and no cellSaveData error dialog is raised either. The
+ * title draws that box itself. This is still the right behaviour for every
+ * OTHER title dialog. */
 HLE_FUNC(cellSysutil, cellMsgDialogOpen2) {
     uint32_t type = a32(ctx, 0);
     std::string msg = gstr(a32(ctx, 1));
@@ -251,27 +687,6 @@ HLE_FUNC(cellSysutil, cellMsgDialogClose) {
 HLE_FUNC(cellSysutil, cellMsgDialogAbort) {
     ret(ctx, msgdialog::abort());
 }
-
-HLE_FUNC(cellSysutil, cellMsgDialogProgressBarInc) { ret(ctx, 0); }
-HLE_FUNC(cellSysutil, cellMsgDialogProgressBarSetMsg) { ret(ctx, 0); }
-HLE_FUNC(cellSysutil, cellMsgDialogProgressBarReset) { ret(ctx, 0); }
-
-HLE_FUNC(cellSysutil, cellSaveDataListAutoLoad) {
-    ret(ctx, static_cast<int32_t>(0x8002b40b));
-}
-
-HLE_FUNC(cellSysutil, cellSaveDataListLoad2) {
-    ret(ctx, static_cast<int32_t>(0x8002b40b));
-}
-
-HLE_FUNC(cellSysutil, cellSaveDataDelete2) {
-    ret(ctx, 0);
-}
-
-HLE_FUNC(cellSysutil, cellSaveDataFixedDelete) {
-    ret(ctx, 0);
-}
-
 /* cellVideoOutGetScreenSize(videoOut, screenSize)
  * refs/rpcs3/rpcs3/Emu/Cell/Modules/cellAvconfExt.cpp:553-577.
  *
@@ -407,20 +822,6 @@ HLE_FUNC(cellSysutil, cellVideoOutGetDeviceInfo) {
     LOG_INFO("cellSysutil",
              "cellVideoOutGetDeviceInfo -> %u modes, first %ux%u",
              (unsigned)p[4], 1920u, 1080u);
-    ret(ctx, 0);
-}
-
-/* cellSysutilEnableBgmPlayback / Disable: the title tells the OS that
- * background music is starting. Nothing here plays BGM, and refusing the call
- * makes a title treat the feature as unavailable and take a slower path. There
- * is no BGM to enable, so success is the truthful answer -- and unlike a
- * fabricated CELL_OK for an object, there is no state the caller can later
- * depend on being wrong. */
-HLE_FUNC(cellSysutil, cellSysutilEnableBgmPlayback) {
-    ret(ctx, 0);
-}
-
-HLE_FUNC(cellSysutil, cellSysutilDisableBgmPlayback) {
     ret(ctx, 0);
 }
 

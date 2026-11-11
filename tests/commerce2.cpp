@@ -138,9 +138,20 @@ int main() {
         CHECK(m.find_ctx(0x5001) && m.find_ctx(0x5001)->arg == 0x3000,
               "the context stores the caller's arg");
 
-        /* A NULL ctx_id pointer is a warning, not an error (:175-178). */
-        CHECK(m.create_ctx(2, true, 0x1000, 0x2000, 0x3000, false, nullptr) == 0,
-              "a NULL ctx_id pointer still returns CELL_OK");
+        /* A NULL ctx_id pointer is a warning, not an error (:175-178) -- and
+         * create_commerce2_context sits inside the if (ctx_id) branch, so NO
+         * context is created either. */
+        {
+            com2::Module n;
+            n.init(true);
+            CHECK(n.create_ctx(2, true, 0x1000, 0x2000, 0x3000, false, nullptr) == 0,
+                  "a NULL ctx_id pointer still returns CELL_OK");
+            CHECK(n.find_ctx(0x5001) == nullptr,
+                  "a NULL ctx_id creates NO context: the allocation is inside the if");
+            bool deliver = false;
+            CHECK(n.create_session_start(0x5001, &deliver) == com2::ERR_CTX_NOT_FOUND,
+                  "so CreateSessionStart afterwards is CTX_NOT_FOUND");
+        }
 
         /* CTX_MAX is 1 and RPCS3's check is "if (false) // TODO" (:169-170), so
          * a second context does NOT fail; idm cannot allocate, and the returned

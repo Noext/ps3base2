@@ -1,5 +1,6 @@
 #include "object.h"
 #include "runtime/vfs.h"
+#include "../crypto/edat.h"
 #include "runtime/trace.h"
 #include "runtime/hostsleep.h"
 
@@ -185,6 +186,31 @@ LV2_SYSCALL(801, sys_fs_open) {
     uint32_t out = u32arg(ctx, 2);
     bool ro = is_ro(guest);
     std::error_code ec;
+
+    /* Transparent NPDRM: a file whose first four bytes are "NPD\0" is an
+     * encrypted SDATA/EDATA container. Red Dead Redemption ships its whole game
+     * archive that way (rdr2_installed.sdat), so the title was parsing ciphertext
+     * as if it were an RPF6 archive, failing, and never starting its renderer.
+     *
+     * edat_resolve() decrypts once into "<name>.dec" beside the source and returns
+     * that path; afterwards every syscall -- read, lseek, fstat, size -- operates on
+     * the plaintext file, so nothing else in the FS layer needs to know. The cache
+     * is reused while it is newer than the source, so the decrypt cost is paid once
+     * per title, not once per run (539 MB at startup would otherwise be a 40 s
+     * stall every time).
+     *
+     * Decryption failing is not fatal: the original path is returned and the guest
+     * gets its own error from the data it reads, which is a better signal than an
+     * open() the caller cannot attribute. PS3_EDAT=0 disables the whole path. */
+    {
+        static char dec_buf[4096];
+        const char* dec = edat_resolve(host.c_str(), dec_buf, sizeof dec_buf);
+        if (dec && dec != host.c_str() && std::strcmp(dec, host.c_str()) != 0) {
+            LOG_INFO("fs", "open '%s' -> decrypted '%s'", guest.c_str(), dec);
+            host = dec;
+        }
+    }
+
     if (fsys::is_directory(host, ec)) {
         LOG_WARN("fs", "open '%s' -> EISDIR (%s)", guest.c_str(), host.c_str());
         return CELL_EISDIR;

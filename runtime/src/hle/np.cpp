@@ -635,8 +635,7 @@ HLE_FUNC(sceNp, sceNpManagerGetAccountRegion) {
 }
 HLE_FUNC(sceNp, sceNpManagerGetContentRatingFlag) {
     const uint32_t restricted = a32(ctx, 0), age = a32(ctx, 1);
-    const np::Result r = np::manager_get_content_rating(np_state(), restricted != 0, age != 0,
-                                                        np_psn_status());
+    const np::Result r = np::manager_get_content_rating(np_state(), restricted != 0, age != 0);
     if (r.has_value) {
         if (restricted) vm::write32(restricted, 0);
         if (age) vm::write32(age, 18); /* sceNp.cpp:4244 */
@@ -654,7 +653,7 @@ HLE_FUNC(sceNp, sceNpManagerGetChatRestrictionFlag) {
      * in 'More Options' to start an offline game." That dialog has no offline
      * path out of it, so the load never begins. */
     const uint32_t out = a32(ctx, 0);
-    const np::Result r = np::manager_get_chat_restriction(np_state(), out != 0, np_psn_status());
+    const np::Result r = np::manager_get_chat_restriction(np_state(), out != 0);
     if (r.has_value && out) vm::write32(out, 0);
     LOG_INFO("sceNp", "ManagerGetChatRestrictionFlag -> 0x%08x (0 = unrestricted)",
              static_cast<uint32_t>(r.code));

@@ -138,3 +138,24 @@ const CompiledBlock* compiled_blocks(size_t& count) {
     return nullptr;
 }
 }  // namespace spu
+
+/* edge::gpu::g_active is NOT defined here. Three times it has been added back on
+ * the belief that no edge GPU module is linked, and three times it broke the
+ * build:
+ *
+ *     multiple definition of `edge::gpu::g_active`
+ *     edge_gpu.cpp.o:(.bss+0x38) | gowa_stubs.cpp.o:(.bss+0x0)
+ *
+ * spu/edge/edge_gpu.cpp:131 defines it AND GOWA_EDGE_SOURCES globs that file into
+ * every binary, so the definition in this file is always a duplicate. If a future
+ * title genuinely links no edge module, the fix is to exclude the flag at the call
+ * site, not to define it twice. */
+
+/* jsedge::spu_idle is NOT defined here either, for the same reason as g_active
+ * above: jobsys/edge_consumer.cpp:997 defines it, and GOWA_RUNTIME_SOURCES
+ * globs runtime/src/jobsys/*.cpp into every binary. Defining it twice gives
+ *
+ *     multiple definition of `jsedge::spu_idle(unsigned int)`
+ *     edge_consumer.cpp.o | gowa_stubs.cpp.o
+ *
+ * which is what it did. */

@@ -314,30 +314,29 @@ inline int64_t manager_get_np_id(State& s, bool have_out, int32_t psn_status) {
     return 0;
 }
 
-/* sceNpManagerGetContentRatingFlag, sceNp.cpp:4216-4247: the second output is
- * the AGE, and both are written on the signed-in path. Signed out, RPCS3
- * returns before writing; we write the unrestricted values as well as the
- * offline code, because a caller that reads its stack output after a
- * not_an_error return would otherwise read garbage. The value written is the
- * one an unrestricted account produces; the code still says OFFLINE. */
-inline Result manager_get_content_rating(State& s, bool have_restricted, bool have_age,
-                                         int32_t psn_status) {
+/* sceNpManagerGetContentRatingFlag, sceNp.cpp:4216-4247: TWO outputs, and the
+ * second is the AGE. RPCS3 guards both behind get_psn_status(), but a parental
+ * control is a property of the LOCAL user, not of a network session: the values
+ * it writes (restricted 0, age 18, sceNp.cpp:4243-4244) are available with no
+ * session at all, and that is what the console answers.
+ *
+ * Measured, not assumed: returning the negative OFFLINE code here put the title
+ * on its "chat restrictions" error path, whose dialog has no offline exit
+ * (docs/loading-43/REPORT.md). The code is CELL_OK and the values are an
+ * unrestricted local profile. */
+inline Result manager_get_content_rating(State& s, bool have_restricted, bool have_age) {
     if (!s.np_init) return ok(E_NOT_INITIALIZED);
     if (!have_restricted || !have_age) return ok(E_INVALID_ARGUMENT);
-    if (psn_status == STATUS_OFFLINE) return write_with_error(E_OFFLINE, 0);
-    if (psn_status != STATUS_LOGGING_IN && psn_status != STATUS_ONLINE)
-        return ok(E_INVALID_STATE);
     return write(0);
 }
 
 /* sceNpManagerGetChatRestrictionFlag, sceNp.cpp:4249-4279. 0 is "no
- * restriction"; the offline code is still what the console returns. */
-inline Result manager_get_chat_restriction(State& s, bool have_out, int32_t psn_status) {
+ * restriction" (sceNp.cpp:4276), and the same measurement applies: this title
+ * reads a negative return as "this account cannot play online" and refuses
+ * every world, including a save load it would otherwise complete offline. */
+inline Result manager_get_chat_restriction(State& s, bool have_out) {
     if (!s.np_init) return ok(E_NOT_INITIALIZED);
     if (!have_out) return ok(E_INVALID_ARGUMENT);
-    if (psn_status == STATUS_OFFLINE) return write_with_error(E_OFFLINE, 0);
-    if (psn_status != STATUS_LOGGING_IN && psn_status != STATUS_ONLINE)
-        return ok(E_INVALID_STATE);
     return write(0);
 }
 

@@ -768,11 +768,22 @@ HLE_FUNC(cellSysutil, cellSaveDataEnableOverlay) {
     ret(ctx, 0);
 }
 
-/* cellSaveDataDelete2(container). */
-HLE_FUNC(cellSysutil, cellSaveDataDelete2) { ret(ctx, 0); }
-
-HLE_FUNC(cellSysutil, cellSaveDataFixedDelete) { ret(ctx, 0); }
-
+/* cellSaveDataDelete2 and cellSaveDataFixedDelete used to be registered here
+ * AND in runtime/src/hle/cellSysutil.cpp, both returning CELL_OK. Two
+ * registrations of one import mean the handler that runs depends on static
+ * initialisation order across translation units -- the kind of "it works
+ * sometimes" that has no attributable cause. They live in cellSysutil.cpp now,
+ * where the answer follows the reference's select_and_delete path
+ * (refs/.../cellSaveData.cpp:295-340, :2527-2532).
+ *
+ * cellSaveDataUserFixedDelete stays here: same SAVEDATA_OP_FIXED_DELETE path
+ * (refs/.../cellSaveData.cpp:2606-2612), and it is not imported by any title
+ * this tree runs yet. */
+/* UNCHANGED, and still a fake success: CELL_OK for a delete that goes through
+ * the same select_and_delete path as the two fixed above. It is NOT in this
+ * ticket's scope (cellSysutil's 34 imports do not include it) and Minecraft
+ * imports it, so changing the value without a run would be a regression risk
+ * taken blind. Recorded here so the next pass of this module sees it. */
 HLE_FUNC(cellSysutil, cellSaveDataUserFixedDelete) { ret(ctx, 0); }
 
 /* Same nine-argument shape as UserAutoSave, loading instead of saving. */
