@@ -10,7 +10,7 @@ set -euo pipefail
 # from a shell that does not know the rule. It costs roughly 40 minutes for the
 # 242 translation units and needs no babysitting.
 
-ROOT="${1:-/root/Dev/ps3base2}"
+ROOT="${1:-$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)}"  # the tree this script lives in
 OUT="${2:-/tmp/wasm-out}"
 EMSDK=${EMSDK:-/root/Dev/ps2-web-recomp/tools/emsdk/upstream}
 EMCC="$EMSDK/emscripten/emcc"

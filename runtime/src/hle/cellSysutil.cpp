@@ -578,9 +578,9 @@ HLE_FUNC(cellSysutil, cellMsgDialogProgressBarReset) {
     ret(ctx, 0);
 }
 
-HLE_FUNC(cellSysutil, cellSaveDataListAutoLoad) {
-    ret(ctx, static_cast<int32_t>(0x8002b40b));
-}
+/* cellSaveDataListAutoLoad lives in runtime/src/hle/cellSaveData.cpp, where the
+ * save enumeration and funcFixed delivery are. It is registered once, there. */
+
 
 HLE_FUNC(cellSysutil, cellSaveDataListLoad2) {
     ret(ctx, static_cast<int32_t>(0x8002b40b));

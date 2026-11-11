@@ -266,6 +266,15 @@ void leave(ppu::Context& ctx) {
 void impl_body(Hook* h, ppu::Context& ctx, uint8_t* base, uint32_t addr, ppu::BodyFn fn);
 
 void impl(ppu::Context& ctx, uint8_t* base, uint32_t addr, ppu::BodyFn fn) {
+    /* hook_call already showed impl is armed when f_005d2b44 is entered, yet the
+     * dispatcher's own probe never fired. Print what addr actually arrives, and
+     * whether the hook map holds it. */
+    {
+        static std::atomic<int> n{0};
+        if (n.fetch_add(1) < 10)
+            std::fprintf(stderr, "[impl-entry] addr=0x%08x in_map=%d\n", addr,
+                         g_hooks.count(addr) ? 1 : 0);
+    }
     if (calltrace::enabled_for_current()) {
         calltrace::enter(addr, ctx.gpr[3]);
         calltrace::peek(addr, ctx);
@@ -290,6 +299,12 @@ void impl(ppu::Context& ctx, uint8_t* base, uint32_t addr, ppu::BodyFn fn) {
 }
 
 void impl_body(Hook* h, ppu::Context& ctx, uint8_t* base, uint32_t addr, ppu::BodyFn fn) {
+    if (addr == 0x5d2b44u) {
+        static std::atomic<int> n{0};
+        if (n.fetch_add(1) < 6)
+            std::fprintf(stderr, "[implbody] addr=0x%08x guard=%s quiet=%d\n", addr,
+                         h->guard ? "set" : "NULL", h->quiet ? 1 : 0);
+    }
     h->calls.fetch_add(1, std::memory_order_relaxed);
     if (h->guard && h->guard(ctx)) return;
     if (h->quiet) {

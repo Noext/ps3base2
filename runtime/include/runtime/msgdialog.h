@@ -57,6 +57,22 @@ void on_pad(const uint16_t* b);
 bool is_open();
 const char* last_button_name();
 uint32_t last_button_value();
+/* The type of the currently open dialog (0 when none is open). Progress-bar
+ * index validation needs it: progress_bar_count is bits 12-13 of the type
+ * (refs/rpcs3/.../cellMsgDialog.h:82). */
+uint32_t dialog_type();
+
+/* cellMsgDialogProgressBarInc/Reset/SetMsg record the new bar value. RPCS3's
+ * overlay keeps it and draws with it
+ * (refs/.../Overlays/overlay_message_dialog.cpp:551-597); this runtime draws no
+ * message-dialog pixels, so the value is stored and readable by a test rather
+ * than silently discarded -- the call's console effect was to move a bar, and
+ * here a bar really is moved. Index and open state are validated by the caller
+ * (runtime/src/hle/sysutil_hle.h) before these run. */
+void progress_bar_inc(uint32_t index, uint32_t delta);
+void progress_bar_reset(uint32_t index);
+float progress_bar_value(uint32_t index);
+
 uint32_t opens_seen();
 uint32_t resolves_seen();
 
