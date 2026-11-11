@@ -162,11 +162,11 @@ int main() {
           "a second Init is NOT_TERMINATED, never a second CELL_OK");
 
     /* GetState: cellNetCtl.cpp:139-147 -- init is checked BEFORE the pointer. */
-    CHECK(nc::get_state(false, true, false) == nc::ERROR_NOT_INITIALIZED,
+    CHECK(nc::get_state(false, true) == nc::ERROR_NOT_INITIALIZED,
           "GetState(NULL) before Init is NOT_INITIALIZED, not INVALID_ADDR");
-    CHECK(nc::get_state(true, true, false) == nc::ERROR_INVALID_ADDR,
+    CHECK(nc::get_state(true, true) == nc::ERROR_INVALID_ADDR,
           "GetState(NULL) after Init is INVALID_ADDR");
-    CHECK(nc::get_state(true, false, false) == 0, "GetState with a valid pointer succeeds offline");
+    CHECK(nc::get_state(true, false) == 0, "GetState with a valid pointer succeeds offline");
     CHECK(nc::net_state(false) == nc::STATE_DISCONNECTED, "an unconnected interface reports 0");
     CHECK(nc::net_state(true) == nc::STATE_IPOBTAINED, "a connected interface reports 3");
 
@@ -385,6 +385,27 @@ int main() {
         CHECK(vm::ptr(info)[0] == 0xFF && vm::ptr(info)[5] == 0xFF, "6 bytes of ether address were written");
         CHECK(vm::ptr(info)[6] == 0x5A,
               "byte 6 is untouched: a 6-byte member is a 6-byte write, not a 256-byte memset");
+
+        /* The write-size rule: a 6-byte buffer is enough for ETHER_ADDR, which
+         * is what the console takes, and NOT enough for a 256-byte member. */
+        CHECK(nc::info_write_size(nc::INFO_ETHER_ADDR) == 6, "ETHER_ADDR needs 6 writable bytes, not 256");
+        CHECK(nc::info_write_size(nc::INFO_RSSI) == 1, "RSSI is one byte");
+        CHECK(nc::info_write_size(nc::INFO_DHCP_HOSTNAME) == 256, "the hostname member is 256 bytes");
+        CHECK(nc::info_write_size(nc::INFO_MTU) == 4, "an integer member is 4 bytes");
+        {
+            const uint32_t tiny = alloc_area(16);   /* 16 bytes, far short of 256 */
+            CHECK(tiny != 0, "a small buffer for the write-size test");
+            if (tiny) {
+                std::memset(vm::ptr(tiny), 0x5A, 16);
+                CHECK(low32(call(ctx, hle::hle_cellNetCtl_cellNetCtlGetInfo, nc::INFO_ETHER_ADDR, tiny)) == 0,
+                      "GetInfo(ETHER_ADDR) into a 16-byte buffer succeeds");
+                CHECK(vm::ptr(tiny)[5] == 0xFF, "the 6-byte MAC landed in the small buffer");
+                CHECK(vm::ptr(tiny)[6] == 0x5A, "and byte 6 is untouched");
+                CHECK(low32(call(ctx, hle::hle_cellNetCtl_cellNetCtlGetInfo, nc::INFO_DHCP_HOSTNAME, tiny)) ==
+                          nc::ERROR_NOT_CONNECTED,
+                      "the same buffer is refused for the 256-byte hostname member (offline: NOT_CONNECTED answers first)");
+            }
+        }
 
         /* GetInfo: every other code is NOT_CONNECTED and leaves the caller's
          * union alone. */

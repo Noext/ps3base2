@@ -64,6 +64,8 @@ bool read_be32(uint32_t addr, uint32_t& out) {
 
 }  // namespace
 
+namespace {
+
 /* The connect-to-PSN dialog raises three system commands through the sysutil
  * callback queue: LOADED, FINISHED, then UNLOADED after the result is read
  * (cellNetCtl.cpp:299-301, :373). Delivery goes through hle::sysutil_post,
@@ -96,6 +98,8 @@ void netctl_deliver_establish() {
     LOG_INFO("cellNetCtl", "handler 0x%08x <- ESTABLISH 0->3, arg 0x%08x", h, arg);
 }
 
+}  // namespace
+
 /* cellNetCtlInit(void) -> s32. cellNetCtl.cpp:108-122.
  * A second init is CELL_NET_CTL_ERROR_NOT_TERMINATED, not CELL_OK. */
 HLE_FUNC(cellNetCtl, cellNetCtlInit) {
@@ -118,7 +122,7 @@ HLE_FUNC(cellNetCtl, cellNetCtlTerm) {
 /* cellNetCtlGetState(s32* state) -> s32. cellNetCtl.cpp:133-152. */
 HLE_FUNC(cellNetCtl, cellNetCtlGetState) {
     const uint32_t state = a32(ctx, 0);
-    const int32_t rc = netctl::get_state(g_netctl.init, state == 0, netctl_connected());
+    const int32_t rc = netctl::get_state(g_netctl.init, state == 0);
     if (rc == 0) vm::write32(state, static_cast<uint32_t>(netctl::net_state(netctl_connected())));
     /* A handful of calls is the whole story; 17k identical lines tell nothing. */
     static std::atomic<int> seen{0};
@@ -176,10 +180,12 @@ HLE_FUNC(cellNetCtl, cellNetCtlGetInfo) {
     const int32_t code = s32(ctx, 0);
     const uint32_t info = a32(ctx, 1);
 
-    /* A non-null pointer that is not mapped cannot be written without faulting
-     * on the host; RPCS3 would fault here too. Refused with the module's own
-     * address error instead, so the caller sees a return code. */
-    const bool unusable = !info || !vm::range_mapped(info, netctl::INFO_MAX);
+    /* A non-null pointer that cannot hold the member this code writes cannot be
+     * written without faulting on the host; RPCS3 would fault here too. Refused
+     * with the module's own address error instead, so the caller sees a return
+     * code. The requirement is the MEMBER's size, not the union's: a title with
+     * a 6-byte buffer is fine for ETHER_ADDR and the console takes it. */
+    const bool unusable = !info || !vm::range_mapped(info, netctl::info_write_size(code));
 
     netctl::InfoOut out;
     const int32_t rc = netctl::get_info(g_netctl.init, unusable, netctl_connected(), code,
@@ -199,7 +205,15 @@ HLE_FUNC(cellNetCtl, cellNetCtlGetInfo) {
 HLE_FUNC(cellNetCtl, cellNetCtlGetNatInfo) {
     const uint32_t nat = a32(ctx, 0);
     uint32_t size = 0;
-    const bool readable = read_be32(nat, size);
+    /* The size field is read first (it is the only field that exists for an
+     * unknown shape). A RECOGNISED size then has to be mapped in full, because
+     * that is how much will be written; an unrecognised one is not read past its
+     * own size field and is refused with INVALID_SIZE by get_nat_info, in
+     * RPCS3's order (cellNetCtl.cpp:388-396). */
+    const bool size_readable = read_be32(nat, size);
+    const bool known_size = size == netctl::NATINFO_SIZE_MIN || size == netctl::NATINFO_SIZE_MAX;
+    const bool writable = size_readable && (!known_size || vm::range_mapped(nat, size));
+    const bool readable = size_readable && writable;
     /* A null or unmapped pointer is the module's INVALID_ADDR; a readable but
      * wrong size is INVALID_SIZE. Both are checked by get_nat_info, in RPCS3's
      * order (:388-396). */
@@ -208,7 +222,8 @@ HLE_FUNC(cellNetCtl, cellNetCtlGetNatInfo) {
     if (rc == 0) {
         /* CellNetCtlNatInfo: be_t<u32> size, be_t<s32> upnp_status,
          * be_t<s32> stun_status, be_t<s32> nat_type, be_t<u32> mapped_addr
-         * (cellNetCtl.h:282-289). Only the declared size is written. */
+         * (cellNetCtl.h:282-289). Only the declared size is written: a 16-byte
+         * caller did not supply the mapped_addr field. */
         vm::write32(nat + 0, out.size);
         vm::write32(nat + 4, static_cast<uint32_t>(out.upnp_status));
         vm::write32(nat + 8, static_cast<uint32_t>(out.stun_status));

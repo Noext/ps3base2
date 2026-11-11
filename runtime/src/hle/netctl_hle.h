@@ -196,6 +196,23 @@ struct DialogResultOut {
     int32_t result = 0;
 };
 
+/* How many bytes a given GetInfo code can possibly write into the caller's
+ * CellNetCtlInfo. Each code writes exactly one union member
+ * (cellNetCtl.cpp:258-286): a be_t<u32> is 4, ether_addr is 6
+ * (cellNetCtl.h:230), rssi/channel are 1 (:253-254), and every string member is
+ * at most CELL_NET_CTL_HOSTNAME_LEN = 256 (:256, :264). This is the size the
+ * handler must be able to write, and no more: demanding a full 256 bytes for a
+ * 6-byte MAC would refuse a buffer the console accepts. */
+inline uint32_t info_write_size(int32_t code) {
+    switch (code) {
+    case INFO_ETHER_ADDR: return ETHER_ADDR_LEN;
+    case INFO_RSSI: case INFO_CHANNEL: return 1;
+    case INFO_DHCP_HOSTNAME:
+    case INFO_HTTP_PROXY_SERVER: return HOSTNAME_LEN;
+    default: return 4;
+    }
+}
+
 /* ---- the decisions, one function per RPCS3 entry point ------------------- */
 
 /* cellNetCtlInit, cellNetCtl.cpp:108-122: a second init is NOT_TERMINATED. */
@@ -206,8 +223,7 @@ inline int32_t init(bool already_initialised) {
 /* cellNetCtlGetState, cellNetCtl.cpp:133-152. The init check comes BEFORE the
  * pointer check (:139-147), so a null pointer with no init is NOT_INITIALIZED,
  * not INVALID_ADDR. */
-inline int32_t get_state(bool initialised, bool state_is_null, bool connected) {
-    (void)connected;
+inline int32_t get_state(bool initialised, bool state_is_null) {
     if (!initialised) return ERROR_NOT_INITIALIZED;
     if (state_is_null) return ERROR_INVALID_ADDR;
     return 0;
