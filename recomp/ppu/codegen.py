@@ -967,7 +967,13 @@ def main(manifest_path, nid_db, out_dir, chunk_bytes="0x19000"):
     if manual:
         print("switch tables: %d hand-written entr(y/ies) from %s" % (len(manual), tables_path))
     for idx, spec in enumerate(manifest):
-        img = Image(os.path.join(root, spec["elf"]), nids, profile_for(spec["name"]))
+        # The profile belongs to the TITLE, not to each image: a module lifted for
+        # Red Dead needs the same detector rules as the title, or liblv2 loses its
+        # relative jump table and 0x3000d360 comes back at 0.7 s. Measured: with
+        # profile_for(spec["name"]) the module got NO_RULES and the run died at
+        # 0.74 s instead of reaching Module 37.
+        _title = manifest[0]["name"]
+        img = Image(os.path.join(root, spec["elf"]), nids, profile_for(_title))
         # The file is global but a table address belongs to one image: keep only
         # the entries whose bctr and targets live in THIS image's code.
         img.manual_tables = {}
