@@ -242,6 +242,82 @@ def jump_table(img, bctr):
             "targets": targets, "default": default_off}
 
 
+def table_dispatch_bctr(img, bctr, lo_fn, hi_fn):
+    """A bctr that dispatches through a shared table register.
+
+    Red Dead Redemption's f_00d19278 is the RAGE script bytecode interpreter:
+    it reads an opcode byte, scales it by four, and reads a target out of a
+    256-entry table whose base is held in r16 for the whole function. Every
+    opcode ends with its own dispatch:
+
+        lbz   r3, 4(r4)      or  lbzx r3, r3, r4     opcode byte
+        slwi  r3, r3, 2      or  rlwinm              * 4
+        lwzx  r3, r16, r3                            from the shared base
+        mtctr r3
+        bctr
+
+    Measured on this image: r16 is written only at 0xd192a4 (lis) and 0xd192b4
+    (addic), never again, and 92 of the 163 bctr in the function carry exactly
+    this shape.
+
+    So the rule is not "recover one table per bctr" but "a table base held in a
+    register that is never rewritten serves every lwzx through it". Every such
+    bctr is a switch on the same table.
+    """
+    # The dispatch is mtctr then bctr, with the lwzx that feeds it up to eight
+    # instructions earlier -- ordinary code sits between them (an addic advancing
+    # the bytecode cursor, a stw spilling a register). Looking only at bctr-4 and
+    # bctr-8 found 92 of the 163 dispatches and missed 0x00d1933c, the one that
+    # produces 0x00d1bbec, whose lwzx is five instructions back.
+    if not ((img.word(bctr - 4) >> 26) == 31 and ((img.word(bctr - 4) >> 1) & 0x3FF) == 467):
+        return None
+    base_reg = None
+    for k in range(2, 12):
+        w = img.word(bctr - 4 * k)
+        if (w >> 26) == 31 and ((w >> 1) & 0x3FF) == 23:
+            base_reg = (w >> 16) & 0x1F
+            break
+    if base_reg is None:
+        return None
+    if base_reg == 0:
+        return None
+    # The base register is set once, at function entry, and never rewritten.
+    setter = None
+    for a in range(lo_fn, hi_fn, 4):
+        w = img.word(a)
+        op = w >> 26
+        if ((w >> 21) & 0x1F) != base_reg:
+            continue
+        if op in (12, 14, 15, 24):
+            setter = a
+    if setter is None:
+        return None
+    # Rebuild the base the same way jump_table does.
+    base = None
+    lis_reg = lis_val = None
+    for a in range(lo_fn, min(setter + 4, hi_fn), 4):
+        w = img.word(a)
+        op = w >> 26
+        if op == 15 and ((w >> 16) & 0x1F) == 0:
+            lis_reg, lis_val = (w >> 21) & 0x1F, (w & 0xFFFF) << 16
+        elif op in (12, 14) and lis_reg is not None and ((w >> 21) & 0x1F) == lis_reg:
+            base = (lis_val + (w & 0xFFFF)) & 0xFFFFFFFF
+    if base is None:
+        return None
+    targets = []
+    for k in range(256):
+        blob = img.elf.read(base + k * 4, 4)
+        if blob is None:
+            break
+        v = struct.unpack(">I", blob)[0]
+        if not img.in_text(v):
+            break
+        targets.append(v)
+    if not targets:
+        return None
+    return {"base": base, "count": len(targets), "bound": 256,
+            "targets": targets, "default": None}
+
 def load_switch_tables(path):
     """Read switch_tables.toml: tables the detector could not recover.
 
@@ -371,6 +447,13 @@ def explore(img, entry, entries):
                     # not switch cases, and lifting them as cases splits the function.
                     img.current_function = (f.entry, None)
                     jt = None if os.environ.get("PS3BASE_NO_AUTO_TABLES") else jump_table(img, pc)
+                    if not jt and not os.environ.get("PS3BASE_NO_AUTO_TABLES"):
+                        # A bctr that dispatches through a table base held in a
+                        # register serves every opcode of an interpreter. The
+                        # per-bctr detector above looks for the bound and the base
+                        # inside one window and cannot see a base loaded once at
+                        # function entry, which is exactly the shape here.
+                        jt = table_dispatch_bctr(img, pc, f.entry, min(f.entry + 0x4000, img.text_hi))
                     if not jt and img.manual_tables.get(pc):
                         # A table the detector cannot recover, supplied by hand in
                         # switch_tables.toml. This path was silently dropped during
