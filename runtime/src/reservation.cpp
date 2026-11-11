@@ -264,7 +264,10 @@ void store_locked(uint32_t addr, const void* data, uint32_t size) {
     watch_note(addr);
 }
 
+extern "C" void ps3base_store_probe(uint32_t ea, const void* data, size_t size);
+
 void store_range(uint32_t addr, const uint8_t* data, uint32_t size) {
+    ps3base_store_probe(addr, data, size);
     if (!size) return;
     cw::check_store(addr, size, data, "rsv::store_range");
     cw::note_hit(addr, size, "rsv::store_range", size >= 4 ? __builtin_bswap32(*reinterpret_cast<const uint32_t*>(data)) : 0);
