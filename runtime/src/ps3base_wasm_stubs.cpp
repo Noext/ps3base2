@@ -57,7 +57,11 @@ extern "C" void ps3base_block_trace(uint32_t bo, uint32_t bi, bool taken) {
     const bool kWant = g_bt_lr >= 0x002da36cu && g_bt_lr < 0x002dac00u;
     if (!kWant || n > 400) return;
     n++;
-    std::fprintf(stderr, "[blk] bo=%u bi=%u taken=%d\n", bo, bi, taken ? 1 : 0);
+    /* The ordinal, not an address: the lifted code sets ctx.cia only before a
+     * syscall, so a branch has no address to report. What the comparison with
+     * native needs is the SEQUENCE of decisions -- the first place the two
+     * diverge names the faulty condition by its position. */
+    std::fprintf(stderr, "[blk] seq=%d bo=%u bi=%u taken=%d\n", n, bo, bi, taken ? 1 : 0);
 }
 #endif
 
