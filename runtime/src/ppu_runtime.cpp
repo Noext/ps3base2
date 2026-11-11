@@ -311,7 +311,36 @@ void call_indirect(Context& ctx, uint8_t* base, uint32_t addr) {
         }
         std::fprintf(stderr, "\n");
     }
+    /* RPCS3 refuses an indirect call whose target is not a valid guest address
+     * (PPUThread.cpp:903 checks the target before calling). We cannot fault --
+     * the wasm backend is one calloc'd block, so an unmapped read returns zero and
+     * the guest walks on with a null pointer, failing two thousand instructions
+     * later, somewhere unrelated. That is what cost this port twenty rounds of
+     * looking in the wrong place.
+     *
+     * The check is opt-in behind -DPS3BASE_CALL_TARGET_CHECK=1 rather than always
+     * on: refusing a call changes behaviour, and the porting prompt requires
+     * measuring before changing it. It reports rather than aborts, so a run keeps
+     * going and every distinct bad target is named once.
+     */
     if (!fn) {
+#if defined(PS3BASE_CALL_TARGET_CHECK) && PS3BASE_CALL_TARGET_CHECK
+        if (addr == 0u || !vm::range_mapped(addr, 4)) {
+            static std::mutex m;
+            static std::set<uint32_t> seen;
+            bool fresh;
+            {
+                std::lock_guard lk(m);
+                fresh = seen.insert(addr).second;
+            }
+            if (fresh)
+                LOG_WARN("ppu",
+                         "call target 0x%08x is UNMAPPED (lr=0x%08x r3=0x%llx r31=0x%llx): "
+                         "the guest read a pointer from memory it never allocated",
+                         addr, static_cast<unsigned>(ctx.lr),
+                         (unsigned long long)ctx.gpr[3], (unsigned long long)ctx.gpr[31]);
+        }
+#endif
         {
             /* The target is not a lifted function. Before anything else, say who
              * asked for it: the lr and the two registers that carry an object
