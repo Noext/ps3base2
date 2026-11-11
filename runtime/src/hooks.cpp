@@ -879,13 +879,147 @@ static bool list_guard(ppu::Context& ctx) {
 static bool thread_entry_probe(ppu::Context& ctx) {
     static std::atomic<int> n{0};
     const int k = n.fetch_add(1, std::memory_order_relaxed);
-    if (k < 8)
-        LOG_INFO("threadprobe", "ENTRY 0x533064 #%d th=0x%x r3=0x%08x lr=0x%08x r2=0x%08x",
-                 k, ctx.thread_id, static_cast<uint32_t>(ctx.gpr[3]),
-                 static_cast<uint32_t>(ctx.lr), static_cast<uint32_t>(ctx.gpr[2]));
+    if (k < 16) {
+        const uint32_t ws = static_cast<uint32_t>(ctx.gpr[3]);
+        char buf[640];
+        int off = 0;
+        off += std::snprintf(buf + off, sizeof(buf) - off,
+                 "ENTRY 0x533064 #%d th=0x%x r3=0x%08x lr=0x%08x r2=0x%08x t=%.6f",
+                 k, ctx.thread_id, ws, static_cast<uint32_t>(ctx.lr),
+                 static_cast<uint32_t>(ctx.gpr[2]), ppu::timebase() / 79.8e6);
+        if (ws && vm::range_mapped(ws, 0x2c)) {
+            off += std::snprintf(buf + off, sizeof(buf) - off,
+                     " ws[]=%08x %08x %08x %08x %08x %08x %08x %08x %08x %08x %08x",
+                     vm::read32(ws), vm::read32(ws + 4), vm::read32(ws + 8), vm::read32(ws + 12),
+                     vm::read32(ws + 16), vm::read32(ws + 20), vm::read32(ws + 24),
+                     vm::read32(ws + 28), vm::read32(ws + 32), vm::read32(ws + 36),
+                     vm::read32(ws + 40));
+            /* 0x5331a4: r5 = ws[0]; lwz r4,0(r5); mtctr r4; bctrl -- the work
+             * function is the FIRST WORD of the object ws[0] points at. */
+            const uint32_t obj = vm::read32(ws);
+            if (obj && vm::range_mapped(obj, 16))
+                off += std::snprintf(buf + off, sizeof(buf) - off,
+                         " ws0=0x%08x ws0[0]=0x%08x (work fn) ws0[4]=0x%08x ws0[8]=0x%08x",
+                         obj, vm::read32(obj), vm::read32(obj + 4), vm::read32(obj + 8));
+            else
+                off += std::snprintf(buf + off, sizeof(buf) - off, " ws0=0x%08x UNMAPPED", obj);
+        }
+        LOG_INFO("threadprobe", "%s", buf);
+    }
     return false;
 }
 
+/* The three work functions the worker entry dispatches to through
+ * f_00533064_body's call_indirect at 0x5331ac, named by the ledger above. If
+ * they are entered, the beq at 0x533148 was NOT taken and the work ran. */
+static bool work_probe(ppu::Context& ctx, const char* what) {
+    static std::atomic<int> n{0};
+    const int k = n.fetch_add(1, std::memory_order_relaxed);
+    if (k < 24) {
+        const uint32_t a = static_cast<uint32_t>(ctx.gpr[3]);
+        char buf[512];
+        int off = 0;
+        off += std::snprintf(buf + off, sizeof(buf) - off, "WORK %s #%d th=0x%x r3=0x%08x t=%.6f",
+                             what, k, ctx.thread_id, a, ppu::timebase() / 79.8e6);
+        if (vm::range_mapped(0x165d460u, 8))
+            off += std::snprintf(buf + off, sizeof(buf) - off, " LIST count=%u head=0x%08x",
+                     vm::read32(0x165d460u), vm::read32(0x165d464u));
+        if (a && vm::range_mapped(a, 0x2c)) {
+            const unsigned b32 = vm::ptr(a + 32)[0];
+            off += std::snprintf(buf + off, sizeof(buf) - off,
+                     " [32]=0x%02x bit7=%u a[]=%08x %08x %08x %08x %08x %08x %08x %08x",
+                     b32, unsigned(b32 >> 7 & 1),
+                     vm::read32(a), vm::read32(a + 4), vm::read32(a + 8), vm::read32(a + 12),
+                     vm::read32(a + 16), vm::read32(a + 20), vm::read32(a + 24), vm::read32(a + 28));
+        }
+        /* The exact location the gate tests. f_00533064 spilled the low 32 bits
+         * of its own r3 to r1+0xd8 at 0x5330b4 and reloads them at 0x533140;
+         * the work function pushes its own frame, so when this guard runs r1 is
+         * still the worker frame and r1+0xd8 is untouched since the spill. */
+        const uint32_t slot_ea = static_cast<uint32_t>(ctx.gpr[1]) + 0xd8u;
+        if (vm::range_mapped(slot_ea, 4))
+            off += std::snprintf(buf + off, sizeof(buf) - off,
+                     " GATE_SLOT[r1+0xd8=0x%08x]=0x%08x", slot_ea, vm::read32(slot_ea));
+        LOG_INFO("threadprobe", "%s", buf);
+    }
+    return false;
+}
+static bool work_27e564(ppu::Context& ctx) { return work_probe(ctx, "f_0027e564"); }
+static bool work_545d54(ppu::Context& ctx) { return work_probe(ctx, "f_00545d54"); }
+static bool work_546724(ppu::Context& ctx) { return work_probe(ctx, "f_00546724"); }
+/* f_0054b67c is LoadThread's work. It reads three global flags and, if ANY is
+ * set, parks forever in li r3,1000 / sys_timer_usleep at 0x54b6dc. If all
+ * three are clear it takes the real path at 0x54b6e8 and calls f_005339a8.
+ * Reading the three bytes and hooking f_005339a8 separates the two outcomes
+ * with values instead of an inference. */
+static bool work_54b67c(ppu::Context& ctx) {
+    static std::atomic<int> n{0};
+    const int k = n.fetch_add(1, std::memory_order_relaxed);
+    if (k < 8) {
+        auto b = [](uint32_t ea) { return vm::range_mapped(ea, 1) ? unsigned(vm::ptr(ea)[0]) : 0xffu; };
+        const unsigned f0 = b(0x1669dccu), f1 = b(0x17197f8u), f2 = b(0x17197f9u);
+        LOG_INFO("threadgate",
+                 "LOADTHREAD work f_0054b67c #%d th=0x%x flag[0x1669dcc]=%u flag[0x17197f8]=%u flag[0x17197f9]=%u -> %s t=%.6f",
+                 k, ctx.thread_id, f0, f1, f2, (f0 || f1 || f2) ? "PARK (sleep loop)" : "REAL WORK at 0x54b6e8",
+                 ppu::timebase() / 79.8e6);
+    }
+    return false;
+}
+static bool loadthread_real(ppu::Context& ctx) {
+    static std::atomic<int> n{0};
+    const int k = n.fetch_add(1, std::memory_order_relaxed);
+    if (k < 8)
+        LOG_INFO("threadgate", "LOADTHREAD REAL PATH f_005339a8 #%d th=0x%x t=%.6f", k, ctx.thread_id,
+                 ppu::timebase() / 79.8e6);
+    return false;
+}
+static bool work_54a450(ppu::Context& ctx) { return work_probe(ctx, "f_0054a450"); }
+static bool work_54b360(ppu::Context& ctx) { return work_probe(ctx, "f_0054b360"); }
+
+/* The decisive site. f_00533064_body:
+ *   0x5330ac clrldi r3,r31,32   ; r31 = the entry's r3 argument (the work struct)
+ *   0x5330b4 stw    r3,0xd8(r1) ; spill its low 32 bits
+ *   0x533140 lwz    r6,0xd8(r1) ; reload
+ *   0x533144 cmpwi  r6,0
+ *   0x533148 beq    0x53316c    ; skip the block when r6 == 0
+ *   0x53314c lis r7,0x166 / addi r7,-0x33e0 -> 0x165cc20
+ *   0x533154 lwz r8,0x844(r7)   ; [0x165d464] = list head
+ *   0x533158 stw r8,0(r6)       ; ws->next = head
+ *   0x533160 stw r6,0x844(r7)   ; head = ws
+ *   0x533164 lwz r8,0x840(r7)   ; [0x165d460] = count
+ *   0x533168 stw r8+1,0x840(r7) ; count++
+ *
+ * So the branch guards a LINKED-LIST REGISTRATION of the work structure, not the
+ * work itself -- the work is the call_indirect at 0x5331ac, which is after the
+ * rejoin at 0x53316c. Reaching 0x53314c proves the beq was not taken, and the
+ * printed r6 is the exact value the test compared. */
+static bool thread_gate_probe(ppu::Context& ctx) {
+    static std::atomic<int> n{0};
+    const int k = n.fetch_add(1, std::memory_order_relaxed);
+    if (k < 16) {
+        const uint32_t r6 = static_cast<uint32_t>(ctx.gpr[6]);
+        const uint32_t head_before = vm::range_mapped(0x165d464u, 4) ? vm::read32(0x165d464u) : 0;
+        const uint32_t cnt = vm::range_mapped(0x165d460u, 4) ? vm::read32(0x165d460u) : 0;
+        LOG_INFO("threadgate", "#%d th=0x%x r6=0x%08x (test value) r7=0x%08x head_before=0x%08x count=%u",
+                 k, ctx.thread_id, r6, static_cast<uint32_t>(ctx.gpr[7]), head_before, cnt);
+    }
+    return false;
+}
+
+/* A direct experiment on the meaning of the beq at 0x533148.
+ *
+ * The tested value is not a field. It is the worker entry's own r3 argument,
+ * copied through 0x5330ac (clrldi r3,r31,32) and 0x5330b4 (stw r3,0xd8(r1)) and
+ * reloaded at 0x533140 (lwz r6,0xd8(r1)). It is therefore the ADDRESS of the
+ * per-worker structure the thread was created with (0x165cc20 / 0x165cc4c),
+ * and it is never zero in this title -- a thread created with a null argument
+ * would be the only way to take the branch.
+ *
+ * PS3BASE_THREAD_ZERO_ARG=1 proves that reading by forcing the value: it zeroes
+ * ws[0] instead, which is the field the call_indirect at 0x5331a4 reads
+ * (lwz r5,0(r5); lwz r4,0(r5); mtctr r4). With it set, the work function is
+ * skipped and the thread must fall through to _sys_ppu_thread_exit. That is the
+ * difference between the branch guarding the work and it guarding a list link. */
 static bool thread_exit_probe(ppu::Context& ctx) {
     static std::atomic<int> n{0};
     const int k = n.fetch_add(1, std::memory_order_relaxed);
@@ -966,6 +1100,182 @@ static bool load_advance_probe(ppu::Context& ctx) {
     return false;
 }
 
+/* PS3BASE_USLEEP_PROBE=1: WHO asks for a one-second sleep, forever?
+ *
+ * The title's main thread parks in sys_timer_usleep(1000000) with lr
+ * 0x002a9180, i.e. inside f_002a9168 -- an eight-instruction wrapper that
+ * multiplies its argument by 1000 and issues syscall 141. The wrapper has 70
+ * call sites in the lifted tree, so the address of the wrapper says nothing
+ * about which loop is spinning. This probe reports the GUEST LR (the site's
+ * return address, unique per call site) and the guest thread, and separates the
+ * 1000 ms requests from the 1/10/16/100 ms noise.
+ *
+ * It also reads, on each such request, the guest word the loop is about to
+ * test, so the loop's gate is measured rather than inferred: PS3BASE_USLEEP_EA
+ * names that address.
+ *
+ * Environment: PS3BASE_USLEEP_PROBE=1 (optional PS3BASE_USLEEP_EA=0x...) */
+static uint32_t usleep_ea() {
+    static const uint32_t ea = [] {
+        const char* e = std::getenv("PS3BASE_USLEEP_EA");
+        return e ? static_cast<uint32_t>(std::strtoul(e, nullptr, 16)) : 0u;
+    }();
+    return ea;
+}
+
+static bool usleep_probe(ppu::Context& ctx) {
+    static const bool on = std::getenv("PS3BASE_USLEEP_PROBE") != nullptr;
+    if (!on) return false;
+    const uint32_t ms = static_cast<uint32_t>(ctx.gpr[3]);
+    /* Only the long sleeps: the 1 ms ticks are irrelevant noise. */
+    if (ms < 500) return false;
+    static std::atomic<int> n{0};
+    const int k = n.fetch_add(1, std::memory_order_relaxed);
+    if (k >= 240) return false;
+    const uint32_t lr = static_cast<uint32_t>(ctx.lr);
+    const guest::Thread* t = guest::current();
+    const uint32_t ea = usleep_ea();
+    std::string held;
+    if (ea) {
+        char b[96];
+        if (vm::range_mapped(ea, 4))
+            std::snprintf(b, sizeof b, " [0x%08x]=0x%08x (%u)", ea, vm::read32(ea), vm::read32(ea));
+        else
+            std::snprintf(b, sizeof b, " [0x%08x]=UNMAPPED", ea);
+        held = b;
+    }
+    LOG_INFO("usleepprobe", "#%d t=%.3f th=0x%x '%s' ms=%u lr=0x%08x r1=0x%08x%s",
+             k, logging::uptime(), t ? t->id : 0u, t ? t->name.c_str() : "?",
+             ms, lr, static_cast<uint32_t>(ctx.gpr[1]), held.c_str());
+    return false;
+}
+
+/* PS3BASE_USLEEP_EA + this probe: the leaf of the 1 s idle loop.
+ *
+ * main_thread parks in f_00550b34 (rdr_053.cpp:24883), whose L_550c10 is an
+ * UNCONDITIONAL "sleep 1000 ms; goto L_550c10" -- there is no memory word in
+ * that back-edge at all. The only test that decides whether the thread enters
+ * it is the return code of import 210 (sys_fs/cellFsFsync) at L_550ba0:
+ *   == 0x8001002A (CELL_FS_EBADF) -> L_550bc4 -> log "simulating infinite retry"
+ *                                    -> L_550c10 -> the loop
+ *   == 0x8001002B                -> L_550c1c -> return normally
+ * This probe reports the fd handed to cellFsFsync and the code it came back
+ * with, so the leaf is a measured number rather than a reading of the branch.
+ *
+ * Environment: PS3BASE_FSYNC_PROBE=1 */
+static bool fsync_probe(ppu::Context& ctx) {
+    static const bool on = std::getenv("PS3BASE_FSYNC_PROBE") != nullptr;
+    if (!on) return false;
+    const uint32_t fd = static_cast<uint32_t>(ctx.gpr[3]);
+    const guest::Thread* t = guest::current();
+    LOG_INFO("fsyncprobe", "cellFsFsync(fd=%u) called from lr=0x%08x th=0x%x '%s'",
+             fd, static_cast<uint32_t>(ctx.lr), t ? t->id : 0u, t ? t->name.c_str() : "?");
+    /* Observe only: the syscall still runs and its own return code is what the
+     * caller sees. Reading it here would mean re-implementing the handler. */
+    return false;
+}
+
+/* PS3BASE_FSYNC_PROBE=1: read the return code the loop's own branch consumes.
+ *
+ * f_00550b34 (rdr_053.cpp:24883) is reached with 5 arguments. It calls import
+ * 210 at L_550ba0, then compares the code against 0x8001002A and 0x8001002B:
+ * either value falls into L_550bc4, which logs and hangs in L_550c10 forever.
+ * Only a code that equals NEITHER returns. Guarding 0x550bc4 (the error arm)
+ * prints the exact code that trapped this thread -- the leaf, measured. */
+static bool loop_arm_probe(ppu::Context& ctx) {
+    static const bool on = std::getenv("PS3BASE_FSYNC_PROBE") != nullptr;
+    if (!on) return false;
+    static std::atomic<int> n{0};
+    const int k = n.fetch_add(1, std::memory_order_relaxed);
+    if (k >= 16) return false;
+    const guest::Thread* t = guest::current();
+    LOG_INFO("loopprobe", "#%d L_550bc4 (error arm) r3=0x%08x r4=0x%08x r5=0x%08x r6=0x%08x r7=0x%08x th=0x%x '%s'",
+             k, static_cast<uint32_t>(ctx.gpr[3]), static_cast<uint32_t>(ctx.gpr[4]),
+             static_cast<uint32_t>(ctx.gpr[5]), static_cast<uint32_t>(ctx.gpr[6]),
+             static_cast<uint32_t>(ctx.gpr[7]), t ? t->id : 0u, t ? t->name.c_str() : "?");
+    return false;
+}
+
+static bool loop_import_probe(ppu::Context& ctx) {
+    static const bool on = std::getenv("PS3BASE_FSYNC_PROBE") != nullptr;
+    if (!on) return false;
+    static std::atomic<int> n{0};
+    const int k = n.fetch_add(1, std::memory_order_relaxed);
+    if (k >= 16) return false;
+    const guest::Thread* t = guest::current();
+    LOG_INFO("loopprobe", "#%d L_550ba4 import-210 return r3=0x%08x th=0x%x '%s'",
+             k, static_cast<uint32_t>(ctx.gpr[3]), t ? t->id : 0u, t ? t->name.c_str() : "?");
+    return false;
+}
+
+/* PS3BASE_FSYNC_PROBE=1: the gate byte the loop function tests on entry, and
+ * the code cellFsFsync actually handed back. Hooked at the caller's own return
+ * address so the value read is the one the branch consumes. */
+static bool fsync_result_probe(ppu::Context& ctx) {
+    static const bool on = std::getenv("PS3BASE_FSYNC_PROBE") != nullptr;
+    if (!on) return false;
+    static std::atomic<int> n{0};
+    const int k = n.fetch_add(1, std::memory_order_relaxed);
+    if (k >= 32) return false;
+    const uint32_t rc = static_cast<uint32_t>(ctx.gpr[3]);
+    const uint32_t gate_ea = usleep_ea() ? usleep_ea() : 0x1669dccu;
+    const unsigned gate = vm::range_mapped(gate_ea, 1) ? vm::ptr(gate_ea)[0] : 0xff;
+    const guest::Thread* t = guest::current();
+    LOG_INFO("fsyncprobe", "cellFsFsync -> 0x%08x %s (gate[0x%08x]=%u, ld8 at f_00550b34 entry) th=0x%x '%s'",
+             rc, rc == 0x8001002au ? "CELL_FS_EBADF" : rc == 0x8001002bu ? "CELL_FS_EPERM?" : "",
+             gate_ea, gate, t ? t->id : 0u, t ? t->name.c_str() : "?");
+    return false;
+}
+
+/* PS3BASE_FSYNC_PROBE=1: the two files of the failure, read as guest strings.
+ *
+ * f_34010b28 is the LLE body of cellFsAllocateFileAreaWithoutZeroFill; r3 is
+ * the guest path. This names the file the title wanted to allocate before it
+ * started writing, so "the cache file" is a string from the title, not an
+ * inference from the log line above it.
+ *
+ * Environment: PS3BASE_FSYNC_PROBE=1 */
+static bool alloc_probe(ppu::Context& ctx) {
+    static const bool on = std::getenv("PS3BASE_FSYNC_PROBE") != nullptr;
+    if (!on) return false;
+    static std::atomic<int> n{0};
+    if (n.fetch_add(1) >= 8) return false;
+    const uint32_t p = static_cast<uint32_t>(ctx.gpr[3]);
+    std::string s;
+    if (vm::range_mapped(p, 1))
+        for (uint32_t i = 0; i < 256 && vm::range_mapped(p + i, 1) && vm::ptr(p)[i]; i++) s += char(vm::ptr(p)[i]);
+    LOG_INFO("allocprobe", "cellFsAllocateFileAreaWithoutZeroFill(path='%s', size=0x%llx) lr=0x%08x",
+             s.c_str(), static_cast<unsigned long long>(ctx.gpr[4]), static_cast<uint32_t>(ctx.lr));
+    return false;
+}
+
+/* PS3BASE_FSYNC_PROBE=1: the loop function's own entry, with its arguments and
+ * the byte it tests before doing anything.
+ *
+ * f_00550b34 (rdr_053.cpp:24883) is the function main_thread parks in. Its very
+ * first act is `ld8 r7, -25140(r8)` with r8 = 0x1670000, i.e. the byte at
+ * 0x01669dcc, and `cmpwi r7, 0`: non-zero goes to L_550b80 (the real work),
+ * zero hangs in L_550b74 at 1000 ms per turn. Reporting r3..r7 AND that byte at
+ * entry is what says which arm the thread took and with what arguments.
+ *
+ * Environment: PS3BASE_FSYNC_PROBE=1 */
+static bool loop_entry_probe(ppu::Context& ctx) {
+    static const bool on = std::getenv("PS3BASE_FSYNC_PROBE") != nullptr;
+    if (!on) return false;
+    static std::atomic<int> n{0};
+    const int k = n.fetch_add(1, std::memory_order_relaxed);
+    if (k >= 12) return false;
+    const uint32_t gate_ea = 0x01669dcc;
+    const unsigned gate = vm::range_mapped(gate_ea, 1) ? vm::ptr(gate_ea)[0] : 0xff;
+    const guest::Thread* t = guest::current();
+    LOG_INFO("loopentry", "#%d f_00550b34 th=0x%x '%s' r3=0x%08x r4=0x%08x r5=0x%08x r6=0x%08x r7=0x%08x gate[0x%08x]=%u",
+             k, t ? t->id : 0u, t ? t->name.c_str() : "?",
+             static_cast<uint32_t>(ctx.gpr[3]), static_cast<uint32_t>(ctx.gpr[4]),
+             static_cast<uint32_t>(ctx.gpr[5]), static_cast<uint32_t>(ctx.gpr[6]),
+             static_cast<uint32_t>(ctx.gpr[7]), gate_ea, gate);
+    return false;
+}
+
 void init() {
     /* Everything below is title-specific: patches by guest address, job
      * intercepts, the jobsys edge, the critical-path hooks. A profile with
@@ -1013,6 +1323,17 @@ void init() {
     if (std::getenv("PS3BASE_THREAD_PROBE")) {
         add_guard(0x533064, thread_entry_probe);
         add_guard(0x5331e0, thread_exit_probe);
+        /* The call_indirect at 0x5331ac uses ctr = [ws[0]] (the work object's
+         * first word). Hook the three targets the measured runs use, so
+         * "the work never ran" and "the work ran and returned" are different
+         * lines rather than an inference. */
+        add_guard(0x27e564, work_27e564);
+        add_guard(0x545d54, work_545d54);
+        add_guard(0x546724, work_546724);
+        add_guard(0x5339a8, loadthread_real);
+        add_guard(0x54b67c, work_54b67c);
+        add_guard(0x54a450, work_54a450);
+        add_guard(0x54b360, work_54b360);
     }
     if (std::getenv("PS3BASE_LOAD_PROBE")) {
         add_guard(0x2eee64, load_probe);
@@ -1023,6 +1344,34 @@ void init() {
         add_guard(0x2ea564, load_advance_probe);
         set_hook_flag(0x2ea564);
         LOG_INFO("loadprobe", "probes installed: f_002eee64 (arbiter), f_002e4120 (arm), f_002eeb78 (setter), f_002ea564 (state-5 writer)");
+    }
+    if (std::getenv("PS3BASE_USLEEP_PROBE")) {
+        /* 0x2a9168 is the title's own usleep(ms) wrapper: it multiplies r3 by
+         * 1000 and issues syscall 141. Guarding the WRAPPER rather than the
+         * syscall keeps this a lifted-code hook, so ctx.lr is the guest return
+         * address of the site that asked for the sleep. */
+        add_guard(0x2a9168, usleep_probe);
+        if (!ppu::hook_impl) ppu::hook_impl = impl;
+        set_hook_flag(0x2a9168);
+        LOG_INFO("usleepprobe", "guard installed on f_002a9168 (usleep wrapper), hook_impl=%s flag=%u",
+                 ppu::hook_impl ? "set" : "NULL",
+                 unsigned(ppu::hook_flag_for(0x2a9168) ? *ppu::hook_flag_for(0x2a9168) : 0));
+    }
+    if (std::getenv("PS3BASE_FSYNC_PROBE")) {
+        /* f_3400144c is the lifted cellFsFsync: it sets r11=820 and issues the
+         * syscall. f_00550b34 is the loop function; guarding it reports the fd
+         * and rc at the site that branches on them. */
+        add_guard(0x550b34, loop_entry_probe);
+        set_hook_flag(0x550b34);
+        add_guard(0x34010b28, alloc_probe);
+        set_hook_flag(0x34010b28);
+        add_guard(0x550ba4, loop_import_probe);
+        add_guard(0x550bc4, loop_arm_probe);
+        if (!ppu::hook_impl) ppu::hook_impl = impl;
+        set_hook_flag(0x550ba4);
+        set_hook_flag(0x550bc4);
+        LOG_INFO("fsyncprobe", "guards installed: f_3400144c (cellFsFsync) and 0x550ba4 (its return site), hook_impl=%s",
+                 ppu::hook_impl ? "set" : "NULL");
     }
     if (std::getenv("PS3BASE_LIST_GUARD")) {
         add_guard(0x64c044, list_guard);
