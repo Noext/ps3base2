@@ -302,17 +302,7 @@ int main(int argc, char** argv) {
                          static_cast<unsigned long long>(c.gpr[1]));
         return false;
     });
-    hooks::add_guard(0x5d2b44, [](ppu::Context& c) {
-        static std::atomic<int> n{0};
-        const int k = n.fetch_add(1);
-        if (k < 40)
-            std::fprintf(stderr, "[entryprobe] #%d f_005d2b44 r3=0x%llx r4=0x%llx lr=0x%llx sp=0x%llx\n",
-                         k, static_cast<unsigned long long>(c.gpr[3]),
-                         static_cast<unsigned long long>(c.gpr[4]),
-                         static_cast<unsigned long long>(c.lr),
-                         static_cast<unsigned long long>(c.gpr[1]));
-        return false;
-    });
+
     /* hooks.cpp documents this trap: add_guard sets hook_flags, but the lifted code
      * only consults them when ppu::hook_impl is non-null. Assign both here. */
     std::printf("ps3base-wasm: entry probe on f_005d2b44 (flags=%u, impl=%d)\n",

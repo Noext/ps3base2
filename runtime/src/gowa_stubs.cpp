@@ -111,14 +111,20 @@ extern "C" int gowa_stub_44() { return 0; }
 extern "C" int gowa_stub_45() __asm__("_ZNSolsEj");
 extern "C" int gowa_stub_45() { return 0; }
 
-/* edge::gpu::g_active is NOT stubbed here.
+/* edge::gpu::g_active is NOT stubbed here, and must not be added back.
  *
- * spu/edge/edge_gpu.cpp:131 already defines it (`const bool g_active = ...`) and
- * edge_gpu.h:35 declares it extern, so a second definition in this file is a
- * duplicate: "multiple definition of edge::gpu::g_active" at link time. It was
- * added here on the assumption that no edge GPU module is linked, but
- * GOWA_EDGE_SOURCES globs runtime/src/spu/edge/*.cpp into the binary, so one
- * always is. */
+ * spu/edge/edge_gpu.cpp:131 defines it (`const bool g_active = g_mode != kOff;`)
+ * and edge_gpu.h:35 declares it extern. GOWA_EDGE_SOURCES globs
+ * runtime/src/spu/edge/*.cpp into every binary, so a definition here is always a
+ * duplicate and the link dies with:
+ *
+ *     multiple definition of `edge::gpu::g_active'; gowa_stubs.cpp.o:(.bss+0x0)
+ *     first defined here
+ *
+ * This was added back once after being removed once, on the assumption that no
+ * edge GPU module is linked. Nothing is wrong with the assumption except that it
+ * stopped being true: the file is in the glob. If the SPU edge path ever needs a
+ * flag that edge_gpu.cpp does not provide, add a different symbol, not this one. */
 
 /* compiled_blocks() is the AOT table: the SPU blocks compiled to native code for
  * this title. ps3base links none of them (they are produced by a generator that
