@@ -276,7 +276,7 @@ int main(int argc, char** argv) {
     /* Level up again: who calls the two callers. Guarding each function alone --
      * never an enclosing one -- because round 179 showed hook_call replaces the
      * body of whatever is guarded, removing the calls being measured. */
-    for (uint32_t a : {0x524034u, 0x185b4cu, 0x524488u, 0x559844u}) {
+    for (uint32_t a : {0x186ce0u, 0x524888u}) {
         hooks::add_guard(a, [](ppu::Context& c) {
             std::fprintf(stderr, "[up] pc=0x%08x lr=0x%llx\n",
                          static_cast<unsigned>(c.cia),
