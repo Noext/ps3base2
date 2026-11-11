@@ -550,6 +550,13 @@ void call_import(Context& ctx, uint8_t* base, uint32_t index) {
         return;
     }
     const uint32_t lr = static_cast<uint32_t>(ctx.lr);
+    /* Arguments must be read BEFORE the handler: afterwards r3 carries the return,
+     * which is how an earlier round read 0x80010004 as if it were an argument. */
+    if (index == 119) {
+        std::fprintf(stderr, "[gcmargs] context=0x%x cmdSize=0x%x ioSize=0x%x ioAddr=0x%x\n",
+                     static_cast<unsigned>(ctx.gpr[3]), static_cast<unsigned>(ctx.gpr[4]),
+                     static_cast<unsigned>(ctx.gpr[5]), static_cast<unsigned>(ctx.gpr[6]));
+    }
     call_import_body(ctx, base, index, slot, st, imp);
     cbwatch::note_import(imp.module, *imp.name ? imp.name : "?", ctx.gpr[3], lr, st >= 0);
     /* A zero return used as a pointer: print the import, its answer and the
@@ -598,14 +605,6 @@ void call_import(Context& ctx, uint8_t* base, uint32_t index) {
         std::fprintf(stderr, "[gcmret] import119 returns r3=0x%llx (low32=0x%08x)\n",
                      (unsigned long long)ctx.gpr[3],
                      static_cast<unsigned>(ctx.gpr[3]));
-    }
-    if (index == 119) {
-        /* The import target is an OPD: two words, the code address then the TOC.
-         * Read it so the LLE body can be guarded at its real entry. */
-        const uint32_t opd = 0x3300b8acu;
-        if (vm::range_mapped(opd, 8))
-            std::fprintf(stderr, "[opd-code] export opd=0x%08x code=0x%08x toc=0x%08x\n",
-                         opd, vm::read32(opd), vm::read32(opd + 4));
     }
     if (index == 119) {
         std::fprintf(stderr, "[imp119] _cellGcmInitBody called lr=0x%08x r3=0x%llx r4=0x%llx ret=0x%llx\n",
