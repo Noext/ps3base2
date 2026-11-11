@@ -82,7 +82,38 @@ uint64_t qpf() { return 1000000ull; }
 uint64_t thread_cycles() { return qpc(); }
 uint64_t thread_cycles(void*) { return qpc(); }
 
+/* Yielding inside a browser worker.
+ *
+ * std::this_thread::yield() was wrong here. In a worker the event loop only runs
+ * when the current task returns, so yielding to the thread scheduler does nothing
+ * for the messages waiting on it. ps2-web-recomp documents the shape that works:
+ * a MessageChannel post, which the browser delivers on a macrotask without the
+ * 4 ms clamp that nested setTimeout calls get. Reusing that rather than inventing
+ * another timer is the point of the note in the porting prompt.
+ *
+ * The port and its waiter queue are created once and reused: creating a channel
+ * per yield would allocate a message port for every frame.
+ */
+#if defined(__wasm__) || defined(__EMSCRIPTEN__)
+EM_ASYNC_JS(void, ps3_web_yield, (), {
+    if (!Module.yieldPort) {
+        const channel = new MessageChannel();
+        Module.yieldWaiters = [];
+        channel.port1.onmessage = () => {
+            const next = Module.yieldWaiters.shift();
+            if (next) next();
+        };
+        Module.yieldPort = channel.port2;
+    }
+    await new Promise((resolve) => {
+        Module.yieldWaiters.push(resolve);
+        Module.yieldPort.postMessage(0);
+    });
+});
+void yield() { ps3_web_yield(); }
+#else
 void yield() { std::this_thread::yield(); }
+#endif
 void sleep_ms(uint32_t ms) { emscripten_thread_sleep(static_cast<double>(ms)); }
 
 uint32_t tid() {
