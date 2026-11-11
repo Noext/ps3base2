@@ -978,10 +978,19 @@ def main(manifest_path, nid_db, out_dir, chunk_bytes="0x19000"):
             # so a count typo cannot silently truncate the switch.
             targets = t.get("targets")
             if not targets:
+                # ELF.read, not ELF.u32: u32 raises/returns None when the address
+                # is outside the segment it was asked about, and a table base sits
+                # in a DATA segment while the targets are code. Using u32 here
+                # produced an empty target list, so the switch was announced with
+                # "256 target(s)" but emitted zero cases -- the table was read,
+                # reported, and then had no effect.
                 targets = []
                 for k in range(t["count"]):
-                    v = img.elf.u32(t["base"] + k * 4)
-                    if v is None or not img.in_text(v):
+                    blob = img.elf.read(t["base"] + k * 4, 4)
+                    if blob is None:
+                        break
+                    v = struct.unpack(">I", blob)[0]
+                    if not img.in_text(v):
                         break
                     targets.append(v)
             img.manual_tables[b] = {"base": t["base"], "count": len(targets),

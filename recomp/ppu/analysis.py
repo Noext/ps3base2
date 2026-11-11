@@ -371,6 +371,14 @@ def explore(img, entry, entries):
                     # not switch cases, and lifting them as cases splits the function.
                     img.current_function = (f.entry, None)
                     jt = None if os.environ.get("PS3BASE_NO_AUTO_TABLES") else jump_table(img, pc)
+                    if not jt and img.manual_tables.get(pc):
+                        # A table the detector cannot recover, supplied by hand in
+                        # switch_tables.toml. This path was silently dropped during
+                        # the seed-store rewrite, so out-rdr/gen/switch_tables.toml
+                        # was read and reported at lift time ("256 target(s)") while
+                        # never reaching explore() -- the table was announced and
+                        # then ignored, and the title stopped on 0x00d1bbec again.
+                        jt = img.manual_tables[pc]
                     if jt:
                         # The extent is known only after the pass; keep the bctr and
                         # validate below against the instruction set this function
