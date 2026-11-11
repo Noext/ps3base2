@@ -547,6 +547,20 @@ void call_import(Context& ctx, uint8_t* base, uint32_t index) {
     /* A zero return used as a pointer: print the import, its answer and the
      * resolution state, which says whether the HLE, the LLE image or the
      * unresolved trampoline produced it. */
+    if (index == 166) {
+        /* GetResolution writes w/h into the caller's buffer. If that buffer is not
+         * mapped the helper returns silently and the caller reads zeros -- the same
+         * silent-zero trap as call_indirect. Name the buffer and its state. */
+        const uint32_t out = static_cast<uint32_t>(ctx.gpr[4]);
+        std::fprintf(stderr, "[resout] out=0x%08x mapped=%d\n", out,
+                     vm::range_mapped(out, 4) ? 1 : 0);
+    }
+    if (index == 144 || index == 166 || index == 138 || index == 142) {
+        static std::atomic<int> n{0};
+        if (n.fetch_add(1) < 10)
+            std::fprintf(stderr, "[videoimp] import=%d ret=0x%llx lr=0x%08x\n", index,
+                         (unsigned long long)ctx.gpr[3], lr);
+    }
     if (index == 118) {
         static std::atomic<int> n{0};
         if (n.fetch_add(1) < 6)
