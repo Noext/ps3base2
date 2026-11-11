@@ -55,3 +55,46 @@ la table de cles qui est en cause. Si le SFO n'est pas lu, c'est le montage.
 | 3 | 4 criteres sur 5 ; module 45,4 Mo, plus grosse fonction 737 751 o |
 | 4 | ecrit, validation navigateur impossible |
 | 5 | goulots nommes, fps natif mesure |
+
+---
+
+# RETRACTATION PARTIELLE : TITLE_ID corrige, le blocage reste
+
+## La correction appliquee
+
+`/tmp/disk/PS3_GAME/` ne contenait que `USRDIR` — le `PARAM.SFO` **manquait** de la copie du disque. Copie, puis :
+
+    vfs: disc  (BLES01976 01.00), patch  ()
+    [paramsfo] TITLE_ID="BLES01976" empty=0
+    videoimp=2
+
+**Le titre est maintenant identifie.**
+
+## Ce qui n'a PAS change
+
+    [gcmargs] context=0xd72800 cmdSize=0xfa000 ioSize=0x100000 ioAddr=0x40100000
+    [gcmargs] mem[0xd72800]=0x00000000 0x00000000 0x00000000 0x00bcf278
+    F ppu: unknown indirect target 0x00000000 (lr=0x005d2c08)
+
+**La structure est toujours a moitie remplie, et le crash persiste.**
+
+## Ce que ca invalide
+
+| affirmation | statut |
+|---|---|
+| « `TITLE_ID` vide est LA cause racine » | **faux** — corriger le titre ne change pas l'echec GCM |
+| « le corps prend le chemin d'erreur a cause du syscall 30 » | **non demontre** — le syscall reussit maintenant et rien ne change |
+
+Le syscall 30 reussissait **deja** dans le sens ou il ne bloquait pas le chemin : son echec etait sans effet sur
+la suite, ou le corps ne branche pas dessus.
+
+## Ce que ce round a reellement corrige
+
+**Un defaut reel du montage** : le `PARAM.SFO` manquait, donc `vfs: disc` affichait un titre vide depuis
+plusieurs rounds. C'est corrige, et c'est necessaire pour tout ce qui lit l'identite du disque.
+
+Mais ce n'etait **pas** la cause du blocage.
+
+## Position inchangee
+
+Le blocage reste : la structure de contexte GCM n'est pas remplie par le corps de `_cellGcmInitBody`.
