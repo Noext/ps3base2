@@ -28,10 +28,14 @@ mkdir -p "$OUT/obj"
 CXXFLAGS=(-Oz -std=c++20 -fwasm-exceptions -msimd128 -msse4.1 -mfma
           -matomics -mbulk-memory -pthread -w
           -I "$ROOT/runtime/include" -I "$ROOT/runtime/src"
-          -I "$ROOT/runtime/src/lv2" -I "$ROOT/runtime/src/spu" -I "$ROOT/out/ppu")
+          -I "$ROOT/runtime/src/lv2" -I "$ROOT/runtime/src/spu" -I "$ROOT/out/ppu"
+          -I "$ROOT/third_party/stb" -I "$ROOT/third_party/imgui"
+          -I "$ROOT/runtime/src/spu/renjob" -I "$ROOT/out/include")
 
 echo "== compile runtime"
-find "$ROOT/runtime/src" -name '*.cpp' | while read -r f; do
+find "$ROOT/runtime/src" -name '*.cpp' \
+     -not -path '*/launcher/*' -not -name 'main.cpp' \
+     -not -name 'host_input.cpp' -not -name 'host.cpp.orig' | while read -r f; do
     o="$OUT/obj/$(echo "${f#$ROOT/}" | tr '/' '_' | sed 's/\.cpp$/.o/')"
     "$EMCC" "${CXXFLAGS[@]}" -DPS3BASE_BOOT_PROBE=1 -DPS3BASE_INPUT_BUILTIN=1 -c "$f" -o "$o"
 done
