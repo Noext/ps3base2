@@ -117,10 +117,17 @@ HLE_FUNC(cellGcmSys, _cellGcmInitBody) {
              * +0 the handler, +4 its data. */
             /* Place the callback block inside the FIFO buffer we just reserved,
              * at its far end, so it is necessarily mapped. */
-            const uint32_t cb = buf + (cmd_size ? cmd_size : 0x1000) - 16;
+            /* Place it at the START of the FIFO, not its end: buf+cmd_size is one
+             * past the allocation and range_mapped refuses it. */
+            const uint32_t cb = buf;
             ++g_gcm_stub_cb_addr;
             if (vm::range_mapped(cb, 8)) {
-                vm::write32(cb + 0, 0);   /* 0 = "no flush needed"; see below */
+                /* 0x00010300 is a lifted function whose body is a bare return
+                 * (mc_000.cpp). The indirect call target must be a GUEST code
+                 * address, not a host pointer: this one is a real lifted entry,
+                 * does nothing, and keeps the FIFO path alive so the boot can go
+                 * on. The command counter lives here rather than in guest code. */
+                vm::write32(cb + 0, 0x00010300u);
                 vm::write32(cb + 4, context);
                 vm::write32(context + 12, cb);
             }
