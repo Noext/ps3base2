@@ -44,6 +44,14 @@ game_disc() {
         rdr)       echo "${RDR_DISC:-$HOME/Dev/rdr-port/vfs/dev_bdvd}" ;;
     esac
 }
+# The flip floor for a game, from docs/regress-baseline.md. Read rather than
+# hard-coded so raising a baseline is one edit in one place.
+baseline_flips() {
+    f="$ROOT/docs/regress-baseline.md"
+    [ -f "$f" ] || { echo 0; return; }
+    # "minecraft   flips >= 6780 ..." -> 6780
+    awk -v g="$1" '$1 == g && $2 == "flips" { print $4; exit }' "$f"
+}
 game_expect() {
     case "$1" in
         rdr) echo "either" ;;
@@ -96,8 +104,13 @@ run_one() {
         *)   verdict="exit $code" ;;
     esac
 
+    # Compare against the recorded baseline, not against zero. A game that is
+    # meant to flip must keep flipping; a game that is blocked at zero passes on
+    # liveness and crash-freedom alone, so its slow progress is not mistaken for
+    # a regression. docs/regress-baseline.md carries the numbers and their history.
+    floor=$(baseline_flips "$name")
     ok=1
-    [ "$flips" -gt 0 ] || ok=0
+    [ "$flips" -ge "$floor" ] || ok=0
     [ "$crashes" -eq 0 ] || ok=0
     case "$expect" in
         alive)  [ "$code" = 124 ] || ok=0 ;;
