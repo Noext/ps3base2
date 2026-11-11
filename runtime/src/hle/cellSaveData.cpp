@@ -1,4 +1,7 @@
 #include "common.h"
+#include "savedata_hle.h"
+
+#include "runtime/cbwatch.h"
 #include "runtime/force.h"
 #include "runtime/msgdialog.h"
 #include "runtime/vfs.h"
@@ -823,6 +826,208 @@ HLE_FUNC(cellSysutil, cellSaveDataUserAutoLoad) {
     const int32_t r = run_op(op);
     LOG_INFO("savedata", "UserAutoLoad user %u '%s' userdata=0x%x errDialog %u -> %d", user, folded.c_str(), userdata, err_dialog, r);
     ret(ctx, r);
+}
+
+/* --- cellSaveDataListDelete ---------------------------------------------
+ *
+ * This milestone's brief says RPCS3 implements this as a no-op returning
+ * CELL_OK. It does not. refs/rpcs3/rpcs3/Emu/Cell/Modules/cellSaveData.cpp:
+ * 2634-2639 hands the call straight to
+ *   savedata_op(ppu, SAVEDATA_OP_LIST_DELETE, 0, vm::null, 0, setList, setBuf,
+ *               funcList, vm::null, vm::null, vm::null, container, 0x40,
+ *               userdata, 0, funcDone)
+ * and 1206-1258 is the delete_save lambda that removes a directory. So there
+ * is real behaviour to implement, and it was missing here entirely.
+ *
+ * What this does, in RPCS3's order:
+ *   1. argument checks with RPCS3's numbered reasons (savedata_check_args,
+ *      cellSaveData.cpp:479-714). A delete list must carry fileListMax == 0
+ *      (:648-653) and must have funcDone (:682-687).
+ *   2. enumerate the account's savedata: directories with a valid name whose
+ *      name starts with one of the '|'-separated prefixes; for a delete list a
+ *      lone "*" becomes the title id (:830-836). Only entries with a readable
+ *      PARAM.SFO whose SAVEDATA_DIRECTORY is a valid dir name are listed
+ *      (:872-899). Count every match; list what fits under dirListMax and
+ *      inside bufSize (:862-885).
+ *   3. sort by mtime or subtitle, ascending or descending (:937-985).
+ *   4. call the title's funcList so it can fill fixedList and pick a focus
+ *      (:963-1010), and handle its non-OK return exactly as RPCS3 does.
+ *   5. a selection then needs the system's save-data browser, which this
+ *      runtime does not have. RPCS3 gets -2 from its dialog when none is
+ *      available and returns CELL_CANCEL (:1283-1286). That is what happens
+ *      here -- CELL_CANCEL, named in the log, never CELL_OK, because no
+ *      directory was removed. */
+HLE_FUNC(cellSaveData, cellSaveDataListDelete) {
+    const uint32_t set_list = a32(ctx, 0);
+    const uint32_t set_buf = a32(ctx, 1);
+    const uint32_t func_list = a32(ctx, 2);
+    const uint32_t func_done = a32(ctx, 3);
+    const uint32_t container = a32(ctx, 4);
+    /* The 7th argument (userdata) is the first stack argument: the PPU ABI puts
+     * it at sp+0x70 (refs/.../PPUThread.cpp:3251 get_stack_arg returns
+     * gpr[1] + 0x30 + 8*(i-1)), never in a register. */
+    const uint32_t userdata = vm::read32(static_cast<uint32_t>(ctx.gpr[1]) + 0x70);
+
+    LOG_INFO("savedata",
+             "cellSaveDataListDelete(setList 0x%08x setBuf 0x%08x funcList 0x%08x "
+             "funcDone 0x%08x container 0x%x userdata 0x%08x)",
+             set_list, set_buf, func_list, func_done, container, userdata);
+
+    if (!set_list || !set_buf) {
+        LOG_WARN("savedata", "cellSaveDataListDelete -> PARAM (setList/setBuf NULL)");
+        return ret(ctx, ERR_PARAM);
+    }
+    if (!vm::range_mapped(set_list, savedata::SET_LIST_SIZE) || !vm::range_mapped(set_buf, 0x28)) {
+        LOG_WARN("savedata", "cellSaveDataListDelete -> PARAM (setList/setBuf not readable)");
+        return ret(ctx, ERR_PARAM);
+    }
+
+    const uint32_t sort_type = vm::read32(set_list + 0x0);
+    const uint32_t sort_order = vm::read32(set_list + 0x4);
+    const uint32_t prefix_ea = vm::read32(set_list + 0x8);
+    const std::string raw_prefix = prefix_ea ? gstr(prefix_ea, savedata::PREFIX_SIZE) : std::string();
+    const uint32_t dir_list_max = vm::read32(set_buf + 0x0);
+    const uint32_t file_list_max = vm::read32(set_buf + 0x4);
+    const uint32_t buf_size = vm::read32(set_buf + 0x20);
+    const uint32_t buf = vm::read32(set_buf + 0x24);
+
+    savedata::ListArgs a;
+    a.version = 0;   /* cellSaveDataListDelete passes version 0 (cellSaveData.cpp:2638) */
+    a.has_set_list = true;
+    a.sort_type = sort_type;
+    a.sort_order = sort_order;
+    a.has_prefix = prefix_ea != 0;
+    a.prefix_terminated = a.has_prefix && std::memchr(vm::ptr(prefix_ea), 0, savedata::PREFIX_SIZE) != nullptr;
+    a.prefix_length_ok = true;
+    a.dir_list_max = dir_list_max;
+    a.buf_size = buf_size;
+    a.has_buf = buf != 0;
+    a.file_list_max = file_list_max;
+    a.has_func_list = func_list != 0;
+    a.has_func_done = func_done != 0;
+
+    if (const uint32_t why = savedata::check_list_args(a, savedata::Op::ListDelete)) {
+        LOG_WARN("savedata", "cellSaveDataListDelete -> PARAM (sysutil savedata parameter error : %u)", why);
+        return ret(ctx, ERR_PARAM);
+    }
+
+    std::unique_lock<std::mutex> lk(g_lock);
+    if (!g_scratch) g_scratch = vm::alloc(vm::Region::Stack, SCRATCH_SIZE, 0x100);
+    if (!g_scratch) {
+        LOG_ERROR("savedata", "cellSaveDataListDelete -> ACCESS (no scratch memory)");
+        return ret(ctx, ERR_ACCESS);
+    }
+
+    const std::string root = save_root();
+    const std::string title_id = vfs::disc_sfo().str("TITLE_ID");
+    const std::vector<std::string> prefixes =
+        savedata::effective_prefixes(raw_prefix, true /* asterisk rule: LIST_DELETE only */, title_id);
+
+    std::vector<savedata::Entry> entries;
+    std::error_code ec;
+    for (const auto& de : fsys::directory_iterator(root, ec)) {
+        if (!de.is_directory()) continue;
+        const std::string name = de.path().filename().string();
+        if (!savedata::is_valid_dir_name(name)) continue;
+        if (!savedata::name_matches(name, prefixes)) continue;
+
+        /* RPCS3 reads SAVEDATA_DIRECTORY / SAVEDATA_LIST_PARAM out of the
+         * entry's own PARAM.SFO and skips it when the SFO is empty or the
+         * directory field is invalid (cellSaveData.cpp:872-899), instead of
+         * listing whatever name the directory happens to have. */
+        vfs::Psf sfo;
+        if (!sfo.load(de.path().string() + "/PARAM.SFO") || sfo.strings.empty()) {
+            LOG_WARN("savedata", "cellSaveDataListDelete: '%s' has no readable PARAM.SFO, skipped", name.c_str());
+            continue;
+        }
+        const std::string dir_name = sfo.str("SAVEDATA_DIRECTORY");
+        if (!savedata::is_valid_dir_name(dir_name)) {
+            LOG_WARN("savedata", "cellSaveDataListDelete: '%s' has invalid SAVEDATA_DIRECTORY '%s', skipped",
+                     name.c_str(), dir_name.c_str());
+            continue;
+        }
+        savedata::Entry e;
+        e.dir_name = dir_name;
+        e.escaped = name;
+        e.list_param = sfo.str("SAVEDATA_LIST_PARAM");
+        e.title = sfo.str("TITLE");
+        e.subtitle = sfo.str("SUB_TITLE");
+        for (const auto& f : fsys::directory_iterator(de.path(), ec)) {
+            if (!f.is_regular_file()) continue;
+            if (savedata::is_system_file(f.path().filename().string())) continue;
+            e.size += f.file_size(ec);
+        }
+        /* RPCS3 uses the directory's own mtime for sorting
+         * (cellSaveData.cpp:908-910). */
+        struct _stat64 st {};
+        if (_stat64(de.path().c_str(), &st) == 0) e.mtime = static_cast<int64_t>(st.st_mtime);
+        entries.push_back(std::move(e));
+    }
+    savedata::sort_entries(entries, sort_type, sort_order);
+
+    const savedata::Listing listing = savedata::count_listing(entries, dir_list_max);
+    LOG_INFO("savedata",
+             "cellSaveDataListDelete: %u savedata match prefix '%s' (dirListMax %u bufSize 0x%x), listing %u",
+             listing.dir_num, raw_prefix.c_str(), dir_list_max, buf_size, listing.dir_list_num);
+
+    const uint32_t cb = g_scratch + CB_RESULT;
+    const uint32_t list_get = cb + 0x40;
+    const uint32_t list_set = list_get + 0x60;
+    std::memset(vm::ptr(list_get), 0, 0x60);
+    std::memset(vm::ptr(list_set), 0, 0x18);
+
+    /* The buffer is cleared exactly once, and only when a match was found
+     * (cellSaveData.cpp:863-868). */
+    if (listing.clear_buffer && buf && buf_size) std::memset(vm::ptr(buf), 0, buf_size);
+
+    vm::write32(list_get + 0x0, listing.dir_num);
+    vm::write32(list_get + 0x4, listing.dir_list_num);
+    vm::write32(list_get + 0x8, buf);
+    for (uint32_t i = 0; i < listing.dir_list_num; i++) {
+        const uint32_t at = buf + i * savedata::DIR_LIST_SIZE;
+        if (!vm::range_mapped(at, savedata::DIR_LIST_SIZE)) break;
+        std::memset(vm::ptr(at), 0, savedata::DIR_LIST_SIZE);
+        put_str(at + 0x00, entries[i].dir_name, savedata::DIRNAME_SIZE);
+        std::memcpy(vm::ptr(at + 0x20), entries[i].list_param.data(),
+                    std::min<size_t>(entries[i].list_param.size(), 8));
+    }
+
+    /* focusPosition starts at DIRNAME (= 0) for a delete list
+     * (cellSaveData.cpp:965, refs/.../cellSaveData.h:127). */
+    vm::write32(list_set + 0x0, 0);
+    std::memset(vm::ptr(cb), 0, 0x20);
+    vm::write32(cb + 0x10, userdata);
+    call_guest(ctx, func_list, cb, list_get, list_set);
+    const int32_t list_result = static_cast<int32_t>(vm::read32(cb));
+    const uint32_t fixed_list_num = vm::read32(list_set + 0x8);
+    LOG_INFO("savedata", "cellSaveDataListDelete: funcList returned %d, fixedListNum %u",
+             list_result, fixed_list_num);
+
+    if (fixed_list_num > savedata::LISTITEM_MAX) {
+        LOG_WARN("savedata", "cellSaveDataListDelete -> PARAM (fixedListNum %u > %u)", fixed_list_num,
+                 savedata::LISTITEM_MAX);
+        return ret(ctx, ERR_PARAM);
+    }
+    if (list_result != savedata::CBRESULT_OK_NEXT) {
+        if (list_result == savedata::CBRESULT_OK_LAST ||
+            list_result == savedata::CBRESULT_OK_LAST_NOCONFIRM) {
+            LOG_INFO("savedata", "cellSaveDataListDelete: funcList ended the operation -> CELL_OK");
+            return ret(ctx, 0);
+        }
+        LOG_WARN("savedata", "cellSaveDataListDelete: funcList reported %d -> CBRESULT", list_result);
+        return ret(ctx, ERR_CBRESULT);
+    }
+
+    /* Getting further means presenting the list and letting the user pick an
+     * entry to delete. That browser does not exist here, and CELL_OK would
+     * claim a save was deleted that is still on disk. RPCS3 returns
+     * CELL_CANCEL when its dialog reports no selection
+     * (cellSaveData.cpp:1283-1286); same answer, same reason, and it is named
+     * in the log. */
+    LOG_WARN("savedata",
+             "cellSaveDataListDelete: list filled and funcList ran, but this runtime has no save-data browser "
+             "to choose an entry, so nothing was deleted -> CELL_CANCEL (1)");
+    ret(ctx, 1);
 }
 
 }

@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstdio>
 
+#include "avconf_hle.h"
 #include "runtime/cbwatch.h"
 #include "runtime/msgdialog.h"
 #include "runtime/sysutil_events.h"
@@ -271,13 +272,54 @@ HLE_FUNC(cellSysutil, cellSaveDataFixedDelete) {
     ret(ctx, 0);
 }
 
+/* cellVideoOutGetScreenSize(videoOut, screenSize)
+ * refs/rpcs3/rpcs3/Emu/Cell/Modules/cellAvconfExt.cpp:553-577.
+ *
+ * The previous body wrote 0 into the caller's float and returned
+ * 0x8002b226, which is CELL_VIDEO_OUT_ERROR_UNSUPPORTED_DISPLAY_MODE -- a code
+ * this function never returns. RPCS3 returns VALUE_IS_NOT_SET (0x8002b228) and
+ * writes NOTHING, because "not set" means the caller's variable keeps its own
+ * value. Writing 0 first and then reporting "not set" is a value the caller
+ * cannot distinguish from a reported one. */
 HLE_FUNC(cellSysutilAvconfExt, cellVideoOutGetScreenSize) {
-    if (uint32_t p = a32(ctx, 1)) vm::write32(p, 0);
-    ret(ctx, static_cast<int32_t>(0x8002b226));
+    const uint32_t video_out = a32(ctx, 0);
+    const uint32_t screen_size = a32(ctx, 1);
+    if (!screen_size) return ret(ctx, static_cast<int32_t>(0x8002b222));  /* ILLEGAL_PARAMETER */
+    if (video_out != 0) return ret(ctx, static_cast<int32_t>(0x8002b225));  /* UNSUPPORTED_VIDEO_OUT */
+    /* No 3D display is modelled, so the size is genuinely not set. */
+    LOG_INFO("cellSysutil", "cellVideoOutGetScreenSize -> not set (no 3D display modelled)");
+    ret(ctx, static_cast<int32_t>(0x8002b228));
 }
 
+/* cellVideoOutSetGamma(videoOut, gamma)
+ * refs/rpcs3/rpcs3/Emu/Cell/Modules/cellAvconfExt.cpp:448-467.
+ *
+ * The argument order and every return code are RPCS3's: gamma outside
+ * [0.8, 1.2] is PARAMETER_OUT_OF_RANGE, a videoOut other than PRIMARY is
+ * UNSUPPORTED_VIDEO_OUT, and only then is the value accepted. RPCS3 stores it
+ * in avconf and its present path builds an sRGB conversion from it
+ * (GL/GLPresent.cpp:438-445, VK/VKPresent.cpp:850-886). This runtime has no
+ * gamma stage -- presenter.cpp blits straight to the swapchain -- so storing a
+ * number nothing reads and answering CELL_OK would tell the title the picture
+ * changed when it did not. See runtime/src/hle/avconf_hle.h. */
 HLE_FUNC(cellSysutilAvconfExt, cellVideoOutSetGamma) {
-    ret(ctx, 0);
+    const uint32_t video_out = a32(ctx, 0);
+    /* A float argument travels in f1: f0 is scratch (see cellMsgDialogClose,
+     * which reads ctx.fpr[1] for the same reason). */
+    const float gamma = static_cast<float>(ctx.fpr[1]);
+    const int32_t rc = avconf::set_gamma(video_out, gamma);
+    if (rc == 0 && !avconf::is_identity(gamma)) {
+        /* Unreachable by construction, kept so the two cannot drift apart. */
+        LOG_WARN("cellSysutil", "cellVideoOutSetGamma(%u, %f) returned OK for a non-identity gamma", video_out, gamma);
+    } else if (rc == avconf::ERR_NOT_IMPLEMENTED) {
+        LOG_WARN("cellSysutil",
+                 "cellVideoOutSetGamma(%u, %f) -> NOT_IMPLEMENTED: this runtime has no gamma stage, "
+                 "the picture is unchanged",
+                 video_out, gamma);
+    } else {
+        LOG_INFO("cellSysutil", "cellVideoOutSetGamma(%u, %f) -> 0x%x", video_out, gamma, static_cast<unsigned>(rc));
+    }
+    ret(ctx, rc);
 }
 
 /* --- cellVideoOutGetDeviceInfo ------------------------------------------

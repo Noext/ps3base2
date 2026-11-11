@@ -68,10 +68,18 @@ std::map<uint32_t, uint32_t> g_slots = {{0x00000000, 0x10000000}};
  * before any allocation. Lazy because the table is generated per title and this
  * file is linked whether or not a title is being built.
  */
+/* The image table is generated per title and is absent from the unit-test
+ * executables, which link this file for the allocator alone. A weak declaration
+ * lets those link and do nothing, while the real runtime -- which does link
+ * table.cpp -- gets the exclusion. Without this, memspace and friends fail to
+ * link on image::image_count, and that is how the first version of this function
+ * broke the test build. */
 static void seed_image_slots_locked() {
     static bool done = false;
     if (done) return;
     done = true;
+    /* Weak symbols read as null when no table is linked (the unit tests). */
+    if (&image::image_count == nullptr || image::images == nullptr) return;
     for (uint32_t i = 0; i < image::image_count; i++) {
         const image::ImageEntry& im = image::images[i];
         if (!im.text_hi) continue;

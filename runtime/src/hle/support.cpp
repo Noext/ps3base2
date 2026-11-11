@@ -41,3 +41,15 @@ void call_guest(ppu::Context& ctx, uint32_t opd, uint64_t a0, uint64_t a1, uint6
 }
 
 }
+
+/* DELIBERATELY ABSENT: an override forcing libsysutil.sprx to HLE.
+ *
+ * It was tried and refuted. With the override the title flips (2341 frames in
+ * 40 s) but calls 230 exported C++ symbols the HLE does not provide --
+ * cxml::Document, sysutil_cxmlutil::FixedMemory, cellSysutilPacketBegin/End --
+ * so it renders nothing: flip 97.3%, draw 0.2%, black screen. libsysutil is a
+ * library of 230 exports, not a dispatcher the HLE can stand in for.
+ *
+ * So the module stays LLE (D-001), and the deadlock that appears without it is
+ * somewhere else. See docs/progress.md for where that search stands. */
+
