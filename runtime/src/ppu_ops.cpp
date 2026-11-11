@@ -180,6 +180,16 @@ uint8_t* hook_flag_for(uint32_t addr) {
 void (*hook_impl)(Context& ctx, uint8_t* base, uint32_t addr, BodyFn fn) = nullptr;
 
 void hook_call(Context& ctx, uint8_t* base, uint32_t addr, BodyFn fn) {
+    /* If this never prints, the wrapper's flag condition is false and hook_call is
+     * not on the path at all; if it prints with hook_impl NULL, the dispatcher was
+     * never armed. The two failures need different fixes, so print instead of
+     * guessing. */
+    if (addr == 0x5d2b44u) {
+        static std::atomic<int> n{0};
+        if (n.fetch_add(1) < 6)
+            std::fprintf(stderr, "[hookcall] addr=0x%08x impl=%s\n", addr,
+                         hook_impl ? "armed" : "NULL");
+    }
     if (hook_impl) hook_impl(ctx, base, addr, fn);
     else fn(ctx, base);
 }

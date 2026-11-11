@@ -407,6 +407,17 @@ void call_indirect(Context& ctx, uint8_t* base, uint32_t addr) {
     }
 #endif
     force::on_call(addr);
+    /* f_005d2b44 keeps being called without its guard running. The wrapper
+     * consults hook_flags only when hook_impl is non-null, so print both at the
+     * one moment that matters rather than deducing either. */
+    if (false) {
+        static std::atomic<int> n{0};
+        if (n.fetch_add(1) < 8)
+            std::fprintf(stderr, "[guardstate] addr=0x%08x hook_impl=%s flag=%d hook_seen=%d\n",
+                         addr, ppu::hook_impl ? "armed" : "NULL",
+                         ppu::hook_flag_for(addr) ? *ppu::hook_flag_for(addr) : -1,
+                         g_call_depth);
+    }
     const uint32_t saved_lr = static_cast<uint32_t>(ctx.lr);
     g_call_ring[g_call_ring_head & 63] = addr;
     g_call_lr[g_call_ring_head & 63] = saved_lr;
