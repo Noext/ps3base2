@@ -53,3 +53,22 @@ il faut cibler le processus par son nom exact et l'attacher avant qu'il ne meure
 | 3 | 5 criteres sur 6 |
 | 4 | ecrit, validation navigateur impossible |
 | 5 | goulots nommes, fps bloques |
+
+---
+
+# La pile d'appels : tentative et echec
+
+| methode | resultat |
+|---|---|
+| pgrep -x puis gdb -p | a attrape le shell, pas le jeu |
+| lancement en arriere-plan puis attachement | sortie vide |
+| gdb -batch -ex run --args | sortie vide |
+| gdb -x avec script | sortie vide |
+
+Pourquoi : ptrace_scope vaut 1 (attachement limite), et le runtime appelle setsid en interne, donc le
+processus se detache et le pid connu du shell n'est plus le sien.
+
+Ce que le round 175 a etabli : le blocage n'est pas Vulkan (il persiste avec le stub et sans cache).
+Ce qu'il n'a pas etabli : quel thread ni quelle attente.
+
+Ce qu'il faudrait : ptrace_scope=0, ou lancer sans setsid, ou une trace futex resymbolisee.
