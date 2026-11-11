@@ -115,7 +115,10 @@ extern "C" void ps3base_store_probe(uint32_t ea, const void* data, size_t size) 
      * path that does it". */
     /* The body's context argument (r6) is 0x40100000, and its callee writes
      * [r30+0] and [r30+4]. Watch the io buffer as well as the game structure. */
+    /* The crashing load is ld32(0xd72800 + 10240) = ld32(0xd75000). That address was
+     * never watched: rounds 220-238 observed 0xd72800 instead. */
     if (!((ea >= 0x00d72800u && ea < 0x00d72840u) ||
+          (ea >= 0x00d74f00u && ea < 0x00d75100u) ||
           (ea >= 0x40100000u && ea < 0x40100040u))) return;
     static int n = 0;
     if (n > 40) return;
