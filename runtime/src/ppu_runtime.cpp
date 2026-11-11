@@ -324,6 +324,17 @@ void call_indirect(Context& ctx, uint8_t* base, uint32_t addr) {
      * going and every distinct bad target is named once.
      */
     if (!fn) {
+        {
+            /* The caller loads its object from 0x00d72800. Say whether that page
+             * is mapped AT THIS MOMENT -- the page map is real (only allocated
+             * pages are marked), so the answer decides whether the guest read a
+             * pointer from an unmapped page or from a mapped page it never wrote. */
+            static std::atomic<int> n{0};
+            if (n.fetch_add(1) < 3)
+                std::fprintf(stderr, "[read-d72800] page_mapped=%d value=0x%08x\n",
+                             vm::is_mapped(0x00d72800u) ? 1 : 0,
+                             static_cast<unsigned>(ctx.gpr[31]));
+        }
 #if defined(PS3BASE_CALL_TARGET_CHECK) && PS3BASE_CALL_TARGET_CHECK
         if (addr == 0u || !vm::range_mapped(addr, 4)) {
             static std::mutex m;
