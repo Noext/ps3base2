@@ -792,10 +792,10 @@ class Emitter:
             act = self.call(t, pc + 4) if w & 1 else self.goto(t, f)
             if bo_always(w) and bo & 4:
                 return act
-            return f"if (ppu::bc_cond(ctx, {bo}, {bi})) {{ {act} }}"
+            return f"if (ppu::bc_cond_at(ctx, 0x{pc:x}, {bo}, {bi})) {{ {act} }}"
         if m in ("bclr", "bcctr"):
             bo, bi = (w >> 21) & 31, (w >> 16) & 31
-            cond = None if (bo_always(w) and bo & 4) else f"ppu::bc_cond(ctx, {bo}, {bi})"
+            cond = None if (bo_always(w) and bo & 4) else f"ppu::bc_cond_at(ctx, 0x{pc:x}, {bo}, {bi})"
             if m == "bclr":
                 act = f"{{ uint64_t t = ctx.lr; ctx.lr = 0x{pc + 4:x}; ppu::call_indirect(ctx, base, uint32_t(t)); }}" if w & 1 else "return;"
             elif w & 1:

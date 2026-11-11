@@ -49,7 +49,7 @@ extern "C" int ps3base_ld_probe(uint32_t ea) {
 extern bool g_bt_on;
 extern "C" void* g_bt_ctx;
 
-extern "C" void ps3base_block_trace(uint32_t bo, uint32_t bi, bool taken) {
+extern "C" void ps3base_block_trace_at(uint32_t pc, uint32_t bo, uint32_t bi, bool taken) {
     static int n = 0;
     /* Filter here, not at the source: touching the dispatch path to open a window
      * broke the boot (round 214), so the trace stays global and the sink decides.
@@ -65,7 +65,10 @@ extern "C" void ps3base_block_trace(uint32_t bo, uint32_t bi, bool taken) {
         if (g_bt_all == 1000 || g_bt_all == 10000 || g_bt_all == 50000)
             std::fprintf(stderr, "[btall] branches=%u bi1=%u\n", g_bt_all, g_bt_bi1);
     }
-    const bool kWant = g_bt_lr >= 0x002da36cu && g_bt_lr < 0x002dac00u;
+    /* Attribute by the BLOCK ADDRESS now that the lifter emits it. The lr was the
+     * caller of the dispatcher, so every callee entered from the watched range
+     * passed the filter and the trace mixed functions. */
+    const bool kWant = pc >= 0x002da36cu && pc < 0x002dac00u;
     if (kWant && n <= 60) {
         /* The first five branches form a loop. If one of its counters never
          * advances, the loop cannot end and branch 6 is never reached. Print the
