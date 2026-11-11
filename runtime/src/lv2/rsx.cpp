@@ -462,7 +462,27 @@ void fifo_thread() {
             window_tsc = tsc;
             idle_ticks = sleeps = g_sema_ticks = g_sema_waits = exec_tsc = methods = 0;
         }
-        uint32_t put = vm::read32(ctrl + 0x40);
+        /* PS3BASE_FIFO_DUMP: what the walker actually sees.
+     *
+     * "RSX busy 100%, methods 0.0%" has three possible causes and they read
+     * identically in the periodic stats: an empty FIFO (get == put, so the loop
+     * spins on idle_wait), a FIFO whose contents are not methods, or a get
+     * pointing somewhere io_to_ea cannot translate. Printing the two counters
+     * and the first words at get tells them apart in one line. */
+    if (std::getenv("PS3BASE_FIFO_DUMP")) {
+        static std::atomic<int> dn{0};
+        const int k = dn.fetch_add(1, std::memory_order_relaxed);
+        if (k < 6) {
+            const uint32_t p = vm::read32(ctrl + 0x40);
+            const uint32_t g = vm::read32(ctrl + 0x44);
+            const uint32_t e = io_to_ea(g);
+            LOG_INFO("fifodump", "put=0x%08x get=0x%08x ea=0x%08x mapped=%d first=%08x %08x %08x %08x",
+                     p, g, e, int(e != 0),
+                     e ? vm::read32(e) : 0, e ? vm::read32(e + 4) : 0,
+                     e ? vm::read32(e + 8) : 0, e ? vm::read32(e + 12) : 0);
+        }
+    }
+    uint32_t put = vm::read32(ctrl + 0x40);
         uint32_t get = vm::read32(ctrl + 0x44);
         if (get == put) {
             idle_wait(256);

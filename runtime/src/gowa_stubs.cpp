@@ -111,8 +111,24 @@ extern "C" int gowa_stub_44() { return 0; }
 extern "C" int gowa_stub_45() __asm__("_ZNSolsEj");
 extern "C" int gowa_stub_45() { return 0; }
 
-/* edge::gpu::g_active is God of War's DMA-accelerated edge path. ps3base keeps
- * the SPU thread code that consults it, so the flag has to exist; it stays false
- * because no edge GPU module is linked for this title. That turns the branch in
- * spu/thread.cpp into the plain DMA path, which is what the game wants. */
-namespace edge { namespace gpu { bool g_active = false; } }
+/* edge::gpu::g_active is NOT stubbed here.
+ *
+ * spu/edge/edge_gpu.cpp:131 already defines it (`const bool g_active = ...`) and
+ * edge_gpu.h:35 declares it extern, so a second definition in this file is a
+ * duplicate: "multiple definition of edge::gpu::g_active" at link time. It was
+ * added here on the assumption that no edge GPU module is linked, but
+ * GOWA_EDGE_SOURCES globs runtime/src/spu/edge/*.cpp into the binary, so one
+ * always is. */
+
+/* compiled_blocks() is the AOT table: the SPU blocks compiled to native code for
+ * this title. ps3base links none of them (they are produced by a generator that
+ * needs the title's own block layout), so the table is empty and the interpreter
+ * runs every block instead. aot.cpp already handles n == 0 -- it just leaves the
+ * index inactive. */
+#include "spu/aot.h"
+namespace spu {
+const CompiledBlock* compiled_blocks(size_t& count) {
+    count = 0;
+    return nullptr;
+}
+}  // namespace spu
