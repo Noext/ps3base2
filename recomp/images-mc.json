@@ -1,0 +1,47 @@
+[
+ {
+  "name": "mc",
+  "elf": "../bin/mc/mc.elf",
+  "file": "bin/mc/mc.elf"
+ },
+ {
+  "name": "liblv2",
+  "elf": "../out-mc/gen/reloc/liblv2.elf",
+  "file": "out-mc/gen/reloc/liblv2.elf"
+ },
+ {
+  "name": "libsysmodule",
+  "elf": "../out-mc/gen/reloc/libsysmodule.elf",
+  "file": "out-mc/gen/reloc/libsysmodule.elf"
+ },
+ {
+  "name": "libsre",
+  "elf": "../out-mc/gen/reloc/libsre.elf",
+  "file": "out-mc/gen/reloc/libsre.elf"
+ },
+ {
+  "name": "libgcm_sys",
+  "elf": "../out-mc/gen/reloc/libgcm_sys.elf",
+  "file": "out-mc/gen/reloc/libgcm_sys.elf"
+ },
+ {
+  "name": "libfs",
+  "elf": "../out-mc/gen/reloc/libfs.elf",
+  "file": "out-mc/gen/reloc/libfs.elf"
+ },
+ {
+  "name": "libvdec",
+  "elf": "../out-mc/gen/reloc/libvdec.elf",
+  "file": "out-mc/gen/reloc/libvdec.elf"
+ },
+ {
+  "name": "libsmvd2",
+  "elf": "../out-mc/gen/reloc/libsmvd2.elf",
+  "file": "out-mc/gen/reloc/libsmvd2.elf"
+ },
+ {
+  "name": "libspurs_jq",
+  "elf": "../out-mc/gen/reloc/libspurs_jq.elf",
+  "file": "out-mc/gen/reloc/libspurs_jq.elf"
+ }
+]
