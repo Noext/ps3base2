@@ -59,7 +59,19 @@ void hook_call(Context& ctx, uint8_t* base, uint32_t addr, BodyFn fn);
 
 inline uint8_t ld8(uint8_t* b, uint32_t ea) { return b[ea]; }
 inline uint16_t ld16(uint8_t* b, uint32_t ea) { uint16_t v; std::memcpy(&v, b + ea, 2); return __builtin_bswap16(v); }
-inline uint32_t ld32(uint8_t* b, uint32_t ea) { uint32_t v; std::memcpy(&v, b + ea, 4); return __builtin_bswap32(v); }
+#if PS3BASE_LD_TRAP
+/* Diagnostic build: report the first reads of an address no region covers. The
+ * wasm backend is one calloc'd block, so an unmapped read returns zero and the
+ * guest walks on with a null pointer, failing far from the cause (see
+ * docs/webassembly/APPEL-VIRTUEL-NUL-CAUSE.md). */
+extern "C" int ps3base_ld_probe(uint32_t ea);
+#endif
+inline uint32_t ld32(uint8_t* b, uint32_t ea) {
+#if PS3BASE_LD_TRAP
+    ps3base_ld_probe(ea);
+#endif
+    uint32_t v; std::memcpy(&v, b + ea, 4); return __builtin_bswap32(v);
+}
 inline uint64_t ld64(uint8_t* b, uint32_t ea) { uint64_t v; std::memcpy(&v, b + ea, 8); return __builtin_bswap64(v); }
 inline void st8(uint8_t* b, uint32_t ea, uint8_t v) { rsv::store_range(ea, &v, 1); }
 inline void st16(uint8_t* b, uint32_t ea, uint16_t v) {

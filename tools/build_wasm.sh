@@ -53,7 +53,7 @@ find "$ROOT/runtime/src" -name '*.cpp' \
      -not -path '*/spu/shadows/*' \
      -not -path '*/spu/tasks/*' | while read -r f; do
     o="$OUT/obj/$(echo "${f#$ROOT/}" | tr '/' '_' | sed 's/\.cpp$/.o/')"
-    "$EMCC" "${CXXFLAGS[@]}" -DPS3BASE_BOOT_PROBE=1 -DPS3BASE_INPUT_BUILTIN=1 -DPS3BASE_NO_RENDERER=1 -c "$f" -o "$o"
+    "$EMCC" "${CXXFLAGS[@]}" -DPS3BASE_BOOT_PROBE=1 -DPS3BASE_INPUT_BUILTIN=1 -DPS3BASE_NO_RENDERER=1 -DPS3BASE_LD_TRAP=1 -c "$f" -o "$o"
 done
 
 echo "== compile lifted PPU"

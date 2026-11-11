@@ -17,3 +17,19 @@ namespace gpu {
 bool g_active = false;
 }  // namespace gpu
 }  // namespace edge
+
+/* Diagnostic only: counts the first reads of an address that no mapped region
+ * covers. Built with -DPS3BASE_LD_TRAP=1; never enabled in a release build. */
+#if PS3BASE_LD_TRAP
+#include <cstdio>
+#include "runtime/memory.h"
+extern "C" int ps3base_ld_probe(uint32_t ea) {
+    static int n = 0;
+    if (n > 12) return 0;
+    if (!vm::is_mapped(ea)) {
+        n++;
+        std::fprintf(stderr, "[unmapped] ld32 at 0x%08x (unmapped read #%d)\n", ea, n);
+    }
+    return 0;
+}
+#endif

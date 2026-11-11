@@ -136,3 +136,44 @@ Un acces a une zone **non mappee rend zero silencieusement** au lieu de faulter.
 pointeur nul et echoue **loin** de la vraie cause, 2 000 instructions plus tard.
 
 C'est un defaut du backend memoire, pas du jeu.
+
+
+---
+
+# RETRACTATION : la lecture de 0x00d72800 n'a jamais lieu
+
+## Ce que j'ai mesure
+
+J'ai instrumente ppu::ld32 sous -DPS3BASE_LD_TRAP=1 pour rapporter toute lecture d'une adresse non mappee,
+et specifiquement la lecture de 0x00d72800.
+
+    unmapped: 0      -- aucune lecture non mappee dans tout le boot
+    d72800 reads: 0  -- l'adresse n'est JAMAIS lue
+
+## Ce que ca invalide
+
+| affirmation du round 196 | statut |
+|---|---|
+| 0x00d72800 n'est pas mappee | non verifie -- et la lecture n'a pas lieu, donc sans objet |
+| la lecture rend zero silencieusement | faux -- aucune lecture |
+| c'est un defaut du backend memoire | faux -- le backend n'est pas sollicite |
+
+J'avais deduit du log des regions (0x10000000, 0x40000000) que l'adresse n'etait pas couverte, sans jamais
+instrumenter la lecture. C'est exactement l'erreur que j'ai commise plusieurs fois dans ce projet : deduire au
+lieu de mesurer.
+
+## Ce qui reste vrai
+
+- r31 = r3 a l'entree de f_005d2b44, et r3 = 0 au moment de l'appel.
+- Une garde posee au milieu d'une fonction n'est jamais consultee par hook_flags.
+- Mes gardes etaient posees avant hooks::init().
+
+## Ce que le code fait vraiment
+
+La sequence ld32(r29+10240) lue dans mc_028.cpp correspond a un site d'appel, mais ce n'est pas celui qui a
+produit le crash : l'adresse n'est jamais executee. Le vrai appelant est ailleurs.
+
+## La prochaine mesure
+
+Instrumenter ppu::call_indirect lui-meme, avec le lr exact et la pile des fonctions traversees, au lieu de
+deviner le site d'appel par lecture de source.
