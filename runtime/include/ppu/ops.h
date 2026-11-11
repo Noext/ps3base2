@@ -141,7 +141,14 @@ inline void xer_put(Context& c, uint64_t v) { c.xer_so = v >> 31 & 1; c.xer_ov =
  * is the one place every control-flow decision passes through, so a trace here
  * sees exactly the labels that were taken, without regenerating out/ppu. */
 extern "C" void ps3base_block_trace(uint32_t bo, uint32_t bi, bool taken);
+extern "C" void ps3base_block_trace_at(uint32_t pc, uint32_t bo, uint32_t bi, bool taken);
 #endif
+/* bc_cond_at carries the guest address of the branch. Without it a branch cannot be
+ * attributed to a function: the lr names the caller of the dispatcher, so a callee
+ * entered from a watched range passes the same filter. The lifter emits this form;
+ * bc_cond stays for code produced before this change. */
+
+
 inline bool bc_cond(Context& c, uint32_t bo, uint32_t bi) {
     if (!(bo & 4)) c.ctr--;
     bool ctr_ok = (bo & 4) || ((c.ctr != 0) ^ ((bo >> 1) & 1));
@@ -149,6 +156,19 @@ inline bool bc_cond(Context& c, uint32_t bo, uint32_t bi) {
     const bool taken = ctr_ok && cond_ok;
 #if PS3BASE_BLOCK_TRACE
     ps3base_block_trace(bo, bi, taken);
+#endif
+    return taken;
+}
+
+/* bc_cond_at carries the guest address of the branch. The lifter emits this form;
+ * bc_cond stays for code produced before the change. */
+inline bool bc_cond_at(Context& c, uint32_t pc, uint32_t bo, uint32_t bi) {
+    if (!(bo & 4)) c.ctr--;
+    bool ctr_ok = (bo & 4) || ((c.ctr != 0) ^ ((bo >> 1) & 1));
+    bool cond_ok = (bo & 16) || (crbit(c, bi) == ((bo >> 3) & 1));
+    const bool taken = ctr_ok && cond_ok;
+#if PS3BASE_BLOCK_TRACE
+    ps3base_block_trace_at(pc, bo, bi, taken);
 #endif
     return taken;
 }
