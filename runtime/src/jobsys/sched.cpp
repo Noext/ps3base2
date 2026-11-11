@@ -101,11 +101,21 @@ void run_item(Executor& x, Item& it) {
     uint64_t t0 = now();
     Tier tier = tier_for(j.module_ea);
     if (tier == Tier::Wws) tier = Tier::Executor;
+    /* No FCSR in WebAssembly: rounding is fixed and there are no FP exception
+     * flags, so the save/set pair is inert there. The variable is kept so the
+     * restore below compiles unchanged. */
+#if defined(__wasm__) || defined(__EMSCRIPTEN__)
+    unsigned csr = 0;
+#else
     unsigned csr = _mm_getcsr();
     _mm_setcsr((csr & ~0x6000u) | 0x6000u | 0x8040u);
+#endif
     if (verify::want(j.module_ea)) verify::run_verified(x, j, tier);
     else exec_job(x, j, tier);
+#if !defined(__wasm__) && !defined(__EMSCRIPTEN__)
     _mm_setcsr(csr);
+#endif
+    (void)csr;
     for (uint32_t i = 0; i < j.ndeps; i++) dep_decrement(j.deps[i], j.spurs);
     uint64_t dt = now() - t0;
     Stats& s = stats();

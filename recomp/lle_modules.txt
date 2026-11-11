@@ -1,27 +1,8 @@
-# The PROVEN list, then only SELF-CONTAINED libraries.
-#
-# Rule (docs/decisions.md D-008): a new title starts from exactly the seven
-# modules Minecraft and GTA run on, and adds only libraries that provide
-# functions and own no dispatcher state. Never libsysutil or its family (np,
-# np2, np_trophy), savedata, the dialogs, NP, the pad or the audio: those hold
-# state the HLE already owns, and lifting them gives it two writers.
 liblv2.prx
 libsysmodule.prx
 libsre.prx
 libgcm_sys.prx
 libfs.prx
-libvdec.prx
-libsmvd2.prx
-# Autonomous additions for this title, each measured to provide imported NIDs:
 libnet.prx
 libfiber.prx
-libssl.prx
-libhttp.prx
-librtc.prx
-# Autonomous additions for Red Dead Redemption, each measured to provide NIDs the
-# proven seven do not:
-libfiber.prx
-libnet.prx
-libssl.prx
-libhttp.prx
 librtc.prx

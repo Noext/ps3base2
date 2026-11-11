@@ -16,6 +16,17 @@
 #include <cstdint>
 
 #if defined(__wasm__) || defined(__EMSCRIPTEN__)
+/* _mm_getcsr/_mm_setcsr control the SSE rounding mode and exception masks. There
+ * is no FCSR in WebAssembly: rounding is fixed to nearest and there are no FP
+ * exception flags. Several SPU/jobsys paths save the control word, change the
+ * rounding mode, and restore it; under wasm those become inert.
+ *
+ * Providing them here as inline no-ops keeps every call site compiling and makes
+ * the divergence explicit in one place, instead of editing a dozen files. */
+/* Emscripten ships _mm_getcsr/_mm_setcsr as macros with their own types, so
+ * redefining them here collides. The real fix is at the two headers that need
+ * them; see DRound in jobsys/jw_dops.h. */
+
 /* __rdtsc appears 81 times across the runtime and headers. Rewriting every site
  * would be churn with no benefit, and would make the native path differ from the
  * ported one. Instead: under wasm, __rdtsc becomes this function, so the same

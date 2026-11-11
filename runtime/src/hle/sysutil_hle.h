@@ -532,17 +532,31 @@ inline void write_video_out_state(uint32_t ea, const DisplayMode& mode, int32_t 
     write_display_mode(ea + 8, mode);
 }
 
-/* cellVideoOutGetState, refs/.../cellVideoOut.cpp:125-163: an index past the
- * device count is DEVICE_NOT_FOUND, the primary reports the active mode, the
- * secondary reports DISABLED with a zeroed mode (:155-157), anything else is
- * UNSUPPORTED_VIDEO_OUT (:160). The previous body ignored both videoOut and
- * deviceIndex, so a secondary query was answered as if it were the primary. */
+/* cellVideoOutGetState, refs/.../cellVideoOut.cpp:125-163.
+ *
+ * The device-count check comes FIRST (:133-136) and the secondary has zero
+ * devices (:431-432), so every query of the secondary returns DEVICE_NOT_FOUND
+ * -- the reference's own 'state = DISABLED' branch at :155-157 is unreachable
+ * for that reason. It is reproduced below anyway so the two cannot drift, and
+ * the tests assert the reachable answer.
+ *
+ * The previous body ignored videoOut and deviceIndex entirely and answered
+ * every query with a hardcoded 720p mode. */
 inline int32_t video_out_get_state(uint32_t video_out, uint32_t device_index, DisplayMode& mode,
                                    int32_t& color_space, int32_t& output_state) {
     uint32_t count = 0;
     const int32_t rc = video_out_number_of_device(video_out, count);
-    if (rc < 0) return rc;
-    if (device_index >= count) return VIDEO_OUT_ERR_DEVICE_NOT_FOUND;   /* :133-136 */
+    /* :133-136 reads, verbatim:
+     *     if (device_count < 0 || deviceIndex >= static_cast<u32>(device_count))
+     *         return CELL_VIDEO_OUT_ERROR_DEVICE_NOT_FOUND;
+     * so an UNSUPPORTED_VIDEO_OUT from the count is COLLAPSED into
+     * DEVICE_NOT_FOUND here. Returning the underlying code would be a value
+     * this function never produces, and a title that branches on it would take
+     * a path firmware never takes. (cellAudioOut differs: it returns the
+     * negative count as-is, cellAudioOut.cpp:291-296.) */
+    if (rc < 0 || device_index >= count) return VIDEO_OUT_ERR_DEVICE_NOT_FOUND;
+    /* The device count is therefore checked before the switch, and the
+     * secondary has none, so its DISABLED branch at :155-157 is unreachable. */
     if (video_out == VIDEO_OUT_SECONDARY) {
         mode = DisplayMode{};
         color_space = 0;

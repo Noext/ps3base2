@@ -1,0 +1,204 @@
+<!--Sce-Np-Trophy-Signature: 4c39b98c01000000000000007e067ef209b3441ab11a964a84659ba6706a71e203cb02f9f4662e2d3e875c88640d3e2c0d26cebe201a472e9634377286d06579fa1550f937be0c21a63ea7a42907e04edc8499bdecdc811f63621f1ffd76bc0369f6c3f50342e0e5ef2b6167e611a05563e4a9a1e21c5326eac09d327f8af8b91041ab74337121b5a5a99b4c485f3616b7755fe2f30d685a4a1b23797216e8b8-->
+<trophyconf version="1.1">
+ <npcommid>NPWR00867_00</npcommid>
+ <trophyset-version>01.02</trophyset-version>
+ <parental-level license-area="default">0</parental-level>
+ <title-name>Red Dead Redemption</title-name>
+ <title-detail>Trophies for Red Dead Redemption</title-detail>
+ <trophy id="000" hidden="no" ttype="P" pid="-1">
+  <name>Legend of the West</name>
+  <detail>You've become a true legend of the west!</detail>
+ </trophy>
+ <trophy id="001" hidden="yes" ttype="B" pid="000">
+  <name>That Government Boy</name>
+  <detail>Complete "Exodus in America".</detail>
+ </trophy>
+ <trophy id="002" hidden="yes" ttype="B" pid="000">
+  <name>Land of Opportunity</name>
+  <detail>Complete "The Assault on Fort Mercer".</detail>
+ </trophy>
+ <trophy id="003" hidden="yes" ttype="B" pid="000">
+  <name>Sons of Mexico</name>
+  <detail>Complete "The Gates of El Presidio".</detail>
+ </trophy>
+ <trophy id="004" hidden="yes" ttype="B" pid="000">
+  <name>No More Fancy Words</name>
+  <detail>Complete "An Appointed Time".</detail>
+ </trophy>
+ <trophy id="005" hidden="yes" ttype="B" pid="000">
+  <name>A Savage Soul</name>
+  <detail>Complete "At Home with Dutch".</detail>
+ </trophy>
+ <trophy id="006" hidden="yes" ttype="B" pid="000">
+  <name>The Benefits of Civilization</name>
+  <detail>Complete "And the Truth Will Set You Free".</detail>
+ </trophy>
+ <trophy id="007" hidden="yes" ttype="B" pid="000">
+  <name>Into the Sunset</name>
+  <detail>Complete "The Last Enemy That Shall Be Destroyed".</detail>
+ </trophy>
+ <trophy id="008" hidden="yes" ttype="G" pid="000">
+  <name>Nurture or Nature?</name>
+  <detail>Complete "Remember My Family".</detail>
+ </trophy>
+ <trophy id="009" hidden="no" ttype="B" pid="000">
+  <name>High Roller</name>
+  <detail>Win over 2000 chips in a hand of Poker.</detail>
+ </trophy>
+ <trophy id="010" hidden="no" ttype="B" pid="000">
+  <name>No Dice</name>
+  <detail>Complete a game of Liar's Dice without losing a single die.</detail>
+ </trophy>
+ <trophy id="011" hidden="no" ttype="B" pid="000">
+  <name>What About Hand Grenades?</name>
+  <detail>Get a ringer in a game of Horseshoes.</detail>
+ </trophy>
+ <trophy id="012" hidden="no" ttype="S" pid="000">
+  <name>Austin Overpowered</name>
+  <detail>Complete Twin Rocks,  Pike's Basin, and Gaptooth Breach Hideouts in Single Player.</detail>
+ </trophy>
+ <trophy id="013" hidden="no" ttype="S" pid="000">
+  <name>Evil Spirits</name>
+  <detail>Complete Tumbleweed and Tesoro Azul Hideouts in Single Player.</detail>
+ </trophy>
+ <trophy id="014" hidden="no" ttype="S" pid="000">
+  <name>Instinto Asesino</name>
+  <detail>Complete Fort Mercer and Nosalida Hideouts in Single Player.</detail>
+ </trophy>
+ <trophy id="015" hidden="no" ttype="B" pid="000">
+  <name>Fightin' Around the World</name>
+  <detail>Knock someone out in melee in every saloon in the game in Single Player.</detail>
+ </trophy>
+ <trophy id="016" hidden="no" ttype="B" pid="000">
+  <name>Strange Things are Afoot</name>
+  <detail>Complete a task for a Stranger.</detail>
+ </trophy>
+ <trophy id="017" hidden="no" ttype="S" pid="000">
+  <name>People are Still Strange</name>
+  <detail>Complete 15 tasks for Strangers.</detail>
+ </trophy>
+ <trophy id="018" hidden="no" ttype="B" pid="000">
+  <name>Buckin' Awesome</name>
+  <detail>Break the Kentucky Saddler, the American Standardbred, and the Hungarian Half-bred. </detail>
+ </trophy>
+ <trophy id="019" hidden="no" ttype="B" pid="000">
+  <name>Clemency Pays</name>
+  <detail>Capture a bounty alive.</detail>
+ </trophy>
+ <trophy id="020" hidden="yes" ttype="B" pid="000">
+  <name>Dastardly</name>
+  <detail>Place a hogtied woman on the train tracks, and witness her death by train.</detail>
+ </trophy>
+ <trophy id="021" hidden="no" ttype="B" pid="000">
+  <name>Exquisite Taste</name>
+  <detail>Purchase a rare weapon from a gunsmith.</detail>
+ </trophy>
+ <trophy id="022" hidden="no" ttype="B" pid="000">
+  <name>Bearly Legal</name>
+  <detail>Kill and skin 18 grizzly bears.</detail>
+ </trophy>
+ <trophy id="023" hidden="no" ttype="B" pid="000">
+  <name>He Cleans Up Well!</name>
+  <detail>Obtain the Elegant Suit.</detail>
+ </trophy>
+ <trophy id="024" hidden="no" ttype="B" pid="000">
+  <name>More than a Fistful</name>
+  <detail>Earn $10,000 in Single Player.</detail>
+ </trophy>
+ <trophy id="025" hidden="no" ttype="B" pid="000">
+  <name>Frontiersman</name>
+  <detail>Obtain Legendary rank in any Single Player Ambient Challenge.</detail>
+ </trophy>
+ <trophy id="026" hidden="no" ttype="S" pid="000">
+  <name>The Gunslinger</name>
+  <detail>Score a headshot on any enemy using Expert targeting mode.</detail>
+ </trophy>
+ <trophy id="027" hidden="no" ttype="B" pid="000">
+  <name>Man of Honor / Chivalry's Dead</name>
+  <detail>Attain highest Fame rank and either highest Honor rank or lowest Honor rank.</detail>
+ </trophy>
+ <trophy id="028" hidden="no" ttype="B" pid="000">
+  <name>Gold Medal</name>
+  <detail>Earn a Gold Medal Rank for a combat mission in Single Player.</detail>
+ </trophy>
+ <trophy id="029" hidden="yes" ttype="B" pid="000">
+  <name>Manifest Destiny</name>
+  <detail>Kill the last buffalo in the Great Plains in Single Player.</detail>
+ </trophy>
+ <trophy id="030" hidden="no" ttype="B" pid="000">
+  <name>On the Trail of de Vaca</name>
+  <detail>Uncover every location on the map in Single Player.</detail>
+ </trophy>
+ <trophy id="031" hidden="no" ttype="B" pid="000">
+  <name>Friends in High Places</name>
+  <detail>Use a pardon letter with more than $5000 bounty in Single Player.</detail>
+ </trophy>
+ <trophy id="032" hidden="no" ttype="G" pid="000">
+  <name>Redeemed</name>
+  <detail>Attain 100% in the Single Player Game Completion stat.</detail>
+ </trophy>
+ <trophy id="033" hidden="yes" ttype="B" pid="000">
+  <name>Spurred to Victory</name>
+  <detail>Complete 20 story missions without switching to a new horse at a hitching post.</detail>
+ </trophy>
+ <trophy id="034" hidden="yes" ttype="B" pid="000">
+  <name>Heading South on a White Bronco</name>
+  <detail>Evade the US Marshals while riding the Hungarian Half-Bred horse in Single Player.</detail>
+ </trophy>
+ <trophy id="035" hidden="no" ttype="S" pid="000">
+  <name>Mowing Them Down</name>
+  <detail>Kill 500 enemies with a mounted weapon in any game mode.</detail>
+ </trophy>
+ <trophy id="036" hidden="no" ttype="S" pid="000">
+  <name>In a Hail of Bullets</name>
+  <detail>Kill 500 enemies with any pistol or revolver in any game mode.</detail>
+ </trophy>
+ <trophy id="037" hidden="no" ttype="S" pid="000">
+  <name>Long Arm of Marston</name>
+  <detail>Kill 500 enemies with any rifle, repeater, or shotgun in any game mode.</detail>
+ </trophy>
+ <trophy id="038" hidden="no" ttype="B" pid="000">
+  <name>Bullseye</name>
+  <detail>Get 250 headshots in any game mode.</detail>
+ </trophy>
+ <trophy id="039" hidden="no" ttype="B" pid="000">
+  <name>Unnatural Selection</name>
+  <detail>Kill one of every animal species in the game in any game mode.</detail>
+ </trophy>
+ <trophy id="040" hidden="no" ttype="S" pid="000">
+  <name>Have Gun Will Travel </name>
+  <detail>Complete all Hideouts in a single public Free Roam session.</detail>
+ </trophy>
+ <trophy id="041" hidden="no" ttype="B" pid="000">
+  <name>Slow on the Draw</name>
+  <detail>Get 10 assists in a single Hideout in a public Free Roam session.</detail>
+ </trophy>
+ <trophy id="042" hidden="no" ttype="B" pid="000">
+  <name>Hit the Trail</name>
+  <detail>Get from Blackwater to Escalera before sundown in a public Free Roam session.</detail>
+ </trophy>
+ <trophy id="043" hidden="no" ttype="B" pid="000">
+  <name>Posse Up!</name>
+  <detail>Create a posse and get the maximum number of members.</detail>
+ </trophy>
+ <trophy id="044" hidden="no" ttype="S" pid="000">
+  <name>The Quick and Everyone Else...</name>
+  <detail>Be the top scoring player in any three consecutive FFA games in public matches.</detail>
+ </trophy>
+ <trophy id="045" hidden="no" ttype="S" pid="000">
+  <name>How the West Was Won</name>
+  <detail>Reach the top rank for multiplayer experience.</detail>
+ </trophy>
+ <trophy id="046" hidden="no" ttype="S" pid="000">
+  <name>Go Team!</name>
+  <detail>Be on the winning team for four consecutive victories in any team based game in public matches.</detail>
+ </trophy>
+ <trophy id="047" hidden="no" ttype="B" pid="000">
+  <name>Most Wanted</name>
+  <detail>Become a Public Enemy for 10 minutes and escape alive in a public Free Roam session.&#x0a;</detail>
+ </trophy>
+ <trophy id="048" hidden="no" ttype="B" pid="000">
+  <name>Red Dead Rockstar</name>
+  <detail>Kill a Rockstar or someone with this Trophy in a public multiplayer match&#x0a;</detail>
+ </trophy>
+</trophyconf>

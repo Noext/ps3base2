@@ -2,7 +2,7 @@ import os
 import struct
 import sys
 
-from analysis import Image, discover, islands, looks_like_function, branch_target, bo_always, sext
+from analysis import Image, discover, islands, looks_like_function, branch_target, bo_always, sext, load_switch_tables
 from isa import mnemonic
 
 
@@ -961,8 +961,34 @@ def main(manifest_path, nid_db, out_dir, chunk_bytes="0x19000"):
             if not any(m["text_lo"] <= a < m["text_hi"] for m in image_spans):
                 print("dynamic seed 0x%08x names no current image -- stale (the modules "
                       "moved); the discovery loop re-records it at the right base" % a)
+    # Hand-written switch tables sit beside the output, like the seeds.
+    tables_path = os.path.join(os.path.dirname(os.path.abspath(out_dir)), "gen", "switch_tables.toml")
+    manual = load_switch_tables(tables_path)
+    if manual:
+        print("switch tables: %d hand-written entr(y/ies) from %s" % (len(manual), tables_path))
     for idx, spec in enumerate(manifest):
         img = Image(os.path.join(root, spec["elf"]), nids)
+        # The file is global but a table address belongs to one image: keep only
+        # the entries whose bctr and targets live in THIS image's code.
+        img.manual_tables = {}
+        for b, t in manual.items():
+            if not img.in_text(b):
+                continue
+            # Compute the targets from the image unless the file overrides them,
+            # so a count typo cannot silently truncate the switch.
+            targets = t.get("targets")
+            if not targets:
+                targets = []
+                for k in range(t["count"]):
+                    v = img.elf.u32(t["base"] + k * 4)
+                    if v is None or not img.in_text(v):
+                        break
+                    targets.append(v)
+            img.manual_tables[b] = {"base": t["base"], "count": len(targets),
+                                    "bound": t["count"], "targets": targets,
+                                    "default": None}
+            print("%-16s switch table at bctr 0x%08x: %d target(s) from 0x%08x"
+                  % (spec["name"], b, len(targets), t["base"]))
         # A seed belongs to the image whose code range contains it, not to the
         # first image. Red Dead Redemption's first missing target was in
         # libsysutil, an LLE module; handing that address to the game's lift would
@@ -1056,6 +1082,18 @@ def main(manifest_path, nid_db, out_dir, chunk_bytes="0x19000"):
     t += [f'    {{"{exp["module"]}", 0x{exp["nid"]}u, "{exp["name"] or ""}", {exp["image"]}, 0x{exp["opd"]:x}}},' for exp in exports]
     t += ["};", f"const uint32_t export_count = {len(exports)};", "", "}"]
     open(os.path.join(out_dir, "table.cpp"), "w").write(NL.join(t) + NL)
+    # Layout fingerprint: the base each image was LIFTED at, written beside the
+    # generated code. The runtime compares it against the modules it actually
+    # LOADS and refuses to start when they disagree.
+    #
+    # This exists because the two drifted once: a manifest with libfiber, libnet,
+    # libssl, libhttp and librtc listed twice lifted 172 images instead of 13, and
+    # the run stopped at "unknown indirect target 0x3000d360" -- a lift-time base
+    # that the loaded liblv2 no longer matched. An indirect-target error is the
+    # worst possible report of that: it names a random address in a module that is
+    # completely fine.
+    open(os.path.join(out_dir, "layout.txt"), "w").write(
+        "".join("%s 0x%08x 0x%08x\n" % (im["name"], im["text_lo"], im["text_hi"]) for im in images))
     print(f"total functions {len(all_funcs)} imports {len(imports)} exports {len(exports)}")
     print("unimplemented:", sorted(unimpl.items(), key=lambda kv: -kv[1]))
 

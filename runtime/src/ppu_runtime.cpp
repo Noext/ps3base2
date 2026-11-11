@@ -370,6 +370,25 @@ void call_indirect(Context& ctx, uint8_t* base, uint32_t addr) {
         }
         /* Name the object the vtable came from: the null is a field of a structure
          * the guest never initialised, and the register holding it says which. */
+        /* Every register that holds a plausible guest address, plus the words
+         * around each. An indirect target that is the MIDDLE of an instruction
+         * means the pointer came from somewhere wrong, and the register holding
+         * that pointer is the only way to find where: the ctr value alone says
+         * nothing about which structure it was read from. */
+        for (int r = 0; r < 32; r++) {
+            const uint64_t v = ctx.gpr[r];
+            if (v < 0x10000 || v > 0xC0000000ull) continue;
+            const uint32_t a = static_cast<uint32_t>(v);
+            if (!vm::range_mapped(a, 4)) continue;
+            char words[160];
+            int n = 0;
+            for (int k = -4; k < 4 && n < 150; k++) {
+                const uint32_t ea = a + k * 4;
+                n += std::snprintf(words + n, sizeof words - n, " %08x",
+                                   vm::range_mapped(ea, 4) ? vm::read32(ea) : 0u);
+            }
+            LOG_INFO("ppu", "  r%-2d = 0x%08x  around:%s", r, a, words);
+        }
         LOG_FATAL("ppu",
                   "unknown indirect target 0x%08x (lr=0x%08llx, thread 0x%x) r3=0x%llx r4=0x%llx "
                   "r9=0x%llx r31=0x%llx ctr=0x%llx",
@@ -377,6 +396,7 @@ void call_indirect(Context& ctx, uint8_t* base, uint32_t addr) {
                   static_cast<unsigned long long>(ctx.gpr[3]), static_cast<unsigned long long>(ctx.gpr[4]),
                   static_cast<unsigned long long>(ctx.gpr[9]), static_cast<unsigned long long>(ctx.gpr[31]),
                   static_cast<unsigned long long>(ctx.ctr));
+
     }
     /* Coverage: count distinct lifted functions the boot actually executes. That
      * number decides whether dead-code elimination is worth the plumbing: near

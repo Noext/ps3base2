@@ -300,17 +300,25 @@ int main() {
     CHECK(su::video_out_get_state(su::VIDEO_OUT_PRIMARY, 1, mode, color_space, output_state) ==
               su::VIDEO_OUT_ERR_DEVICE_NOT_FOUND,
           "a device index past the count is DEVICE_NOT_FOUND");
-    CHECK(su::video_out_get_state(su::VIDEO_OUT_SECONDARY, 0, mode, color_space, output_state) == 0,
-          "the secondary video-out state is CELL_OK");
-    CHECK(output_state == su::VIDEO_OUT_OUTPUT_STATE_DISABLED && mode.resolution_id == 0 &&
-              mode.refresh_rates == 0,
-          "the secondary reports DISABLED with a zeroed display mode (:155-157)");
+    /* The secondary has zero devices, and the count is checked before the
+     * switch (:133-136), so this is DEVICE_NOT_FOUND -- the DISABLED branch at
+     * :155-157 is unreachable because of it. */
+    CHECK(su::video_out_get_state(su::VIDEO_OUT_SECONDARY, 0, mode, color_space, output_state) ==
+              su::VIDEO_OUT_ERR_DEVICE_NOT_FOUND,
+          "the secondary has no device, so its state is DEVICE_NOT_FOUND (:133-136)");
+    /* refs/.../cellVideoOut.cpp:133-136 collapses a negative device count into
+     * DEVICE_NOT_FOUND, so that is what an unsupported videoOut produces here
+     * -- the underlying UNSUPPORTED_VIDEO_OUT is a code this call never
+     * returns. */
     CHECK(su::video_out_get_state(5, 0, mode, color_space, output_state) ==
-              su::VIDEO_OUT_ERR_UNSUPPORTED_VIDEO_OUT,
-          "any other videoOut is UNSUPPORTED_VIDEO_OUT");
+              su::VIDEO_OUT_ERR_DEVICE_NOT_FOUND,
+          "an unsupported videoOut collapses into DEVICE_NOT_FOUND (:133-136)");
 
+    /* The secondary answer above wrote nothing into 'mode'; use an explicitly
+     * empty one so the offsets are checked against known values. */
     std::memset(vm::ptr(buf), 0xAA, 0x20);
-    su::write_video_out_state(buf, mode, su::VIDEO_OUT_COLOR_SPACE_RGB, su::VIDEO_OUT_OUTPUT_STATE_DISABLED);
+    su::write_video_out_state(buf, su::DisplayMode{}, su::VIDEO_OUT_COLOR_SPACE_RGB,
+                              su::VIDEO_OUT_OUTPUT_STATE_DISABLED);
     CHECK(vm::ptr(buf)[0] == su::VIDEO_OUT_OUTPUT_STATE_DISABLED, "CellVideoOutState.state is at offset 0");
     CHECK(vm::ptr(buf)[1] == su::VIDEO_OUT_COLOR_SPACE_RGB, "CellVideoOutState.colorSpace is at offset 1");
     CHECK(vm::ptr(buf + 8)[0] == 0, "displayMode.resolutionId is at offset 8");
@@ -458,7 +466,8 @@ int main() {
     CHECK(su::cache_clear() == su::SYSCACHE_ERR_NOTMOUNTED,
           "a clear before any mount is NOTMOUNTED, not a success");
     CHECK(su::valid_cache_id("BLES00680"), "an upper-case id is valid");
-    CHECK(su::valid_cache_id("abc-123_x"), "digits, '-' and '_' are valid");
+    CHECK(su::valid_cache_id("ABC-123_X"), "digits, '-' and '_' are valid");
+    CHECK(!su::valid_cache_id("abc"), "lower case is not: sysutil_check_name_string rejects it (:452-509)");
     CHECK(su::valid_cache_id(""), "an empty id is explicitly allowed (:193)");
     CHECK(!su::valid_cache_id("_lead"), "an id starting with '_' is invalid");
     CHECK(!su::valid_cache_id("lower"), "lower case is invalid");

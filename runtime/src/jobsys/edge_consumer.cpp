@@ -1032,7 +1032,13 @@ bool on_wait_previous(ppu::Context& ctx) {
     uint32_t counter = 0xa0b740 + 4 * prev;
     if (!vm::read16(counter)) return g_prev_guard ? g_prev_guard(ctx) : false;
     static thread_local bool csr = false;
+    /* No FCSR in WebAssembly: the save/restore pair is inert there, but the
+     * variable stays so the non-wasm path is unchanged. */
+#if defined(__wasm__) || defined(__EMSCRIPTEN__)
+    unsigned saved = 0;
+#else
     unsigned saved = _mm_getcsr();
+#endif
     if (!csr) spu::hle::install_builtin();
     csr = true;
 #if !defined(__wasm__) && !defined(__EMSCRIPTEN__)
@@ -1049,7 +1055,10 @@ bool on_wait_previous(ppu::Context& ctx) {
         else if (i < 2048) host::yield();
         else break;
     }
+#if !defined(__wasm__) && !defined(__EMSCRIPTEN__)
     _mm_setcsr(saved);
+#endif
+    (void)saved;
     return g_prev_guard ? g_prev_guard(ctx) : false;
 }
 

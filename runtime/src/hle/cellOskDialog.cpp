@@ -1,4 +1,5 @@
 #include "common.h"
+#include "sysutil_hle.h"
 #include "runtime/sysutil_events.h"
 
 #include <cstdlib>
@@ -175,8 +176,27 @@ HLE_FUNC(cellSysutil, cellOskDialogUnloadAsync) {
     return ret(ctx, 0);
 }
 
+/* cellOskDialogSetLayoutMode(s32 layoutMode): refs/.../cellOskDialog.cpp:973-985
+ * stores the mode and its alignments and ALWAYS returns CELL_OK -- there is no
+ * validation in the reference. Nothing here draws an OSK, so the stored value
+ * is the whole of what the call can do; it still returns what the console
+ * returns, which is what the caller branches on. */
 HLE_FUNC(cellSysutil, cellOskDialogSetLayoutMode) { return ret(ctx, 0); }
-HLE_FUNC(cellSysutil, cellOskDialogSetKeyLayoutOption) { return ret(ctx, 0); }
+
+/* cellOskDialogSetKeyLayoutOption(option): refs/.../cellOskDialog.cpp:950-962.
+ * An option of 0, or one above 3, is CELL_OSKDIALOG_ERROR_PARAM (0x8002b504).
+ * The previous body returned CELL_OK for every value, so a title that passed a
+ * bad option was told it had been applied. */
+HLE_FUNC(cellSysutil, cellOskDialogSetKeyLayoutOption) {
+    const uint32_t option = a32(ctx, 0);
+    const int32_t rc = sysutil::osk_set_key_layout_option(option);
+    if (rc < 0) LOG_WARN("cellOsk", "SetKeyLayoutOption(0x%x) -> PARAM", option);
+    ret(ctx, rc);
+}
+
+/* cellOskDialogSetInitialKeyLayout: not in the reference's export list with a
+ * validation body; the title uses it to preselect a layout. Accepted as
+ * firmware does (no error path is documented at refs/.../cellOskDialog.cpp). */
 HLE_FUNC(cellSysutil, cellOskDialogSetInitialKeyLayout) { return ret(ctx, 0); }
 HLE_FUNC(cellSysutil, cellOskDialogAddSupportLanguage) { return ret(ctx, 0); }
 HLE_FUNC(cellSysutil, cellOskDialogSetDefaultResponse) { return ret(ctx, 0); }

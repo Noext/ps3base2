@@ -1,0 +1,140 @@
+<!--Sce-Np-Trophy-Signature: 4c39b98c01000000000000001ff903cceed7994af815809ff723a7a21d0a21a0a733b33f3344e245425880f2de447862c2ec6c013bb8739936a9a69a6b1e007270405edc79b07aad487b4d7fd81b0dc00c48a07d7837786b638c24fbf2de7aff7313111f1df8a731e65a920f93688ac330184545eeadeb17024d866d58b94d38a450bc5cf923ef026cbd836ccec4aa5c5779d71656a90e046918eb63d0678c0c-->
+<trophyconf version="1.1" policy="large">
+ <npcommid>NPWR10029_00</npcommid>
+ <trophyset-version>01.00</trophyset-version>
+ <parental-level license-area="default">0</parental-level>
+ <title-name>Grand Theft Auto: San Andreas™</title-name>
+ <title-detail>Grand Theft Auto: San Andreas™</title-detail>
+ <trophy id="000" hidden="no" ttype="P" pid="-1">
+  <name>The Key to San Andreas</name>
+  <detail>Unlock all trophies.</detail>
+ </trophy>
+ <trophy id="001" hidden="no" ttype="B" pid="000">
+  <name>Getting Started</name>
+  <detail>Complete Big Smoke.</detail>
+ </trophy>
+ <trophy id="002" hidden="no" ttype="B" pid="000">
+  <name>Represent</name>
+  <detail>Purchase a Grove St Tattoo.</detail>
+ </trophy>
+ <trophy id="003" hidden="no" ttype="G" pid="000">
+  <name>The End of the Line</name>
+  <detail>Complete End of the Line.</detail>
+ </trophy>
+ <trophy id="004" hidden="no" ttype="B" pid="000">
+  <name>Hustle Some</name>
+  <detail>Win a game of pool.</detail>
+ </trophy>
+ <trophy id="005" hidden="no" ttype="S" pid="000">
+  <name>A Legitimate Business</name>
+  <detail>Export all three car lists.</detail>
+ </trophy>
+ <trophy id="006" hidden="no" ttype="B" pid="000">
+  <name>The American Dream</name>
+  <detail>Purchase any house.</detail>
+ </trophy>
+ <trophy id="007" hidden="no" ttype="B" pid="000">
+  <name>Get a Pump</name>
+  <detail>Do a dumbbell curl or benchpress at any gym.</detail>
+ </trophy>
+ <trophy id="008" hidden="no" ttype="B" pid="000">
+  <name>Pay 'n' Spray</name>
+  <detail>Use a Pay 'n' Spray with wanted level.</detail>
+ </trophy>
+ <trophy id="009" hidden="no" ttype="B" pid="000">
+  <name>Bike or Biker</name>
+  <detail>Complete BMX or NRG challenge.</detail>
+ </trophy>
+ <trophy id="010" hidden="no" ttype="B" pid="000">
+  <name>Beat the Cock</name>
+  <detail>Win the Beat the Cock marathon.</detail>
+ </trophy>
+ <trophy id="011" hidden="no" ttype="B" pid="000">
+  <name>Metrosexual</name>
+  <detail>Spend $6,969 on clothes, hair, and tattoos.</detail>
+ </trophy>
+ <trophy id="012" hidden="no" ttype="S" pid="000">
+  <name>School's Out</name>
+  <detail>Complete a vehicle school.</detail>
+ </trophy>
+ <trophy id="013" hidden="no" ttype="S" pid="000">
+  <name>Serial Offender</name>
+  <detail>Get arrested 50 times.</detail>
+ </trophy>
+ <trophy id="014" hidden="no" ttype="B" pid="000">
+  <name>Freight Date</name>
+  <detail>Take the train between cities.</detail>
+ </trophy>
+ <trophy id="015" hidden="no" ttype="B" pid="000">
+  <name>Horror of the Santa Maria</name>
+  <detail>Drown.</detail>
+ </trophy>
+ <trophy id="016" hidden="no" ttype="B" pid="000">
+  <name>Assert Yourself Next Time</name>
+  <detail>Fail a mission.</detail>
+ </trophy>
+ <trophy id="017" hidden="no" ttype="S" pid="000">
+  <name>What the City Needs</name>
+  <detail>Complete 12 levels of Vigilante.</detail>
+ </trophy>
+ <trophy id="018" hidden="no" ttype="S" pid="000">
+  <name>Savior</name>
+  <detail>Complete 12 levels of Paramedic.</detail>
+ </trophy>
+ <trophy id="019" hidden="no" ttype="S" pid="000">
+  <name>Rescue a Kitten Too?</name>
+  <detail>Complete 12 levels of Firefighter.</detail>
+ </trophy>
+ <trophy id="020" hidden="no" ttype="S" pid="000">
+  <name>Yes I Speak English</name>
+  <detail>Reach 50 fares in Taxi Mode.</detail>
+ </trophy>
+ <trophy id="021" hidden="no" ttype="S" pid="000">
+  <name>Time to Kill</name>
+  <detail>Watch Credits to the end.</detail>
+ </trophy>
+ <trophy id="022" hidden="yes" ttype="S" pid="000">
+  <name>What happens in Las Venturas...</name>
+  <detail>Complete Yay Ka-Boom-Boom.</detail>
+ </trophy>
+ <trophy id="023" hidden="yes" ttype="S" pid="000">
+  <name>All Dressed Up for San Fierro</name>
+  <detail>Complete The Green Sabre.</detail>
+ </trophy>
+ <trophy id="024" hidden="yes" ttype="B" pid="000">
+  <name>Home Run</name>
+  <detail>Achieve 'sex' with any of the girlfriends.</detail>
+ </trophy>
+ <trophy id="025" hidden="yes" ttype="B" pid="000">
+  <name>What are the Odds</name>
+  <detail>Win a race in Inside Track Betting.</detail>
+ </trophy>
+ <trophy id="026" hidden="yes" ttype="B" pid="000">
+  <name>Double or Nothin'</name>
+  <detail>Put the maximum bet on red or black and win.</detail>
+ </trophy>
+ <trophy id="027" hidden="yes" ttype="B" pid="000">
+  <name>Assassin</name>
+  <detail>Complete a stealth kill.</detail>
+ </trophy>
+ <trophy id="028" hidden="yes" ttype="G" pid="000">
+  <name>Original Gangster</name>
+  <detail>Reach maximum respect.</detail>
+ </trophy>
+ <trophy id="029" hidden="yes" ttype="S" pid="000">
+  <name>The Los Santos Slayer</name>
+  <detail>Reach a total kill count of 4,000.</detail>
+ </trophy>
+ <trophy id="030" hidden="yes" ttype="S" pid="000">
+  <name>Public Enemy No. 1</name>
+  <detail>Reach 6 wanted stars.</detail>
+ </trophy>
+ <trophy id="031" hidden="yes" ttype="G" pid="000">
+  <name>Chick Magnet</name>
+  <detail>Achieve maximum sex appeal.</detail>
+ </trophy>
+ <trophy id="032" hidden="yes" ttype="G" pid="000">
+  <name>Grove Street War Lord</name>
+  <detail>Capture 30 territories.</detail>
+ </trophy>
+</trophyconf>

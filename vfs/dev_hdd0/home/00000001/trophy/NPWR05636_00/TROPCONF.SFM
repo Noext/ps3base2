@@ -1,0 +1,124 @@
+<!--Sce-Np-Trophy-Signature: 4c39b98c0100000000000000dbd6af3cd771784148574cfe07abfe39825ef55046a57cedf63cc51fd641e234af88b76e9e71e6f722b9def2abc87502c6da61f58379791eb23f6459b79184faccd94663075614aeff8822ac4dd05379c00679f6931c83e32f4ef3fbe9f38b1696b7e4dce97a3ac4cec879acccfb77b503742919654da55156b189c719e54e2c9e6660e46fc51daab7b6873e324a5d7c01269c8d-->
+<trophyconf version="1.1" policy="large">
+ <npcommid>NPWR05636_00</npcommid>
+ <trophyset-version>01.02</trophyset-version>
+ <parental-level license-area="default">0</parental-level>
+ <title-name>Minecraft: PlayStation®3 Edition</title-name>
+ <title-detail>Minecraft Trophy Set</title-detail>
+ <trophy id="000" hidden="no" ttype="P" pid="-1">
+  <name>Awarded all trophies</name>
+  <detail>All trophies have been awarded</detail>
+ </trophy>
+ <trophy id="001" hidden="no" ttype="B" pid="000">
+  <name>Taking Inventory</name>
+  <detail>Open your inventory.</detail>
+ </trophy>
+ <trophy id="002" hidden="no" ttype="B" pid="000">
+  <name>Getting Wood</name>
+  <detail>Punch a tree until the block of wood pops out.</detail>
+ </trophy>
+ <trophy id="003" hidden="no" ttype="B" pid="000">
+  <name>Benchmarking</name>
+  <detail>Craft a workbench with four blocks of wooden planks.</detail>
+ </trophy>
+ <trophy id="004" hidden="no" ttype="B" pid="000">
+  <name>Time to Mine!</name>
+  <detail>Use planks and sticks to make a pickaxe.</detail>
+ </trophy>
+ <trophy id="005" hidden="no" ttype="B" pid="000">
+  <name>Hot Topic</name>
+  <detail>Construct a furnace out of eight cobblestone blocks.</detail>
+ </trophy>
+ <trophy id="006" hidden="no" ttype="S" pid="000">
+  <name>Acquire Hardware</name>
+  <detail>Smelt an iron ingot.</detail>
+ </trophy>
+ <trophy id="007" hidden="no" ttype="B" pid="000">
+  <name>Time to Farm!</name>
+  <detail>Use planks and sticks to make a hoe.</detail>
+ </trophy>
+ <trophy id="008" hidden="no" ttype="S" pid="000">
+  <name>Bake Bread</name>
+  <detail>Turn wheat into bread.</detail>
+ </trophy>
+ <trophy id="009" hidden="no" ttype="S" pid="000">
+  <name>The Lie</name>
+  <detail>Bake a cake using wheat, sugar, milk and eggs!</detail>
+ </trophy>
+ <trophy id="010" hidden="no" ttype="B" pid="000">
+  <name>Getting an Upgrade</name>
+  <detail>Construct a better pickaxe.</detail>
+ </trophy>
+ <trophy id="011" hidden="no" ttype="S" pid="000">
+  <name>Delicious Fish</name>
+  <detail>Catch and cook a fish!</detail>
+ </trophy>
+ <trophy id="012" hidden="no" ttype="G" pid="000">
+  <name>On A Rail</name>
+  <detail>Travel by minecart to a point at least 500m in a single direction from where you started.</detail>
+ </trophy>
+ <trophy id="013" hidden="no" ttype="B" pid="000">
+  <name>Time to Strike!</name>
+  <detail>Use planks and sticks to make a sword.</detail>
+ </trophy>
+ <trophy id="014" hidden="no" ttype="B" pid="000">
+  <name>Monster Hunter</name>
+  <detail>Attack and destroy a monster.</detail>
+ </trophy>
+ <trophy id="015" hidden="no" ttype="B" pid="000">
+  <name>Cow Tipper</name>
+  <detail>Harvest some leather.</detail>
+ </trophy>
+ <trophy id="016" hidden="no" ttype="G" pid="000">
+  <name>When Pigs Fly</name>
+  <detail>Use a saddle to ride a pig, then have the pig get hurt from fall damage while riding it.</detail>
+ </trophy>
+ <trophy id="017" hidden="no" ttype="S" pid="000">
+  <name>Leader Of The Pack</name>
+  <detail>Befriend five wolves.</detail>
+ </trophy>
+ <trophy id="018" hidden="no" ttype="B" pid="000">
+  <name>MOAR Tools</name>
+  <detail>Construct one type of each tool (one pickaxe, one spade, one axe and one hoe).</detail>
+ </trophy>
+ <trophy id="019" hidden="no" ttype="S" pid="000">
+  <name>Dispense With This</name>
+  <detail>Construct a Dispenser.</detail>
+ </trophy>
+ <trophy id="020" hidden="no" ttype="S" pid="000">
+  <name>Into The Nether</name>
+  <detail>Construct a Nether Portal.</detail>
+ </trophy>
+ <trophy id="021" hidden="no" ttype="S" pid="000">
+  <name>Sniper Duel</name>
+  <detail>Kill a skeleton with an arrow from more than 50 meters.</detail>
+ </trophy>
+ <trophy id="022" hidden="no" ttype="G" pid="000">
+  <name>DIAMONDS!</name>
+  <detail>Acquire diamonds with your iron tools</detail>
+ </trophy>
+ <trophy id="023" hidden="no" ttype="G" pid="000">
+  <name>Return to Sender</name>
+  <detail>Destroy a Ghast with a fireball</detail>
+ </trophy>
+ <trophy id="024" hidden="no" ttype="S" pid="000">
+  <name>Into Fire</name>
+  <detail>Relieve a Blaze of its rod</detail>
+ </trophy>
+ <trophy id="025" hidden="no" ttype="S" pid="000">
+  <name>Local Brewery</name>
+  <detail>Brew a potion</detail>
+ </trophy>
+ <trophy id="026" hidden="no" ttype="G" pid="000">
+  <name>The End?</name>
+  <detail>Enter an End Portal.</detail>
+ </trophy>
+ <trophy id="027" hidden="no" ttype="G" pid="000">
+  <name>The End.</name>
+  <detail>Kill the Enderdragon.</detail>
+ </trophy>
+ <trophy id="028" hidden="no" ttype="S" pid="000">
+  <name>Enchanter</name>
+  <detail>Construct an Enchantment Table.</detail>
+ </trophy>
+</trophyconf>

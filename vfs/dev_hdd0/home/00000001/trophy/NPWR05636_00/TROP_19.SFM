@@ -1,0 +1,124 @@
+<!--Sce-Np-Trophy-Signature: 4c39b98c0100000000000000f7ba2317101809922e8cf7d8ae50892bf94ca8fb733e832793d5f8525395906eb52fb9bbe27fe2745ddd471a94e4e42f96ca169b36e95d85409bd4f0285e4be9f0b02eb36e2753b2cd7d233ef431bee6658d5f2d0c0db6e2431d07b874db7e19b4aea2c95fed6bae0c985cc2a4b76258839070e6f56b4267c5e311c235b320b5801460e1d612fde7b558359fdfc9f0d6b97c6cfb-->
+<trophyconf version="1.1" policy="large">
+ <npcommid>NPWR05636_00</npcommid>
+ <trophyset-version>01.02</trophyset-version>
+ <parental-level license-area="default">0</parental-level>
+ <title-name>Minecraft: PlayStation®3 Edition</title-name>
+ <title-detail>Minecraft Kupa Seti</title-detail>
+ <trophy id="000" hidden="no" ttype="P" pid="-1">
+  <name>Kazanılan bütün kupalar</name>
+  <detail>Bütün kupalar kazanıldı</detail>
+ </trophy>
+ <trophy id="001" hidden="no" ttype="B" pid="000">
+  <name>Cazip Envanter</name>
+  <detail>Envanterini aç.</detail>
+ </trophy>
+ <trophy id="002" hidden="no" ttype="B" pid="000">
+  <name>Odun Toplama</name>
+  <detail>Odun bloğu çıkana kadar bir ağaca yumruk at.</detail>
+ </trophy>
+ <trophy id="003" hidden="no" ttype="B" pid="000">
+  <name>Ölçme Biçme</name>
+  <detail>Dört ahşap kalas bloğuyla bir çalışma masası üret.</detail>
+ </trophy>
+ <trophy id="004" hidden="no" ttype="B" pid="000">
+  <name>Kazı Zamanı!</name>
+  <detail>Keresteleri ve sopaları kullanarak bir kazma yap.</detail>
+ </trophy>
+ <trophy id="005" hidden="no" ttype="B" pid="000">
+  <name>Hararetli Konu</name>
+  <detail>Sekiz parke taşı bloğundan bir ocak imal et.</detail>
+ </trophy>
+ <trophy id="006" hidden="no" ttype="S" pid="000">
+  <name>Donanım Gereksinimi</name>
+  <detail>Bir demir külçeyi erit.</detail>
+ </trophy>
+ <trophy id="007" hidden="no" ttype="B" pid="000">
+  <name>Ekim Zamanı!</name>
+  <detail>Kalasları ve sopaları kullanarak bir kazma yap.</detail>
+ </trophy>
+ <trophy id="008" hidden="no" ttype="S" pid="000">
+  <name>Ekmek Yapımı</name>
+  <detail>Buğdaydan ekmek yap.</detail>
+ </trophy>
+ <trophy id="009" hidden="no" ttype="S" pid="000">
+  <name>Yalan</name>
+  <detail>Buğday, şeker, süt ve yumurtalar kullanarak bir pasta yap!</detail>
+ </trophy>
+ <trophy id="010" hidden="no" ttype="B" pid="000">
+  <name>İyilerine Layık</name>
+  <detail>Daha iyi bir kazma yap.</detail>
+ </trophy>
+ <trophy id="011" hidden="no" ttype="S" pid="000">
+  <name>Lezziz Balık</name>
+  <detail>Bir balık yakalayıp pişir!</detail>
+ </trophy>
+ <trophy id="012" hidden="no" ttype="G" pid="000">
+  <name>Ray Üstünde</name>
+  <detail>Maden arabası ile başladığın yerden tek bir doğrultuda bir noktaya kadar en az 500 m. yol katet.</detail>
+ </trophy>
+ <trophy id="013" hidden="no" ttype="B" pid="000">
+  <name>Saldırı Zamanı!</name>
+  <detail>Kalasları ve sopaları kullanarak bir kılıç yap.</detail>
+ </trophy>
+ <trophy id="014" hidden="no" ttype="B" pid="000">
+  <name>Canavar Avı</name>
+  <detail>Bir canavara saldırıp yok et.</detail>
+ </trophy>
+ <trophy id="015" hidden="no" ttype="B" pid="000">
+  <name>İnek Deviren</name>
+  <detail>Birkaç deri topla.</detail>
+ </trophy>
+ <trophy id="016" hidden="no" ttype="G" pid="000">
+  <name>Domuzlar Uçunca</name>
+  <detail>Eyer kullanarak bir domuza bin ve ardından binerken domuzun düşüşten hasar almasını sağla.</detail>
+ </trophy>
+ <trophy id="017" hidden="no" ttype="S" pid="000">
+  <name>Sürü Lideri</name>
+  <detail>Beş kurtla dost ol.</detail>
+ </trophy>
+ <trophy id="018" hidden="no" ttype="B" pid="000">
+  <name>Bol Kese Alet</name>
+  <detail>Her alet türünden bir tane (bir kazma, bir kürek, bir balta ve bir çapa) yap.</detail>
+ </trophy>
+ <trophy id="019" hidden="no" ttype="S" pid="000">
+  <name>Bunu da Fırlat</name>
+  <detail>Bir Fırlatıcı yap.</detail>
+ </trophy>
+ <trophy id="020" hidden="no" ttype="S" pid="000">
+  <name>Dip Alem'e Doğru</name>
+  <detail>Dip Alem Portalı inşa et.</detail>
+ </trophy>
+ <trophy id="021" hidden="no" ttype="S" pid="000">
+  <name>Nişancı Düellosu</name>
+  <detail>50 metreden uzak mesafeden okla bir iskeleti öldür.</detail>
+ </trophy>
+ <trophy id="022" hidden="no" ttype="G" pid="000">
+  <name>ELMASLAR!</name>
+  <detail>Demir aletlerinle elmas topla</detail>
+ </trophy>
+ <trophy id="023" hidden="no" ttype="G" pid="000">
+  <name>Gönderene İade</name>
+  <detail>Bir Fersizi ateş topuyla yok et&#x0a;</detail>
+ </trophy>
+ <trophy id="024" hidden="no" ttype="S" pid="000">
+  <name>Ateşe Doğru</name>
+  <detail>Bir Alazdan çubuklarından birini al&#x0a;</detail>
+ </trophy>
+ <trophy id="025" hidden="no" ttype="S" pid="000">
+  <name>Yerel İmalat</name>
+  <detail>Bir iksir yap</detail>
+ </trophy>
+ <trophy id="026" hidden="no" ttype="G" pid="000">
+  <name>Son?</name>
+  <detail>Son Portalına gir.</detail>
+ </trophy>
+ <trophy id="027" hidden="no" ttype="G" pid="000">
+  <name>Son.</name>
+  <detail>Sonveren Ejderhayı öldür.</detail>
+ </trophy>
+ <trophy id="028" hidden="no" ttype="S" pid="000">
+  <name>Efsuncu</name>
+  <detail>Bir Efsun Masası yap.</detail>
+ </trophy>
+</trophyconf>

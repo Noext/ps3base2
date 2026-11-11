@@ -239,8 +239,15 @@ void shadow_job(const JobDesc& j) {
     spu::SpuThread& t = *x.t;
     bool armed = vm::read16(j.deps[0]) != 0;
     Capture cap(t);
+    /* No FCSR in WebAssembly: rounding is fixed and there are no FP exception
+     * flags, so the save/set pair is inert there. The variable is kept so the
+     * restore below compiles unchanged. */
+#if defined(__wasm__) || defined(__EMSCRIPTEN__)
+    unsigned csr = 0;
+#else
     unsigned csr = _mm_getcsr();
     _mm_setcsr((csr & ~0x6000u) | 0x6000u | 0x8040u);
+#endif
     bool ok = false;
     Tier tier = tier_for(j.module_ea);
     if (tier == Tier::Whole && m && m->whole) {
@@ -270,7 +277,10 @@ void shadow_job(const JobDesc& j) {
         t.exec_host = nullptr;
         ok = !cap.abort;
     }
+#if !defined(__wasm__) && !defined(__EMSCRIPTEN__)
     _mm_setcsr(csr);
+#endif
+    (void)csr;
     x.unmarked = true;
     std::lock_guard lk(g_m);
     if (!ok) {

@@ -22,6 +22,13 @@ class Image:
             for f in m["functions"]:
                 self.imports.append({"module": m["module"], "nid": f["nid"], "name": f["name"], "stub": int(f["stub_target"], 16)})
         self.stubs = {imp["stub"]: i for i, imp in enumerate(self.imports)}
+        # Switch tables supplied by hand in switch_tables.toml, keyed by the bctr
+        # address. The detector recovers the shapes it recognises; this covers the
+        # rest. Red Dead Redemption's f_00d19278 builds its table base with
+        # `lis r16, 0x13f` + `addic r16, r16, 0x6400`, indexes with `lbzx` (a BYTE
+        # index) then `slwi` and `lwzx`, and the detector did not follow that
+        # combination -- 256 targets including 0x00d1bbec were invisible.
+        self.manual_tables = {}
         self.exports = []
         # The code range is the executable PT_LOAD segment, whole. It used to be
         # cut short at the lowest import stub, on the theory that stubs sit past
@@ -75,7 +82,11 @@ class Image:
         return self.text_lo <= addr < self.text_hi and addr % 4 == 0
 
     def toc_word(self, disp):
-        return self.elf.u32((self.toc + disp) & 0xFFFFFFFF)
+        # A TOC offset can leave the file when the displacement is wrong, which is
+        # normal while probing a candidate base. Return 0 rather than raising: the
+        # caller treats 0 as "not a table".
+        blob = self.elf.read((self.toc + disp) & 0xFFFFFFFF, 4)
+        return struct.unpack(">I", blob)[0] if blob else 0
 
 
 def branch_target(pc, w):
@@ -94,30 +105,155 @@ def bo_always(w):
 
 
 def jump_table(img, bctr):
-    window = [(a, img.word(a)) for a in range(max(img.text_lo, bctr - 4 * 16), bctr, 4)]
-    base = None
-    count = None
-    for a, w in reversed(window):
-        op = w >> 26
-        if base is None and op == 32 and (w >> 16) & 0x1F == 2:
-            base = img.toc_word(sext(w & 0xFFFF, 16))
-        if count is None and op == 10:
-            count = (w & 0xFFFF) + 1
-    if base is None or base != bctr + 4:
-        return None
-    limit = count if count is not None else 1024
-    targets = []
-    table_end = img.text_hi
-    while len(targets) < limit and base + len(targets) * 4 < table_end:
-        v = sext(img.word(base + len(targets) * 4), 32)
-        t = (base + v) & 0xFFFFFFFF
-        if not img.in_text(t) or abs(v) > 0x100000:
-            break
-        targets.append(t)
-        if t > base:
-            table_end = min(table_end, t)
-    return {"base": base, "count": len(targets), "bound": count, "targets": targets}
+    """Recover a PPC switch table from the code preceding a `bctr`.
 
+    Modelled on XenonRecomp/XenonAnalyse, same instruction family. The shape a
+    compiler emits for `switch` is stable:
+
+        cmplwi cr6, rX, N          bound check
+        bgt    cr6, default        out of range -> default case
+        ...                        index scaling (rlwinm/slwi by 4)
+        lis/addi or a TOC load     base of the table
+        lwzx   rY, base, index     or lwz after an add, when entries are relative
+        mtctr  rY
+        bctr                       dispatch
+
+    Three things the previous version got wrong, each measured on Red Dead
+    Redemption's f_00d19278:
+
+      - it required base == bctr + 4 (the table right after the branch). Here the
+        table lives in a data segment far from the code, reached through the TOC.
+      - it assumed RELATIVE entries. Here they are ABSOLUTE addresses
+        (00d19ce4 00d19d10 00d19d30 ...), so `base + v` produced nonsense.
+      - it only looked at a 16-instruction window ending at bctr and required the
+        bound to be a `cmpwi`-style op 10, missing `cmplwi`.
+
+    A table is accepted only if its entries land inside this image's code and the
+    run is contiguous, so a wrong guess produces None rather than a plausible
+    wrong switch.
+    """
+    window = [(a, img.word(a)) for a in range(max(img.text_lo, bctr - 4 * 40), bctr, 4)]
+    if not window:
+        return None
+
+    # 1. The bound: cmplwi (op 10) / cmpwi (op 11) with an unsigned immediate.
+    bound = None
+    default_off = None
+    for i in range(len(window) - 1, -1, -1):
+        a, w = window[i]
+        op = w >> 26
+        if op in (10, 11) and (w >> 21) & 1:      # opcode 10/11 with L=1
+            bound = (w & 0xFFFF) + 1              # N + 1 entries
+            # the branch that exits on out-of-range
+            for a2, w2 in window[i + 1:]:
+                if (w2 >> 26) == 16:
+                    default_off = branch_target(a2, w2)
+                    break
+            break
+
+    # 2. The base: a lis/addi pair, or a TOC load (lwz rX, disp(rX) after a lis rX, hi).
+    base = None
+    lis_reg = None
+    lis_val = None
+    for a, w in window:
+        op = w >> 26
+        if op == 15:                               # lis / addis
+            rt = (w >> 21) & 0x1F
+            ra = (w >> 16) & 0x1F
+            if ra == 0:
+                lis_reg, lis_val = rt, (w & 0xFFFF) << 16
+        elif op in (12, 14) and lis_reg is not None and ((w >> 21) & 0x1F) == lis_reg:
+            # 14 is addi, 12 is addic. Both compute lis_val + imm, and a table base
+            # built with addic is what f_00d19278 does:
+            #     lis   r16, 0x13f
+            #     addic r16, r16, 0x6400     -> r16 = 0x013f6400
+            # Missing opcode 12 is why this table went undetected with the pattern
+            # sitting in plain sight.
+            base = (lis_val + (w & 0xFFFF)) & 0xFFFFFFFF
+        elif op == 24 and lis_reg is not None and ((w >> 21) & 0x1F) == lis_reg:  # ori
+            base = (lis_val | (w & 0xFFFF)) & 0xFFFFFFFF
+        elif op == 32 and lis_reg is not None and ((w >> 16) & 0x1F) == lis_reg:  # lwz
+            # A load through the TOC: the value at toc+disp is the table address.
+            v = img.toc_word(sext(w & 0xFFFF, 16))
+            if v and img.in_text(v):
+                base = v
+
+    if base is None:
+        return None
+
+    limit = bound if bound else 1024
+    # 3. Read the entries. Absolute addresses here; a relative table is accepted
+    #    too, because the test is "does the result land in code".
+    # The table lives in a DATA segment, so it is read through the ELF, not
+    # through img.word() (which only addresses the text buffer). An absolute read
+    # that the file cannot serve means the base is wrong: stop rather than
+    # inventing entries from whatever is adjacent.
+    targets = []
+    for i in range(limit):
+        blob = img.elf.read(base + i * 4, 4)
+        if blob is None:
+            break
+        raw = struct.unpack(">I", blob)[0]
+        absolute = raw
+        relative = (base + sext(raw, 32)) & 0xFFFFFFFF
+        for candidate in (absolute, relative):
+            if img.in_text(candidate):
+                targets.append(candidate)
+                break
+        else:
+            break
+    if not targets:
+        return None
+
+    return {"base": base, "count": len(targets), "bound": bound,
+            "targets": targets, "default": default_off}
+
+
+def load_switch_tables(path):
+    """Read switch_tables.toml: tables the detector could not recover.
+
+    Format, one entry per table:
+
+        [[table]]
+        bctr = 0x00d1933c      # the bctr that dispatches
+        base = 0x013f6400      # first entry, in guest memory
+        count = 256            # number of entries
+        note = "..."           # optional
+
+    plus optional `targets = [0x...]` to override the computed ones. A hand-
+    written table is a claim, so the loader validates it against the image: every
+    target must be inside the code range, and the bctr must be too. A typo then
+    fails at lift time with the address, instead of producing a switch whose
+    cases point at nothing.
+    """
+    if not path or not os.path.exists(path):
+        return {}
+    import re
+    out = {}
+    cur = None
+    with open(path) as f:
+        for raw in f:
+            line = raw.split("#", 1)[0].strip()
+            if not line:
+                continue
+            if line == "[[table]]":
+                if cur:
+                    out[cur["bctr"]] = cur
+                cur = {}
+                continue
+            if cur is None or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            k, v = k.strip(), v.strip().strip('"')
+            if k in ("bctr", "base"):
+                cur[k] = int(v, 0)
+            elif k == "count":
+                cur[k] = int(v, 0)
+            elif k == "note":
+                cur[k] = v
+    if cur:
+        out[cur["bctr"]] = cur
+    return out
 
 class Function:
     def __init__(self, entry):
@@ -192,7 +328,12 @@ def explore(img, entry, entries):
                     pc += 4
                     continue
                 if m == "bcctr":
-                    jt = jump_table(img, pc)
+                    # PS3BASE_NO_AUTO_TABLES=1 disables the automatic detector while
+                    # keeping hand-written tables. It exists for bisection: a table
+                    # accepted wrongly splits a function and the title derails into
+                    # an address that is the middle of an instruction, which looks
+                    # like a completely unrelated fault.
+                    jt = None if os.environ.get("PS3BASE_NO_AUTO_TABLES") else jump_table(img, pc)
                     if jt:
                         f.jump_tables[pc] = jt
                         f.data.update(range(jt["base"], jt["base"] + jt["count"] * 4, 4))

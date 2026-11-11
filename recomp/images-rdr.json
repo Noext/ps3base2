@@ -30,16 +30,6 @@
   "file": "out-rdr/gen/reloc/libfs.elf"
  },
  {
-  "name": "libvdec",
-  "elf": "../out-rdr/gen/reloc/libvdec.elf",
-  "file": "out-rdr/gen/reloc/libvdec.elf"
- },
- {
-  "name": "libsmvd2",
-  "elf": "../out-rdr/gen/reloc/libsmvd2.elf",
-  "file": "out-rdr/gen/reloc/libsmvd2.elf"
- },
- {
   "name": "libnet",
   "elf": "../out-rdr/gen/reloc/libnet.elf",
   "file": "out-rdr/gen/reloc/libnet.elf"
@@ -48,41 +38,6 @@
   "name": "libfiber",
   "elf": "../out-rdr/gen/reloc/libfiber.elf",
   "file": "out-rdr/gen/reloc/libfiber.elf"
- },
- {
-  "name": "libssl",
-  "elf": "../out-rdr/gen/reloc/libssl.elf",
-  "file": "out-rdr/gen/reloc/libssl.elf"
- },
- {
-  "name": "libhttp",
-  "elf": "../out-rdr/gen/reloc/libhttp.elf",
-  "file": "out-rdr/gen/reloc/libhttp.elf"
- },
- {
-  "name": "librtc",
-  "elf": "../out-rdr/gen/reloc/librtc.elf",
-  "file": "out-rdr/gen/reloc/librtc.elf"
- },
- {
-  "name": "libfiber",
-  "elf": "../out-rdr/gen/reloc/libfiber.elf",
-  "file": "out-rdr/gen/reloc/libfiber.elf"
- },
- {
-  "name": "libnet",
-  "elf": "../out-rdr/gen/reloc/libnet.elf",
-  "file": "out-rdr/gen/reloc/libnet.elf"
- },
- {
-  "name": "libssl",
-  "elf": "../out-rdr/gen/reloc/libssl.elf",
-  "file": "out-rdr/gen/reloc/libssl.elf"
- },
- {
-  "name": "libhttp",
-  "elf": "../out-rdr/gen/reloc/libhttp.elf",
-  "file": "out-rdr/gen/reloc/libhttp.elf"
  },
  {
   "name": "librtc",

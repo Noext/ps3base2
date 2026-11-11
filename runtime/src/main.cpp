@@ -192,6 +192,45 @@ void thread_census(int period) {
 
 }
 
+
+/* The layout fingerprint, compared against what is loaded.
+ *
+ * recomp/ppu/codegen.py writes layout.txt next to the generated code: one line
+ * per image, name text_lo text_hi. If a module is lifted at one base and loaded
+ * at another, every indirect call into it lands on an address the table does not
+ * describe, and the runtime reports an unknown indirect target -- pointing at a
+ * perfectly healthy module and sending the diagnosis the wrong way. This turns
+ * that into one sentence naming both bases. */
+static void check_layout_fingerprint() {
+    const char* dir = std::getenv("PS3BASE_GENERATED_DIR");
+    if (!dir || !*dir) return;
+    std::string path = std::string(dir) + "/layout.txt";
+    std::FILE* f = std::fopen(path.c_str(), "r");
+    if (!f) return;
+    char name[128];
+    unsigned lo = 0, hi = 0;
+    int bad = 0;
+    while (std::fscanf(f, "%127s %x %x", name, &lo, &hi) == 3) {
+        const int idx = loader::find_image(name);
+        if (idx < 0) {
+            LOG_ERROR("layout", "%s is in the lift fingerprint but not in this build", name);
+            ++bad;
+            continue;
+        }
+        const image::ImageEntry& im = image::images[idx];
+        if (im.text_lo != lo || im.text_hi != hi) {
+            LOG_ERROR("layout", "%s was LIFTED at 0x%08x-0x%08x but is LOADED at 0x%08x-0x%08x; refusing to start",
+                      name, lo, hi, im.text_lo, im.text_hi);
+            ++bad;
+        }
+    }
+    std::fclose(f);
+    if (bad) {
+        LOG_ERROR("layout", "%d image(s) misplaced between lift and load; re-run tools/setup.py", bad);
+        std::exit(2);
+    }
+}
+
 int main(int argc, char** argv) {
     settings::load();
 #ifdef GOWA_HAVE_LAUNCHER
@@ -200,6 +239,7 @@ int main(int argc, char** argv) {
     settings::apply_env();
     session::begin();
     crash::install();
+    check_layout_fingerprint();
     trace::init();
     cw::current_context = [] {
         cw::Context c{0, 0, nullptr};

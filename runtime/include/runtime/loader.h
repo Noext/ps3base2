@@ -21,6 +21,7 @@ extern std::string g_root;
 
 int find_image(const char* name);
 int find_image_by_path(const std::string& path);
+int find_image(const char* name);
 bool load_image(int index);
 bool image_loaded(int index);
 std::string host_path(const std::string& relative);

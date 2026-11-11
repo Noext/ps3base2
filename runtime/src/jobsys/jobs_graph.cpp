@@ -18,7 +18,13 @@
 #ifdef _WIN32
 #include <intrin.h>
 #else
+/* x86intrin.h has no meaning under wasm and its ia32 intrinsics do not compile
+ * there (readeflags, crc32...). cycles.h supplies __rdtsc. */
+#if !defined(__wasm__) && !defined(__EMSCRIPTEN__)
 #include <x86intrin.h>
+#else
+#include "runtime/cycles.h"
+#endif
 #endif
 
 namespace wj {

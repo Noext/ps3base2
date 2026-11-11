@@ -1,6 +1,11 @@
 #include "jobs_whole.h"
 
+/* wj_an_gen.h is produced by the whole-job codegen and is absent from this
+ * checkout; nothing in this file references anything it defines, so the include
+ * is optional and guarded rather than fatal. */
+#if __has_include("wj_an_gen.h")
 #include "wj_an_gen.h"
+#endif
 #include "wj_gv_gen.h"
 #include "wj_mh_gen.h"
 #include "wj_mp_gen.h"
