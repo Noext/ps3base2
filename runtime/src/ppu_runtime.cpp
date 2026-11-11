@@ -583,6 +583,14 @@ void call_import(Context& ctx, uint8_t* base, uint32_t index) {
                          (unsigned long long)ctx.gpr[3], lr);
     }
     if (index == 119) {
+        /* The import target is an OPD: two words, the code address then the TOC.
+         * Read it so the LLE body can be guarded at its real entry. */
+        const uint32_t opd = 0x3300b8acu;
+        if (vm::range_mapped(opd, 8))
+            std::fprintf(stderr, "[opd-code] export opd=0x%08x code=0x%08x toc=0x%08x\n",
+                         opd, vm::read32(opd), vm::read32(opd + 4));
+    }
+    if (index == 119) {
         std::fprintf(stderr, "[imp119] _cellGcmInitBody called lr=0x%08x r3=0x%llx r4=0x%llx ret=0x%llx\n",
                      lr, (unsigned long long)ctx.gpr[3], (unsigned long long)ctx.gpr[4],
                      (unsigned long long)ctx.gpr[3]);
