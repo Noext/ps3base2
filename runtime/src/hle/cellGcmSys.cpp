@@ -80,10 +80,38 @@ HLE_FUNC(cellGcmSys, cellGcmGetConfiguration) {
     ret(ctx, 0);
 }
 
+/* Counted so "the stub ran" is a measurement, not an assumption. */
+std::atomic<uint32_t> g_gcm_stub_inits{0};
+
 HLE_FUNC(cellGcmSys, _cellGcmInitBody) {
-    /* The real body takes a context pointer and builds the command FIFO. Without a
-     * GPU it only has to report success: the title proceeds to load its shaders
-     * and then fails on the first draw, which is a later problem than the boot. */
+    /* Milestone 3 asks for the display path to be a STUB that counts RSX commands.
+     * The LLE body needs an RSX this build omits, so the HLE one stands in -- and it
+     * must ALSO fill the context it is handed: the caller reads begin/end/current
+     * back and dereferences them, so returning CELL_OK alone leaves a null pointer
+     * two thousand instructions later (measured: call_indirect(0) at lr 0x005d2c08).
+     *
+     * Layout (refs/rpcs3/rpcs3/Emu/RSX/GCM.h:26):
+     *   +0 begin, +4 end, +8 current, +12 callback
+     * begin and end are filled by this call; current starts at begin. */
+    const uint32_t context = static_cast<uint32_t>(ctx.gpr[3]);
+    const uint32_t cmd_size = static_cast<uint32_t>(ctx.gpr[4]);
+    const uint32_t io_size = static_cast<uint32_t>(ctx.gpr[5]);
+    const uint32_t io_addr = static_cast<uint32_t>(ctx.gpr[6]);
+    if (context && vm::range_mapped(context, 16)) {
+        const uint32_t buf = io_addr ? io_addr : context + 0x40;
+        if (buf && vm::range_mapped(buf, cmd_size ? cmd_size : 0x1000)) {
+            vm::write32(context + 0, buf);
+            vm::write32(context + 4, buf + (cmd_size ? cmd_size : 0x1000));
+            vm::write32(context + 8, buf);
+            ++g_gcm_stub_inits;
+            ret(ctx, 0);
+            return;
+        }
+    }
+    /* No usable buffer: still succeed, but say so, because a silent success here is
+     * what produced the null dereference above. */
+    LOG_WARN("gcm", "cellGcmInitBody stub: context=0x%x cmd=0x%x io=0x%x/0x%x not usable",
+             context, cmd_size, io_size, io_addr);
     ret(ctx, 0);
 }
 

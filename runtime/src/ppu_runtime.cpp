@@ -190,6 +190,17 @@ int32_t resolve(uint32_t index, ImportSlot& slot) {
         if (imp.name && *imp.name && l.find(std::string(",") + imp.name + ",") != std::string::npos) slot.log_args = true;
     }
     if (imp.name && *imp.name) slot.tap = hle::find_tap(imp.module, imp.name);
+#if PS3BASE_HLE_OVER_LLE
+    /* Milestone 3 requires the display path to be a STUB, not the firmware. The
+     * LLE export would otherwise win the search below and run the real GCM body,
+     * which needs an RSX the wasm build deliberately omits. */
+    if (imp.name && *imp.name && std::strcmp(imp.module, "cellGcmSys") == 0) {
+        if (hle::Fn fn = hle::find(imp.module, imp.name)) {
+            slot.hle = fn;
+            return kHle;
+        }
+    }
+#endif
     for (uint32_t i = 0; i < image::export_count; i++) {
         const image::ExportEntry& e = image::exports[i];
         if (e.nid == imp.nid && std::strcmp(e.module, imp.module) == 0 && loader::image_loaded(static_cast<int>(e.image))) {
