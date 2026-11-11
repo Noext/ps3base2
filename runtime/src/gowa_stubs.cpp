@@ -15,8 +15,21 @@ extern "C" int gowa_stub_3() __asm__("_ZN2wj3runEiPhRN3spu7ContextERN6renjob8Cha
 extern "C" int gowa_stub_3() { return 0; }
 extern "C" int gowa_stub_4() __asm__("_ZN2wj4infoEi");
 extern "C" int gowa_stub_4() { return 0; }
-extern "C" int gowa_stub_5() __asm__("_ZN2wj9ext_statsERm");
-extern "C" int gowa_stub_5() { return 0; }
+/* 64-bit unsigned, not unsigned long: under wasm32 a C++ `unsigned long long&`
+ * mangles to Ry, while `unsigned long&` mangles to Rm. The stub carried the host
+ * mangling, so the wasm link saw it as undefined and replaced it with an aborting
+ * trampoline -- which the static initialisers called, producing a bare
+ * "unreachable" before the first printf. */
+/* BOTH manglings. `uint64_t` is `unsigned long long` under wasm32 (mangles to
+ * Ry) and `unsigned long` under LP64 (mangles to Rm), and the real definition in
+ * jobsys/jobs_whole.h is `uint64_t&`. Keeping only Ry links on wasm and fails the
+ * native link with "undefined reference to wj::ext_stats(unsigned long&)";
+ * keeping only Rm does the reverse. Two weak stubs cover both, and either is
+ * dropped as soon as the real definition is linked. */
+extern "C" int gowa_stub_5_ll() __asm__("_ZN2wj9ext_statsERy");
+extern "C" int gowa_stub_5_ll() { return 0; }
+extern "C" int gowa_stub_5_l() __asm__("_ZN2wj9ext_statsERm");
+extern "C" int gowa_stub_5_l() { return 0; }
 extern "C" int gowa_stub_6() __asm__("_ZN2wj9job_in_lsEPKh");
 extern "C" int gowa_stub_6() { return 0; }
 extern "C" int gowa_stub_7() __asm__("_ZN4anim5hooksERm");
@@ -97,3 +110,9 @@ extern "C" int gowa_stub_44() __asm__("_ZNSolsEi");
 extern "C" int gowa_stub_44() { return 0; }
 extern "C" int gowa_stub_45() __asm__("_ZNSolsEj");
 extern "C" int gowa_stub_45() { return 0; }
+
+/* edge::gpu::g_active is God of War's DMA-accelerated edge path. ps3base keeps
+ * the SPU thread code that consults it, so the flag has to exist; it stays false
+ * because no edge GPU module is linked for this title. That turns the branch in
+ * spu/thread.cpp into the plain DMA path, which is what the game wants. */
+namespace edge { namespace gpu { bool g_active = false; } }
