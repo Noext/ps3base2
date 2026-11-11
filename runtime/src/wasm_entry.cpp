@@ -237,15 +237,6 @@ int main(int argc, char** argv) {
      * inside f_0014f8e4. If the wasm never reaches this function, the whole
      * synchronisation phase is never entered -- which is what round 75 measured.
      * Guard the entry so "not reached" is proven, not assumed. */
-    hooks::add_guard(0x14f8e4, [](ppu::Context& c) {
-        static std::atomic<int> n{0};
-        const int k = n.fetch_add(1);
-        if (k < 8)
-            std::fprintf(stderr, "[syncfn] #%d entry lr=0x%llx r3=0x%llx\n", k,
-                         static_cast<unsigned long long>(c.lr),
-                         static_cast<unsigned long long>(c.gpr[3]));
-        return false;
-    });
     /* The lifted functions that reference the surface-register constants
      * (0x200-0x214) are the candidates for the code that configures a render
      * target. Guard their entries: "the code exists but is never executed" is a
@@ -264,17 +255,6 @@ int main(int argc, char** argv) {
     /* The five lifted functions that reference constant 300 (sys_vm_memory_map)
      * as a syscall base. Guard them: reaching one and not mapping is a different
      * diagnosis from never reaching the code at all. */
-    for (uint32_t a : {0x21c42cu}) {
-        hooks::add_guard(a, [](ppu::Context& c) {
-            static std::atomic<int> n{0};
-            const int k = n.fetch_add(1);
-            if (k < 6)
-                std::fprintf(stderr, "[mapcode] pc=0x%08x lr=0x%llx\n",
-                             static_cast<unsigned>(c.cia),
-                             static_cast<unsigned long long>(c.lr));
-            return false;
-        });
-    }
     /* The seven functions that write offset 1796. f_002dc29c sits inside the
      * poll loop's own region and is the likely setter for the flag that loop
      * reads. If none of them runs, the flag cannot change and the loop is
@@ -290,6 +270,17 @@ int main(int argc, char** argv) {
             return false;
         });
     }
+    /* ONE guard, on the single function that emits syscall 300. Round 179 showed
+     * that guarding an enclosing function replaces its body via hook_call and
+     * removes the very calls being measured, so nothing else is guarded here. */
+    hooks::add_guard(0x21c42cu, [](ppu::Context& c) {
+        static std::atomic<int> n{0};
+        const int k = n.fetch_add(1);
+        if (k < 4) std::fprintf(stderr, "[mapemit] pc=0x%08x lr=0x%llx\n",
+                                static_cast<unsigned>(c.cia),
+                                static_cast<unsigned long long>(c.lr));
+        return false;
+    });
     hooks::add_guard(0x21c178, [](ppu::Context& c) {
         static std::atomic<int> n{0};
         const int k = n.fetch_add(1);
