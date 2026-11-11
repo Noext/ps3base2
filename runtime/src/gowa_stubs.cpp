@@ -159,3 +159,19 @@ const CompiledBlock* compiled_blocks(size_t& count) {
  *     edge_consumer.cpp.o | gowa_stubs.cpp.o
  *
  * which is what it did. */
+
+/* namespace jsedge is NOT stubbed here, and this is the fourth time it has had to
+ * be removed. jobsys/edge_consumer.cpp defines every one of these entry points --
+ * enabled() at :1002, init(), on_set_priorities() at :1006, on_wait_previous() at
+ * :1026, set_prev_guard() -- and GOWA_RUNTIME_SOURCES globs
+ * runtime/src/jobsys/*.cpp into every binary, so a definition here is always a
+ * duplicate:
+ *
+ *     multiple definition of `jsedge::enabled()`
+ *     multiple definition of `jsedge::init()`
+ *     multiple definition of `jsedge::on_set_priorities(ppu::Context&)`
+ *
+ * The belief that "ps3base links no job system" is what keeps producing this.
+ * It does link one; jobsys/ is compiled in for every title. If edge_consumer.cpp
+ * is ever excluded from a build, the fix belongs in CMakeLists.txt, not in a
+ * duplicate definition here. */
