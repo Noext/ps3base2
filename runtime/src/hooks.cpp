@@ -865,6 +865,36 @@ static bool list_guard(ppu::Context& ctx) {
  * fields the state-5 arm reads, without changing anything the guest sees.
  *
  * Environment: PS3BASE_LOAD_PROBE=1 */
+/* PS3BASE_THREAD_PROBE: is the RAGE worker entry actually executed, and how far
+ * does it get?
+ *
+ * Red Dead Redemption creates its pool threads through the OPD table at
+ * 0x01356420, well above the title text_hi (0x010d9f74). call_opd reads the pair
+ * and lookup() finds f_00533064, so the machinery should work -- but the thread
+ * exits within a millisecond through f_005331e0 -> _sys_ppu_thread_exit(0xdead
+ * 0xc0de), and a constant search finds nothing because the title builds that
+ * value with lis+oris. This probe answers the question by measurement instead of
+ * by reading: both entry and exit are hooked, and the register state at entry is
+ * printed, so a missing work item is visible as a null queue pointer. */
+static bool thread_entry_probe(ppu::Context& ctx) {
+    static std::atomic<int> n{0};
+    const int k = n.fetch_add(1, std::memory_order_relaxed);
+    if (k < 8)
+        LOG_INFO("threadprobe", "ENTRY 0x533064 #%d th=0x%x r3=0x%08x lr=0x%08x r2=0x%08x",
+                 k, ctx.thread_id, static_cast<uint32_t>(ctx.gpr[3]),
+                 static_cast<uint32_t>(ctx.lr), static_cast<uint32_t>(ctx.gpr[2]));
+    return false;
+}
+
+static bool thread_exit_probe(ppu::Context& ctx) {
+    static std::atomic<int> n{0};
+    const int k = n.fetch_add(1, std::memory_order_relaxed);
+    if (k < 8)
+        LOG_INFO("threadprobe", "EXIT  0x5331e0 #%d th=0x%x r3=0x%08x r31=0x%08x lr=0x%08x",
+                 k, ctx.thread_id, static_cast<uint32_t>(ctx.gpr[3]),
+                 static_cast<uint32_t>(ctx.gpr[31]), static_cast<uint32_t>(ctx.lr));
+    return false;
+}
 static bool load_probe(ppu::Context& ctx) {
     static const bool on = std::getenv("PS3BASE_LOAD_PROBE") != nullptr;
     if (!on) return false;
@@ -980,6 +1010,10 @@ void init() {
      * -- the guard was installed, logged "guard installed", and never called.
      * That is why earlier runs reported "0 false alarms": it was not watching.
      * Assign it again after the guard is registered. */
+    if (std::getenv("PS3BASE_THREAD_PROBE")) {
+        add_guard(0x533064, thread_entry_probe);
+        add_guard(0x5331e0, thread_exit_probe);
+    }
     if (std::getenv("PS3BASE_LOAD_PROBE")) {
         add_guard(0x2eee64, load_probe);
         add_guard(0x2e4120, load_arm_probe);
