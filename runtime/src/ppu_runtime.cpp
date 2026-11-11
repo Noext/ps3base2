@@ -582,6 +582,11 @@ void call_import(Context& ctx, uint8_t* base, uint32_t index) {
             std::fprintf(stderr, "[videoimp] import=%d ret=0x%llx lr=0x%08x\n", index,
                          (unsigned long long)ctx.gpr[3], lr);
     }
+    if (index == 119) {
+        std::fprintf(stderr, "[imp119] _cellGcmInitBody called lr=0x%08x r3=0x%llx r4=0x%llx ret=0x%llx\n",
+                     lr, (unsigned long long)ctx.gpr[3], (unsigned long long)ctx.gpr[4],
+                     (unsigned long long)ctx.gpr[3]);
+    }
     if (index == 118) {
         static std::atomic<int> n{0};
         if (n.fetch_add(1) < 6)
