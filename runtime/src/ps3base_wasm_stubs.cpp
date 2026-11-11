@@ -54,6 +54,15 @@ extern "C" void ps3base_block_trace(uint32_t bo, uint32_t bi, bool taken) {
      * The caller is identified by the thread's current lr, which the runtime
      * publishes for this purpose. */
     extern uint32_t g_bt_lr;
+    /* Count every branch, and separately every bi==1, so "the filter sees nothing"
+     * and "the branch is not executed" stop being the same observation. */
+    {
+        extern uint32_t g_bt_all, g_bt_bi1;
+        g_bt_all++;
+        if (bi == 1) g_bt_bi1++;
+        if (g_bt_all == 1000 || g_bt_all == 10000 || g_bt_all == 50000)
+            std::fprintf(stderr, "[btall] branches=%u bi1=%u\n", g_bt_all, g_bt_bi1);
+    }
     const bool kWant = g_bt_lr >= 0x002da36cu && g_bt_lr < 0x002dac00u;
     if (!kWant || n > 400) return;
     n++;
@@ -67,4 +76,12 @@ extern "C" void ps3base_block_trace(uint32_t bo, uint32_t bi, bool taken) {
 
 #if PS3BASE_BLOCK_TRACE
 bool g_bt_on = false;
+#endif
+
+#if PS3BASE_BLOCK_TRACE
+extern "C" uint32_t g_bt_all = 0;
+extern "C" uint32_t g_bt_bi1 = 0;
+extern "C" void ps3base_bt_report() {
+    std::fprintf(stderr, "[btall] branches=%u bi1=%u\n", g_bt_all, g_bt_bi1);
+}
 #endif
