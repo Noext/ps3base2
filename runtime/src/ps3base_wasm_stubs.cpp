@@ -71,16 +71,17 @@ extern "C" void ps3base_block_trace_at(uint32_t pc, uint32_t bo, uint32_t bi, bo
     /* Round 223 established that every dependency of _cellGcmInitBody succeeds,
      * so 0x80010004 is computed inside the body. Watch the body's own branches:
      * the path that reaches the error return names the check that fails. */
-    const bool kWant = pc >= 0x33000cc0u && pc < 0x33003000u;
+    /* f_330005ec is the callee that writes [r30+0]/[r30+4]. Watch ITS branches and
+     * print r30: a guard on its entry breaks the boot (three times measured), but
+     * bc_cond_at fires inside it without touching the dispatch path. */
+    const bool kWant = pc >= 0x330005ecu && pc < 0x3300070cu;
     if (kWant && n <= 60) {
         /* The first five branches form a loop. If one of its counters never
          * advances, the loop cannot end and branch 6 is never reached. Print the
          * registers those branches use and increment. */
         const uint64_t* g = static_cast<const uint64_t*>(g_bt_ctx);
-        std::fprintf(stderr, "[regs] n=%d bo=%u bi=%u t=%d g5=%llu g6=%llu g8=%llu g9=%llu\n",
-                     n, bo, bi, taken ? 1 : 0,
-                     (unsigned long long)g[5], (unsigned long long)g[6],
-                     (unsigned long long)g[8], (unsigned long long)g[9]);
+        std::fprintf(stderr, "[regs] n=%d pc=0x%x bo=%u bi=%u t=%d r30=0x%llx\n",
+                     n, pc, bo, bi, taken ? 1 : 0, (unsigned long long)g[30]);
     }
     if (!kWant || n > 400) return;
     n++;
