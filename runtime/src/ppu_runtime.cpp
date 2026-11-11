@@ -111,6 +111,10 @@ Tap find_tap(const char* module, const char* name) {
 std::atomic<uint32_t> g_menu_thread_creations{0};
 std::atomic<uint32_t> g_ui_thread_creations{0};
 namespace ppu {
+static uint32_t g_call_ring[64];
+static uint32_t g_call_lr[64];
+static int g_call_ring_head = 0;
+static int g_call_depth = 0;
 /* How many times the guest created the main-menu screen thread. It is the one
  * behavioural marker specific to the menu and shared with the native reference,
  * which is why the milestone-3 log line is keyed on it. */
@@ -308,6 +312,19 @@ void call_indirect(Context& ctx, uint8_t* base, uint32_t addr) {
         std::fprintf(stderr, "\n");
     }
     if (!fn) {
+        {
+            /* Name the frames that led to the null target: the abort alone shows
+             * one return address, which is not enough to tell a bad vtable from
+             * an uninitialised object field. */
+            fprintf(stderr, "[vcall-stack] depth=%d lr=0x%08x r3=0x%llx r31=0x%llx\n",
+                    g_call_depth, (unsigned)ctx.lr,
+                    (unsigned long long)ctx.gpr[3], (unsigned long long)ctx.gpr[31]);
+            for (int i = 0; i < g_call_depth && i < 8; i++) {
+                const unsigned idx = (g_call_ring_head - 1 - i) & 63;
+                fprintf(stderr, "  frame[%d] called 0x%08x from lr 0x%08x\n", i,
+                        g_call_ring[idx], g_call_lr[idx]);
+            }
+        }
         /* A target the lifter never produced. Two ways to be wrong here, and the
          * wrong one was the default for too long:
          *
@@ -391,6 +408,10 @@ void call_indirect(Context& ctx, uint8_t* base, uint32_t addr) {
 #endif
     force::on_call(addr);
     const uint32_t saved_lr = static_cast<uint32_t>(ctx.lr);
+    g_call_ring[g_call_ring_head & 63] = addr;
+    g_call_lr[g_call_ring_head & 63] = saved_lr;
+    g_call_ring_head++;
+    g_call_depth++;
     /* PS3BASE_TOC_TRACE=2: bracket every lifted call and report the ones that
      * change r2. A restored TOC that comes back wrong points at the frame that
      * saved it, which is the function whose lifting is wrong -- the crash alone
@@ -399,6 +420,7 @@ void call_indirect(Context& ctx, uint8_t* base, uint32_t addr) {
         ? std::atoi(std::getenv("PS3BASE_TOC_TRACE")) : 0;
     const uint32_t toc_in = static_cast<uint32_t>(ctx.gpr[2]);
     fn(ctx, base);
+    g_call_depth--;
     if (toc_depth >= 2 && static_cast<uint32_t>(ctx.gpr[2]) != toc_in) {
         static std::atomic<int> n{0};
         if (n.fetch_add(1) < 40)
