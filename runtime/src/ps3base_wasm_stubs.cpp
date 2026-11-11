@@ -108,7 +108,11 @@ extern "C" void ps3base_bt_report() {
  * whether anything at all writes it -- which is the last open question about the
  * null field at 0x00d72800. */
 extern "C" void ps3base_store_probe(uint32_t ea, const void* data, size_t size) {
-    if (ea < 0x00d70000u || ea >= 0x00d73000u) return;
+    /* The GCM context at 0xd72800 has callback filled but begin/end/current null.
+     * Watch the three null fields specifically: knowing whether anything writes
+     * them separates "the code was never lifted" from "our runtime provides no
+     * path that does it". */
+    if (ea < 0x00d72800u || ea >= 0x00d72810u) return;
     static int n = 0;
     if (n > 20) return;
     n++;
