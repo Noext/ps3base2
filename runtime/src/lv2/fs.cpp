@@ -641,6 +641,59 @@ LV2_SYSCALL(817, sys_fs_fcntl) {
     case 0xC0000008:
         vm::write32(arg + 0x20, 0);
         return CELL_OK;
+    /* cellFsAllocateFileAreaWithoutZeroFill. refs/.../lv2/sys_fs.cpp:3029.
+     *
+     * The title asks the filesystem to reserve space for a cache file without
+     * zero-filling it, then writes into it. RPCS3's body is exactly this: validate
+     * the argument header and call sys_fs_truncate with the requested size.
+     *
+     * Measured on Red Dead Redemption: this op returned CELL_ENOSYS, so its 1.87 GiB
+     * DiskCache file was never created. The title printed "Allocate file area
+     * failed, code 80010003" and fell into its own "simulating infinite retry"
+     * path -- an unconditional one-second sleep, forever, with the renderer never
+     * starting. That single missing case was the whole of the idle loop.
+     *
+     * Layout is lv2_file_e0000017 (refs/.../lv2/sys_fs.h:612), CHECK_SIZE 0x28:
+     *   +0x28 size, +0x10 _x4, +0x20 _x8, +0x30 file_path, +0x34 file_size,
+     *   +0x3C out_code. The magic constants are the header's own, not a guess:
+     * RPCS3 checks _x4 == 0x10 and _x8 == 0x20 and rejects anything else. */
+    case 0xE0000017: {
+        if (size < 0x28) return CELL_EINVAL;
+        const uint32_t declared = vm::read32(arg + 0x28);
+        const uint32_t x4 = vm::read32(arg + 0x10);
+        const uint32_t x8 = vm::read32(arg + 0x20);
+        if (declared > size || x4 != 0x10 || x8 != 0x20) return CELL_EINVAL;
+        const uint32_t path_ea = vm::read32(arg + 0x30);
+        const uint64_t want = vm::read64(arg + 0x34);
+        std::string g, h;
+        const int64_t e = resolve(path_ea, g, h);
+        if (e) {
+            vm::write32(arg + 0x3C, static_cast<uint32_t>(e));
+            LOG_WARN("fs", "AllocateFileArea: cannot resolve the path -> 0x%llx",
+                     static_cast<unsigned long long>(e));
+            return CELL_OK;
+        }
+        if (is_ro(g)) {
+            vm::write32(arg + 0x3C, static_cast<uint32_t>(CELL_EROFS));
+            return CELL_OK;
+        }
+        std::error_code ec;
+        /* Truncate to the requested size: this creates the file when absent.
+         * Zero-fill is explicitly NOT wanted (that is the point of the call), and
+         * the host does not write the blocks until they are used either way. */
+        std::filesystem::resize_file(h, static_cast<std::uintmax_t>(want), ec);
+        if (ec) {
+            /* Not there yet: create it empty and size it. */
+            { std::FILE* f = std::fopen(h.c_str(), "wb"); if (f) std::fclose(f); }
+            std::filesystem::resize_file(h, static_cast<std::uintmax_t>(want), ec);
+        }
+        const int32_t rc = ec ? CELL_EIO : CELL_OK;
+        vm::write32(arg + 0x3C, static_cast<uint32_t>(rc));
+        LOG_INFO("fs", "AllocateFileAreaWithoutZeroFill '%s' size 0x%llx -> %s", g.c_str(),
+                 static_cast<unsigned long long>(want), ec ? "EIO" : "OK");
+        return CELL_OK;
+    }
+
     case 0xE0000012: {
         if (size < 0x10) return CELL_EINVAL;
         auto fd = get_fd(fdn);

@@ -556,3 +556,67 @@ mounting its cache. No dialog is open, no callback is pending, and the RSX repor
 busy 100% with zero methods. The workers run and leave. Something the title waits
 for never arrives, and it is not the loader: the loader is doing its job.
 
+
+## 2026-11-11 (suite) -- the idle loop's leaf, found and fixed
+
+The 1 s loop was NOT reached from the sites the lift suggests
+(rdr_000.cpp lr 0x11a98/0x11b48/0x11e08/0x11f90). Those exist but are never taken.
+Probing the f_002a9168 wrapper so ctx.lr is the caller's return address gives:
+
+    usleepprobe: #1 th=0x1000000 'main_thread' ms=1000 lr=0x00550c18
+
+so the loop lives in f_00550b34 (rdr_053.cpp:24883), back-edge L_550c10:
+
+    L_550c10:
+        ctx.gpr[3] = 0 + 1000;
+        ctx.lr = 0x550c18; f_002a9168(ctx, base);
+        goto L_550c10;      <-- unconditional, no test in the back-edge
+
+The exit condition is a byte tested ONCE at function entry: guest byte at
+**0x01669DCC**, measured 0x00 every turn. It is a "cache is valid" flag, and the
+only writer in the whole lift is f_005074a4 (rdr_050.cpp:24972).
+
+### The leaf
+
+    import 210 = sys_fs::cellFsWriteWithOffset
+    args:   fd=0x3 offset=0x0 buf=0x0166c360 size=0x2000
+    return: 0xFFFFFFFF8001002A  (CELL_FS_EBADF)
+
+and above it, in event order:
+
+    fs: open '/dev_hdd1/cache.dat' flags 01102 -> 3
+    cellFsAllocateFileAreaWithoutZeroFill(0x166bef0, 0x6fe02000) -> 0x80010003 ENOSYS
+    [DiskCache] Error: Allocate file area failed, code 80010003
+    Fatal disc error encountered (EBADF) ... simulating infinite retry
+    usleepprobe: ms=1000
+
+So: the DiskCache asks the filesystem to reserve 1.87 GiB, gets ENOSYS because
+sys_fs_fcntl had no case for 0xE0000017, cannot write its header, and falls into
+the title's own "simulate infinite retry" path -- which is the unconditional
+one-second sleep.
+
+### Fixed
+
+sys_fs_fcntl now implements 0xE0000017 (cellFsAllocateFileAreaWithoutZeroFill) as
+RPCS3 does at sys_fs.cpp:3029: validate the lv2_file_e0000017 header
+(size >= 0x28, _x4 == 0x10, _x8 == 0x20), then truncate the file to the requested
+size and write the result into out_code at +0x3C. The structure's field offsets
+are read from refs/.../sys_fs.h:612-623, not from memory.
+
+### Effect, measured
+
+    before:  sys_timer_usleep 0xf4240 called every second, forever
+    after:   zero sys_timer_usleep calls in a 60 s run
+
+The idle loop is gone. The main thread now completes the disk-cache path and
+stops after sceNpTrophyGetRequiredDiskSpace, and the title still presents no
+frame -- so a second, independent stall was hiding behind the first.
+
+### Next
+
+That next stall is what the remaining work is: the title reports
+"kernel: free_size=-2147418051/free_min=-2147418051" (0x8001003D, CELL_ENOTSUP)
+and "No interface found", then does nothing. cellFsGetFreeSize is imported
+(0xAA3B4BCD, table.cpp) and resolved through libfs's LLE, so the ENOTSUP is
+produced downstream of it in a sys_fs path that has no handler.
+

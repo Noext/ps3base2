@@ -88,3 +88,25 @@ The rule for a handler is therefore:
 3. Reserve explicit refusals for what genuinely is not implemented, and name it
    in the log.
 
+
+## runtime/src/jobsys/ and runtime/src/spu/edge/ are linked into every binary
+
+Never redefine their symbols in a stub file.
+
+`GOWA_RUNTIME_SOURCES` globs `runtime/src/jobsys/*.cpp` and
+`runtime/src/spu/edge/*.cpp` unconditionally, for every title. A symbol defined
+in `runtime/src/gowa_stubs.cpp` "because this title links no job system" is
+therefore always a duplicate, and it breaks **all three** builds at link time:
+
+    multiple definition of `jsedge::enabled()`
+    multiple definition of `edge::gpu::g_active`
+
+This has happened four times: `edge::gpu::g_active`, `jsedge::spu_idle`,
+`jsedge::enabled/init/on_wait_previous/on_set_priorities/set_prev_guard`. Every
+one was added on the same false premise. If a title genuinely must not link a
+directory, exclude it in `CMakeLists.txt` -- do not satisfy the symbol twice.
+
+`tools/check_no_dup_symbols.sh` checks the six symbols that have actually caused
+this and exits non-zero when one reappears. Run it after touching
+`gowa_stubs.cpp`.
+
