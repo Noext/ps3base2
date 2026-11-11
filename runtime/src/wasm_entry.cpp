@@ -273,7 +273,15 @@ int main(int argc, char** argv) {
     /* ONE guard, on the single function that emits syscall 300. Round 179 showed
      * that guarding an enclosing function replaces its body via hook_call and
      * removes the very calls being measured, so nothing else is guarded here. */
-    hooks::add_guard(0x21c42cu, [](ppu::Context& c) {
+    hooks::add_guard(0x523e00u, [](ppu::Context& c) {
+        std::fprintf(stderr, "[callerA] pc=0x%08x\n", static_cast<unsigned>(c.cia));
+        return false;
+    });
+    hooks::add_guard(0x5240d8u, [](ppu::Context& c) {
+        std::fprintf(stderr, "[callerB] pc=0x%08x\n", static_cast<unsigned>(c.cia));
+        return false;
+    });
+    hooks::add_guard(0x21c470u, [](ppu::Context& c) {
         static std::atomic<int> n{0};
         const int k = n.fetch_add(1);
         if (k < 4) std::fprintf(stderr, "[mapemit] pc=0x%08x lr=0x%llx\n",
