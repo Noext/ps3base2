@@ -313,6 +313,22 @@ void call_indirect(Context& ctx, uint8_t* base, uint32_t addr) {
     }
     if (!fn) {
         {
+            /* The target is not a lifted function. Before anything else, say who
+             * asked for it: the lr and the two registers that carry an object
+             * pointer. A null vtable entry means the caller read a field from an
+             * object that was never built, and the address of that read is the
+             * only thing a fix can act on. */
+            static std::atomic<int> n{0};
+            if (n.fetch_add(1) < 6)
+                std::fprintf(stderr,
+                             "[null-call-source] target=0x%08x lr=0x%08x ctr=0x%08x "
+                             "r3=0x%llx r9=0x%llx r31=0x%llx mapped_r31=%d\n",
+                             addr, static_cast<unsigned>(ctx.lr), static_cast<unsigned>(ctx.ctr),
+                             (unsigned long long)ctx.gpr[3], (unsigned long long)ctx.gpr[9],
+                             (unsigned long long)ctx.gpr[31],
+                             static_cast<uint32_t>(ctx.gpr[31]) < 0x90000000u ? 1 : 0);
+        }
+        {
             /* Name the frames that led to the null target: the abort alone shows
              * one return address, which is not enough to tell a bad vtable from
              * an uninitialised object field. */
