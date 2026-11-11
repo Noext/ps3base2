@@ -133,11 +133,24 @@ inline void cr_put(Context& c, uint32_t mask8, uint32_t v) {
 inline uint64_t xer_get(const Context& c) { return uint64_t(c.xer_so) << 31 | uint64_t(c.xer_ov) << 30 | uint64_t(c.xer_ca) << 29 | c.xer_cnt; }
 inline void xer_put(Context& c, uint64_t v) { c.xer_so = v >> 31 & 1; c.xer_ov = v >> 30 & 1; c.xer_ca = v >> 29 & 1; c.xer_cnt = v & 0x7f; }
 
+#if PS3BASE_BLOCK_TRACE
+/* Opt-in block trace for the ports that need "which labels did this function
+ * actually execute". The lifter emits one function per entry point, and goto
+ * labels inside it are not observable through hook_flags (measured: a guard in
+ * the middle of a function is never consulted). Instrumenting the branch helper
+ * is the one place every control-flow decision passes through, so a trace here
+ * sees exactly the labels that were taken, without regenerating out/ppu. */
+extern "C" void ps3base_block_trace(uint32_t bo, uint32_t bi, bool taken);
+#endif
 inline bool bc_cond(Context& c, uint32_t bo, uint32_t bi) {
     if (!(bo & 4)) c.ctr--;
     bool ctr_ok = (bo & 4) || ((c.ctr != 0) ^ ((bo >> 1) & 1));
     bool cond_ok = (bo & 16) || (crbit(c, bi) == ((bo >> 3) & 1));
-    return ctr_ok && cond_ok;
+    const bool taken = ctr_ok && cond_ok;
+#if PS3BASE_BLOCK_TRACE
+    ps3base_block_trace(bo, bi, taken);
+#endif
+    return taken;
 }
 
 inline uint64_t add_ca(uint64_t a, uint64_t b, uint64_t ci, uint8_t& co) {

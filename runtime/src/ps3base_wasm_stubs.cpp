@@ -33,3 +33,17 @@ extern "C" int ps3base_ld_probe(uint32_t ea) {
     return 0;
 }
 #endif
+
+#if PS3BASE_BLOCK_TRACE
+/* Reports control-flow decisions made while the video-initialisation function is
+ * running. The lr identifies the caller; the address range narrows it to
+ * f_002da36c (mc_028, 0x002da36c..0x002dac00) whose labels decide whether
+ * cellVideoOutConfigure is reached. */
+#include <cstdio>
+extern "C" void ps3base_block_trace(uint32_t bo, uint32_t bi, bool taken) {
+    static int n = 0;
+    if (n > 200) return;
+    n++;
+    std::fprintf(stderr, "[blk] bo=%u bi=%u taken=%d\n", bo, bi, taken ? 1 : 0);
+}
+#endif
