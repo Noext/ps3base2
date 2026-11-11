@@ -113,6 +113,7 @@ std::atomic<uint32_t> g_ui_thread_creations{0};
 namespace ppu {
 #if PS3BASE_BLOCK_TRACE
 extern "C" uint32_t g_bt_lr = 0;   /* current caller, published for the branch trace filter */
+extern "C" void* g_bt_ctx = nullptr;  /* live context, so the branch trace can read registers */
 #endif
 static uint32_t g_call_ring[64];
 static uint32_t g_call_lr[64];
@@ -480,6 +481,7 @@ void call_indirect(Context& ctx, uint8_t* base, uint32_t addr) {
     const uint32_t saved_lr = static_cast<uint32_t>(ctx.lr);
 #if PS3BASE_BLOCK_TRACE
     g_bt_lr = saved_lr;
+    g_bt_ctx = &ctx;
 #endif
     g_call_ring[g_call_ring_head & 63] = addr;
     g_call_lr[g_call_ring_head & 63] = saved_lr;

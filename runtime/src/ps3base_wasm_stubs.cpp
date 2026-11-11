@@ -47,6 +47,8 @@ extern "C" int ps3base_ld_probe(uint32_t ea) {
  * that say nothing about the function under study. */
 #include "runtime/image.h"
 extern bool g_bt_on;
+extern "C" void* g_bt_ctx;
+
 extern "C" void ps3base_block_trace(uint32_t bo, uint32_t bi, bool taken) {
     static int n = 0;
     /* Filter here, not at the source: touching the dispatch path to open a window
@@ -64,6 +66,16 @@ extern "C" void ps3base_block_trace(uint32_t bo, uint32_t bi, bool taken) {
             std::fprintf(stderr, "[btall] branches=%u bi1=%u\n", g_bt_all, g_bt_bi1);
     }
     const bool kWant = g_bt_lr >= 0x002da36cu && g_bt_lr < 0x002dac00u;
+    if (kWant && n <= 60) {
+        /* The first five branches form a loop. If one of its counters never
+         * advances, the loop cannot end and branch 6 is never reached. Print the
+         * registers those branches use and increment. */
+        const uint64_t* g = static_cast<const uint64_t*>(g_bt_ctx);
+        std::fprintf(stderr, "[regs] n=%d bo=%u bi=%u t=%d g5=%llu g6=%llu g8=%llu g9=%llu\n",
+                     n, bo, bi, taken ? 1 : 0,
+                     (unsigned long long)g[5], (unsigned long long)g[6],
+                     (unsigned long long)g[8], (unsigned long long)g[9]);
+    }
     if (!kWant || n > 400) return;
     n++;
     /* The ordinal, not an address: the lifted code sets ctx.cia only before a
