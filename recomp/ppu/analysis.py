@@ -190,7 +190,11 @@ def jump_table(img, bctr):
         # rlwinm is opcode 21, rlwimi 20. The shift that scales an index by 4 is
         # SH=2. Checking 20 here was the defect that made the detector reject the
         # one table that mattered.
-        if op == 21 and ((w >> 11) & 0x1F) == 2:
+        # rlwinm (21) and rldic (30) both scale an index by 4. libnet uses
+        # rldic: 350119b4 79291788 rldic r9, r9, 2, 0x1e. Accepting only rlwinm
+        # left that table undetected, and its dispatch reported 0x35011c80 as an
+        # unknown indirect target.
+        if op in (21, 30) and ((w >> 11) & 0x1F) == 2:
             scaled = True
         # lwzx is opcode 31 with XO 23.
         if op == 31 and ((w >> 1) & 0x3FF) == 23:
