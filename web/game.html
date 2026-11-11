@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ps3base &mdash; Minecraft PS3</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; color: #ccc;
+               font: 13px/1.4 ui-monospace, monospace; }
+  #stage { position: relative; width: 100vw; height: 100vh; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  #bar { position: absolute; left: 8px; bottom: 8px; padding: 6px 10px;
+         background: #000a; border-radius: 4px; pointer-events: none; }
+  #log { position: absolute; right: 8px; top: 8px; width: 42vw; height: 30vh;
+         overflow: hidden; background: #000a; border-radius: 4px; padding: 6px;
+         font-size: 11px; white-space: pre-wrap; pointer-events: none; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="canvas"></canvas>
+  <div id="bar">starting&hellip;</div>
+  <div id="log"></div>
+</div>
+<script type="module">
+/* The page owns the WebGPU device; the worker runs the emulation. Milestone 4.
+ *
+ * Two channels connect them:
+ *   - the command ring (SharedArrayBuffer) for RSX commands, as the porting
+ *     prompt specifies;
+ *   - ordinary postMessage for lifecycle events we do not need at frame rate.
+ *
+ * The canvas is transferred to the worker's OffscreenCanvas only if the page
+ * decides to; here the page keeps it and the worker posts commands, which is the
+ * shape ps2-web-recomp settled on after its frame-rate race.
+ */
+const bar = document.getElementById('bar');
+const logEl = document.getElementById('log');
+const canvas = document.getElementById('canvas');
+
+function log(msg) {
+  logEl.textContent = (msg + '\n' + logEl.textContent).slice(0, 4000);
+  bar.textContent = msg.slice(0, 120);
+}
+
+/* --- input ---------------------------------------------------------------
+ * DOM events and the Gamepad API become the four uint16 words cellPadGetData
+ * reads. The layout is the guest's own, so nothing is translated here:
+ *   word 0: select l3 r3 start  up right down left
+ *   word 1: l2 r2 l1 r1  triangle circle cross square
+ *   words 2,3: pressure, unused by the keyboard path
+ */
+const KEYS = {
+  KeyW: [2, 0x10], KeyD: [2, 0x20], KeyS: [2, 0x40], KeyA: [2, 0x80],
+  ArrowUp: [2, 0x10], ArrowRight: [2, 0x20], ArrowDown: [2, 0x40], ArrowLeft: [2, 0x80],
+  Enter: [2, 0x08], Escape: [2, 0x01], Backspace: [2, 0x01],
+  Space: [3, 0x40], KeyZ: [3, 0x40], KeyX: [3, 0x20], KeyC: [3, 0x10], KeyV: [3, 0x80],
+  KeyQ: [3, 0x04], KeyE: [3, 0x08], ShiftLeft: [3, 0x01], ControlLeft: [3, 0x02],
+};
+const held = new Set();
+
+addEventListener('keydown', (e) => {
+  if (KEYS[e.code]) { held.add(e.code); e.preventDefault(); publish(); }
+});
+addEventListener('keyup', (e) => {
+  if (KEYS[e.code]) { held.delete(e.code); e.preventDefault(); publish(); }
+});
+addEventListener('blur', () => { held.clear(); publish(); });
+
+/* The Gamepad API is polled: there is no event for axis or button changes. The
+ * mapping follows the W3C "standard gamepad", which every browser reports. */
+const PAD_BUTTONS = [
+  [3, 0x40],  /* 0  A     -> cross    */
+  [3, 0x20],  /* 1  B     -> circle   */
+  [3, 0x80],  /* 2  X     -> square   */
+  [3, 0x10],  /* 3  Y     -> triangle */
+  [3, 0x04],  /* 4  LB    -> L1       */
+  [3, 0x08],  /* 5  RB    -> R1       */
+  [3, 0x01],  /* 6  LT    -> L2       */
+  [3, 0x02],  /* 7  RT    -> R2       */
+  [2, 0x01],  /* 8  back  -> select   */
+  [2, 0x08],  /* 9  start -> start    */
+  [2, 0x02],  /* 10 L3    -> l3       */
+  [2, 0x04],  /* 11 R3    -> r3       */
+  [2, 0x10],  /* 12 up    */
+  [2, 0x40],  /* 13 down  */
+  [2, 0x80],  /* 14 left  */
+  [2, 0x20],  /* 15 right */
+];
+
+let padWords = [0, 0, 0, 0];
+let padConnected = 0;
+
+function publish() {
+  padWords = [0, 0, 0, 0];
+  padConnected = 0;
+
+  for (const code of held) {
+    const m = KEYS[code];
+    if (m) padWords[m[0]] |= m[1];
+    padConnected = 1;
+  }
+
+  const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+  for (const pad of pads) {
+    if (!pad || !pad.connected) continue;
+    padConnected = 1;
+    for (const [idx, mapping] of PAD_BUTTONS.entries()) {
+      const b = pad.buttons[idx];
+      if (b && b.pressed) padWords[mapping[0]] |= mapping[1];
+    }
+    /* Left stick onto the d-pad with a dead zone, which is what a PS3 pad does
+     * for menu navigation and is enough for this port. */
+    const ax = pad.axes[0] || 0, ay = pad.axes[1] || 0;
+    if (ax < -0.5) padWords[2] |= 0x80;
+    if (ax > 0.5)  padWords[2] |= 0x20;
+    if (ay < -0.5) padWords[2] |= 0x10;
+    if (ay > 0.5)  padWords[2] |= 0x40;
+    break;
+  }
+
+  /* Written straight into the module's heap when the seam is up; otherwise the
+   * words are simply kept, which is what a page without a running module wants. */
+  if (padSeam && window.HEAPU16) {
+    const base = padSeam.padAddr >> 1;         /* HEAPU16 index */
+    window.HEAPU16[base + 0] = padWords[0];
+    window.HEAPU16[base + 1] = padWords[1];
+    window.HEAPU16[base + 2] = padWords[2];
+    window.HEAPU16[base + 3] = padWords[3];
+    window.HEAPU32[padSeam.connAddr >> 2] = padConnected;
+  }
+}
+setInterval(publish, 16);
+
+/* --- the worker ---------------------------------------------------------- */
+let worker = null;
+let padSeam = null;
+
+function start() {
+  if (!('gpu' in navigator)) {
+    log('WebGPU is not available. Enable chrome://flags/#enable-unsafe-webgpu and ' +
+        'chrome://flags/#enable-vulkan, then restart the browser.');
+    return;
+  }
+  worker = new Worker('./worker.js', { type: 'module' });
+  worker.onmessage = (e) => {
+    const m = e.data;
+    if (m.type === 'log') log(m.text);
+    if (m.type === 'ready') log('emulation worker ready');
+    if (m.type === 'pad-seam') {
+      /* The worker returned the addresses of the C blocks. Views over the wasm
+       * heap let the page write the pad with no copy and no message per poll. */
+      padSeam = m;
+      log('pad seam: 0x' + m.padAddr.toString(16));
+    }
+  };
+  worker.onerror = (e) => log('worker error: ' + e.message);
+  worker.postMessage({ type: 'start', canvas: null });
+  log('worker started');
+}
+
+canvas.addEventListener('click', () => canvas.focus());
+start();
+</script>
+</body>
+</html>
