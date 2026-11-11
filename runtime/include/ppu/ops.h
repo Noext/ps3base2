@@ -44,7 +44,10 @@ using BodyFn = void (*)(Context&, uint8_t*);
  * 0x21000000, so its entry stub indexed 0x8405244 -- 124 MB past the end of the
  * array -- and the resulting write faulted at a garbage address. The firmware
  * modules had always sat below 0x02000000, so nothing had ever caught it. */
-extern uint8_t* const hook_flags[];
+/* Weak, for the same reason as image::images: the unit-test executables link
+ * ppu_ops.cpp without the generated table. A strong declaration makes
+ * guest_spinlock and friends fail to link. */
+extern uint8_t* const hook_flags[] __attribute__((weak));
 extern const uint32_t hook_flag_image_count;
 
 /* Look up the flag byte for an arbitrary guest address. Returns nullptr when the

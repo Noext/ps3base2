@@ -34,8 +34,11 @@ struct ImageEntry {
     uint32_t entry;
 };
 
-extern const ImageEntry images[];
-extern const uint32_t image_count;
+/* Weak: the unit-test executables link runtime/src/memory.cpp (for the
+ * allocator) without the generated table.cpp, and a strong symbol there would
+ * fail the link. The real binaries always provide both. */
+extern const ImageEntry images[] __attribute__((weak));
+extern const uint32_t image_count __attribute__((weak));
 extern const FuncEntry functions[];
 extern const uint32_t function_count;
 extern const ImportEntry imports[];

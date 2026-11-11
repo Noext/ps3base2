@@ -13,20 +13,10 @@ namespace {
 
 constexpr int32_t SCE_NP_MANAGER_STATUS_OFFLINE = -1;
 constexpr int32_t SCE_NP_MANAGER_STATUS_ONLINE = 3;
-constexpr int32_t CELL_NET_CTL_STATE_Disconnected = 0;
-/* 3, not 4. The title's own consumer (out/ppu/mc_003.cpp f_00074080) loads
- * the state cellNetCtlGetState wrote and compares it against 3 to decide
- * "online"; refs/rpcs3 cellNetCtl.h agrees (Disconnected 0, Connecting 1,
- * IPObtaining 2, IPObtained 3). Reporting 4 made every "am I connected" test
- * in the title false even with PS3BASE_NET_CONNECTED set. */
-constexpr int32_t CELL_NET_CTL_STATE_IPObtained = 3;
 constexpr int64_t SCE_NP_ERROR_NOT_INITIALIZED = static_cast<int32_t>(0x8002aa01);
 constexpr int64_t SCE_NP_ERROR_ALREADY_INITIALIZED = static_cast<int32_t>(0x8002aa02);
 constexpr int64_t SCE_NP_ERROR_INVALID_ARGUMENT = static_cast<int32_t>(0x8002aa03);
 constexpr int64_t SCE_NP_ERROR_OFFLINE = static_cast<int32_t>(0x8002aa0c);
-constexpr int64_t CELL_NET_CTL_ERROR_NOT_CONNECTED = static_cast<int32_t>(0x80130106);
-constexpr int64_t CELL_NET_CTL_ERROR_NOT_INITIALIZED = static_cast<int32_t>(0x80130101);
-constexpr int64_t CELL_NET_CTL_ERROR_INVALID_ADDR = static_cast<int32_t>(0x80130103);
 
 }
 
@@ -73,34 +63,6 @@ HLE_FUNC(sys_net, sys_net_socketclose) {
     ret(ctx, 0);
 }
 HLE_FUNC(sys_net, sys_net_finalize_network) { ret(ctx, 0); }
-/* Events the network dialogs raise; the title polls for them through
- * cellSysutilCheckCallback. */
-static constexpr int32_t CELL_NET_CTL_ERROR_DIALOG_CANCELED = static_cast<int32_t>(0x80130107);
-
-static constexpr uint64_t CELL_SYSUTIL_NET_CTL_NETSTART_LOADED   = 0x0801;
-static constexpr uint64_t CELL_SYSUTIL_NET_CTL_NETSTART_FINISHED = 0x0802;
-static constexpr uint64_t CELL_SYSUTIL_NET_CTL_NETSTART_UNLOADED = 0x0803;
-
-/* Raise a system command to every registered sysutil callback.
- *
- * CellSysutilCallback is void(u64 status, u64 param, void* userdata):
- * the EVENT is the FIRST argument and the title's own pointer is the THIRD.
- * This call used to pass them the other way round -- userdata in r3, event in
- * r4 -- so every sysutil delivery reached the title with a heap pointer where
- * the event code belonged. All four registered handlers dispatch on r3
- * (0x0021a3d4 compares it against 0x801/0x802, 0x0021d850 against
- * 0x121/0x122/0x131/0x132/0x141/0x142/0x101), so not one system event has
- * ever been recognised since this module existed. */
-static void sysutil_send(uint64_t event, uint64_t param = 0) {
-    for (int slot = 0; slot < 4; slot++) {
-        const uint32_t fn = callback_function(slot);
-        if (!fn) continue;
-        const uint32_t arg = callback_arg(slot);
-        sysutil_post([fn, arg, event, param](ppu::Context& c) {
-            call_guest(c, fn, event, param, arg);
-        });
-    }
-}
 
 /* PS3BASE_NP_LOG: report the NP entry points and their arguments. */
 #define NP_ENTER(name)                                                        \
@@ -127,7 +89,6 @@ struct NpState {
     bool init = false;
     bool np2_init = false;
     bool match2_init = false;
-    bool netctl_init = false;
     /* piste 43: sceNpCommerce2 state. The title opens a local store session
      * while loading a save; with no implementation at all it saw a failed
      * session and aborted the load with "Connection to the server was lost". */
@@ -139,8 +100,6 @@ struct NpState {
     uint32_t manager_cb_arg = 0;
     uint32_t basic_cb = 0;
     uint32_t basic_cb_arg = 0;
-    uint32_t netctl_handler = 0;
-    uint32_t netctl_arg = 0;
     bool ctx_created = false;
     bool ctx_started = false;
     uint32_t ctx_id = 0;
@@ -151,7 +110,6 @@ struct NpState {
      * added actually happened, and how many times. */
     uint32_t manager_delivered = 0;
     uint32_t basic_delivered = 0;
-    uint32_t netctl_delivered = 0;
 };
 
 NpState g_np;
@@ -184,7 +142,6 @@ int32_t np_psn_status() {
  * A port that has already made this work offline delivers the status the same
  * way: refs/jdc-ps3recomp/libs/network/sceNp.c, np_fire_manager_cb_once. */
 constexpr int32_t kBasicEndOfInitialPresence = 6;   /* SCE_NP_BASIC_EVENT_* */
-constexpr int32_t kNetCtlEventEstablish = 1;        /* CELL_NET_CTL_EVENT_*  */
 
 /* Deliver the manager's current sign-in state to the title's callback, once per
  * registration. Runs on the guest thread that polls cellSysutilCheckCallback,
@@ -221,117 +178,11 @@ void np_deliver_basic_presence_end() {
 
 using namespace npdetail;
 
-/* cellNetCtl. RPCS3 tracks an init flag, hands out a handler id, and reports
- * the connection state the emulated console is in. The dialog and its events
- * stay exactly as they were: they are what makes the title offer
- * "Continue playing offline". */
-HLE_FUNC(cellNetCtl, cellNetCtlInit) { g_np.netctl_init = true; ret(ctx, 0); }
-HLE_FUNC(cellNetCtl, cellNetCtlTerm) { g_np.netctl_init = false; ret(ctx, 0); }
-/* The transition a handler receives when the interface comes up:
- * CellNetCtlHandler = void(s32 prev_state, s32 new_state, s32 event,
- *                           s32 error_code, void* arg)
- * -- five arguments, with the caller's pointer LAST. Compare
- * CellSysutilCallback, whose userdata is the THIRD: getting these two
- * conventions confused is exactly the defect that made every sysutil
- * delivery unrecognisable. */
-void np_deliver_netctl_establish() {
-    if (!g_np.netctl_handler) return;
-    const uint32_t h = g_np.netctl_handler, arg = g_np.netctl_arg;
-    g_np.netctl_delivered++;
-    sysutil_post([h, arg](ppu::Context& c) {
-        call_guest(c, h, CELL_NET_CTL_STATE_Disconnected /* prev */,
-                   CELL_NET_CTL_STATE_IPObtained /* new */,
-                   kNetCtlEventEstablish, 0, arg);
-    });
-    LOG_INFO("cellNetCtl", "handler 0x%08x <- ESTABLISH 0->3, arg 0x%08x", h, arg);
-}
-
-/* cellNetCtlAddHandler(handler, arg, s32* hid).
- * The transition is delivered only when there is one to report. The state this
- * runtime reports is Disconnected unless PS3BASE_NET_CONNECTED is set, and a
- * Disconnected interface never raises ESTABLISH -- so by default the handler
- * correctly stays silent, and RPCS3 agrees (its AddHandler is a todo stub).
- * PS3BASE_NETCTL_ESTABLISH=1 delivers the transition anyway, so the delivery
- * path itself can be measured rather than assumed. */
-HLE_FUNC(cellNetCtl, cellNetCtlAddHandler) {
-    /* Census: record the registered handler so the inventory reports it. */
-    /* (handler, arg, hid): the handler is argument 0, not 1. The census was
-     * keyed on argument 1 -- the title's own pointer -- and filed a stack
-     * address as the "opd", so the one registration it exists to make visible
-     * was reported under the wrong number. */
-    cbwatch::note_register("netctl-handler", a32(ctx, 0), a32(ctx, 1));
-    if (!g_np.netctl_init) return ret(ctx, CELL_NET_CTL_ERROR_NOT_INITIALIZED);
-    const uint32_t hid = a32(ctx, 2);
-    if (!hid) return ret(ctx, CELL_NET_CTL_ERROR_INVALID_ADDR);
-    g_np.netctl_handler = a32(ctx, 0);
-    g_np.netctl_arg = a32(ctx, 1);
-    vm::write32(hid, 1);
-    LOG_INFO("cellNetCtl", "AddHandler handler=0x%08x arg=0x%08x -> hid 1", a32(ctx, 0), a32(ctx, 1));
-    static const bool force_establish = std::getenv("PS3BASE_NETCTL_ESTABLISH") != nullptr;
-    if (force_establish || std::getenv("PS3BASE_NET_CONNECTED")) np_deliver_netctl_establish();
-    ret(ctx, 0);
-}
-HLE_FUNC(cellNetCtl, cellNetCtlDelHandler) {
-    LOG_INFO("cellNetCtl", "DelHandler(%d)", s32(ctx, 0));
-    g_np.netctl_handler = 0;
-    ret(ctx, 0);
-}
-HLE_FUNC(cellNetCtl, cellNetCtlGetState) {
-    /* Report the caller a handful of times; 17k identical lines tell nothing. */
-    static std::atomic<int> seen{0};
-    const int n = seen.fetch_add(1);
-    if (n < 6 || (n % 20000) == 0)
-        LOG_INFO("cellNetCtl", "GetState called #%d lr=0x%08x thread=0x%x", n,
-                 static_cast<uint32_t>(ctx.cia), ctx.thread_id);
-    const int32_t state = std::getenv("PS3BASE_NET_CONNECTED") ? CELL_NET_CTL_STATE_IPObtained
-                                                                : CELL_NET_CTL_STATE_Disconnected;
-    if (uint32_t p = a32(ctx, 0)) vm::write32(p, state);
-    ret(ctx, 0);
-}
-HLE_FUNC(cellNetCtl, cellNetCtlGetInfo) { ret(ctx, CELL_NET_CTL_ERROR_NOT_CONNECTED); }
-
-/* The "connect to PSN" dialog the title raises before starting a world. There is
- * no network, so it is driven to its offline conclusion: LOADED then FINISHED
- * from the load call, "cancelled" plus UNLOADED from the unload call. The title
- * then offers "Continue playing offline".
- * Reference: refs/rpcs3/rpcs3/Emu/Cell/Modules/cellNetCtl.cpp, netstart_hack and
- * cellNetCtlNetStartDialogUnloadAsync. */
-HLE_FUNC(cellNetCtl, cellNetCtlNetStartDialogLoadAsync) {
-    const uint32_t param = a32(ctx, 0);
-    if (param) {
-        LOG_INFO("cellNetCtl", "NetStartDialogLoadAsync size %d type %d flag %d",
-                 static_cast<int32_t>(vm::read32(param)),
-                 static_cast<int32_t>(vm::read32(param + 4)),
-                 static_cast<int32_t>(vm::read32(param + 8)));
-    }
-    sysutil_send(CELL_SYSUTIL_NET_CTL_NETSTART_LOADED);
-    sysutil_send(CELL_SYSUTIL_NET_CTL_NETSTART_FINISHED);
-    LOG_INFO("cellNetCtl", "NetStartDialogLoadAsync -> LOADED + FINISHED (offline)");
-    ret(ctx, 0);
-}
-
-HLE_FUNC(cellNetCtl, cellNetCtlNetStartDialogAbortAsync) { ret(ctx, 0); }
-
-HLE_FUNC(cellNetCtl, cellNetCtlNetStartDialogUnloadAsync) {
-    LOG_INFO("cellNetCtl", "NetStartDialogUnloadAsync called result=0x%08x", a32(ctx, 0));
-    const uint32_t result = a32(ctx, 0);
-    /* CellNetCtlNetStartDialogResult: s32 size, s32 result. Offline means the
-     * dialog was cancelled, which is the title's "play offline" path. */
-    if (result) {
-        vm::write32(result + 0, 8);
-        /* PS3BASE_NET_CONNECTED reports the dialog as succeeded so the title
-         * takes its online path instead of "continue offline"; every other
-         * handler already agrees with that state. */
-        const int64_t code = std::getenv("PS3BASE_NET_CONNECTED")
-                                 ? 0
-                                 : static_cast<uint32_t>(CELL_NET_CTL_ERROR_DIALOG_CANCELED);
-        vm::write32(result + 4, static_cast<uint32_t>(code));
-    }
-    sysutil_send(CELL_SYSUTIL_NET_CTL_NETSTART_UNLOADED);
-    LOG_INFO("cellNetCtl", "NetStartDialogUnloadAsync -> CANCELED + UNLOADED");
-    ret(ctx, 0);
-}
-HLE_FUNC(cellNetCtl, cellNetCtlGetNatInfo) { ret(ctx, CELL_NET_CTL_ERROR_NOT_CONNECTED); }
+/* cellNetCtl lives in runtime/src/hle/cellNetCtl.cpp. It was here, and the
+ * move matters: a second HLE_FUNC(cellNetCtl, ...) for the same name would
+ * register a second entry under "cellNetCtl::name" in the same map
+ * (runtime/src/ppu_runtime.cpp:74-83), and which one wins is the static
+ * constructor order -- a silent coin flip. */
 
 /* ------------------------------------------------------------------------
  * NP, the honest way.

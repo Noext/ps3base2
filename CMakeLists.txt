@@ -415,6 +415,20 @@ target_include_directories(savedata PRIVATE runtime/include "${CMAKE_SOURCE_DIR}
 target_compile_options(savedata PRIVATE ${PS3BASE_ARCH_FLAGS})
 add_test(NAME savedata COMMAND savedata)
 
+# netctl: the cellNetCtl decision table (hle/netctl_hle.h) plus the ten handlers,
+# called with a real guest context and real guest memory through the same header
+# the imports use. Every answer is the console's OFFLINE answer, which is the
+# point: RPCS3 answers ETHER_ADDR and the whole of GetNatInfo without a network,
+# and refuses the rest with CELL_NET_CTL_ERROR_NOT_CONNECTED. Links the memory
+# map and nothing else, so it runs with no game, no GPU and no network.
+add_executable(netctl tests/cellNetCtl.cpp
+    runtime/src/memory.cpp runtime/src/regions.cpp runtime/src/mem.cpp
+    runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/backtrace_port.cpp
+    runtime/src/host.cpp runtime/src/log.cpp)
+target_include_directories(netctl PRIVATE runtime/include "${CMAKE_SOURCE_DIR}/runtime/src" "${CMAKE_SOURCE_DIR}/runtime/src/hle")
+target_compile_options(netctl PRIVATE ${PS3BASE_ARCH_FLAGS})
+target_link_libraries(netctl PRIVATE ${CMAKE_DL_LIBS} pthread)
+add_test(NAME netctl COMMAND netctl)
 # avconf: cellVideoOutSetGamma's argument order and its three return codes.
 # The identity case is a true CELL_OK; every other in-range gamma is refused
 # with NOT_IMPLEMENTED rather than a success that changed no pixel.
