@@ -582,6 +582,15 @@ void call_import(Context& ctx, uint8_t* base, uint32_t index) {
             std::fprintf(stderr, "[videoimp] import=%d ret=0x%llx lr=0x%08x\n", index,
                          (unsigned long long)ctx.gpr[3], lr);
     }
+    if (index == 396 || index == 400 || index == 401 || index == 405) {
+        /* The LLE _cellGcmInitBody returns CELL_GCM_ERROR_FAILURE. Its call tree
+         * reaches exactly these four imports; a failure has to come from one of
+         * the two that can fail (lwmutex_create, process_get_paramsfo). */
+        static std::atomic<int> n{0};
+        if (n.fetch_add(1) < 20)
+            std::fprintf(stderr, "[gcmdep] import=%d ret=0x%llx lr=0x%08x\n", index,
+                         (unsigned long long)ctx.gpr[3], lr);
+    }
     if (index == 119) {
         /* The import target is an OPD: two words, the code address then the TOC.
          * Read it so the LLE body can be guarded at its real entry. */
