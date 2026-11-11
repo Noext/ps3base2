@@ -592,6 +592,9 @@ void call_import(Context& ctx, uint8_t* base, uint32_t index) {
                          (unsigned long long)ctx.gpr[3], lr);
     }
     if (index == 119) {
+        std::fprintf(stderr, "[gcmret] args r3=0x%x r4=0x%x r5=0x%x r6=0x%x\n",
+                     (unsigned)ctx.gpr[3], (unsigned)ctx.gpr[4],
+                     (unsigned)ctx.gpr[5], (unsigned)ctx.gpr[6]);
         std::fprintf(stderr, "[gcmret] import119 returns r3=0x%llx (low32=0x%08x)\n",
                      (unsigned long long)ctx.gpr[3],
                      static_cast<unsigned>(ctx.gpr[3]));
