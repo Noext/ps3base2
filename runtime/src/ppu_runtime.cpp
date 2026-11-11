@@ -547,13 +547,26 @@ void call_import(Context& ctx, uint8_t* base, uint32_t index) {
     /* A zero return used as a pointer: print the import, its answer and the
      * resolution state, which says whether the HLE, the LLE image or the
      * unresolved trampoline produced it. */
-    if (index == 166) {
+    if (index == 166 && false) {
         /* GetResolution writes w/h into the caller's buffer. If that buffer is not
          * mapped the helper returns silently and the caller reads zeros -- the same
          * silent-zero trap as call_indirect. Name the buffer and its state. */
         const uint32_t out = static_cast<uint32_t>(ctx.gpr[4]);
         std::fprintf(stderr, "[resout] out=0x%08x mapped=%d\n", out,
                      vm::range_mapped(out, 4) ? 1 : 0);
+    }
+    if (index == 138 || index == 142 || index == 124) {
+        static std::atomic<int> n{0};
+        if (n.fetch_add(1) < 8)
+            std::fprintf(stderr, "[next-import] %d lr=0x%08x\n", index, lr);
+    }
+    if (index == 166) {
+        /* The branch two instructions later tests the height the HLE just wrote.
+         * Print both halfwords from the caller's stack so "the HLE wrote nothing"
+         * and "the branch tests something else" stop being indistinguishable. */
+        const uint32_t sp = static_cast<uint32_t>(ctx.gpr[1]);
+        std::fprintf(stderr, "[resheights] sp=0x%08x w=0x%04x h=0x%04x\n", sp,
+                     ppu::ld16(base, sp + 128), ppu::ld16(base, sp + 130));
     }
     if (index == 144 || index == 166 || index == 138 || index == 142) {
         static std::atomic<int> n{0};
