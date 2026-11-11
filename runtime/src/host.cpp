@@ -22,7 +22,11 @@
 /* The audio ring's storage, published by the page through Module before the
  * module starts. Zero means headless: the HLE then counts frames and discards
  * them, which is what it did before the worklet existed. */
+/* The pad words the page publishes from DOM events and the Gamepad API. Layout is
+ * the four uint16 words cellPadGetData reads, so the page writes them directly. */
 extern "C" {
+uint16_t g_web_pad_words[4] = {0, 0, 0, 0};
+uint32_t g_web_pad_connected = 0;
 float* g_audio_ring_memory = nullptr;
 uint32_t g_audio_ring_frames = 0;
 }
