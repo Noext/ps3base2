@@ -30,12 +30,28 @@ CXXFLAGS=(-Oz -std=c++20 -fwasm-exceptions -msimd128 -msse4.1 -mfma
           -I "$ROOT/runtime/include" -I "$ROOT/runtime/src"
           -I "$ROOT/runtime/src/lv2" -I "$ROOT/runtime/src/spu" -I "$ROOT/out/ppu"
           -I "$ROOT/third_party/stb" -I "$ROOT/third_party/imgui"
-          -I "$ROOT/runtime/src/spu/renjob" -I "$ROOT/out/include")
+          -I "$ROOT/runtime/src/spu/renjob" -I "$ROOT/out/include"
+          -I "$ROOT/third_party/volk" -I "$ROOT/third_party/Vulkan-Headers/include")
 
 echo "== compile runtime"
 find "$ROOT/runtime/src" -name '*.cpp' \
      -not -path '*/launcher/*' -not -name 'main.cpp' \
-     -not -name 'host_input.cpp' -not -name 'host.cpp.orig' | while read -r f; do
+     -not -name 'host_input.cpp' -not -name 'host.cpp.orig' \
+     -not -path '*/jobsys/*' -not -path '*/gpu/edge*' -not -name 'vk_context.cpp' \
+     -not -name 'rsx_renderer.cpp' -not -name 'presenter.cpp' -not -name 'motion_vectors.cpp' \
+     -not -name 'shader_compiler.cpp' -not -name '*_adapters.cpp' -not -name 'renjob_whole.cpp' \
+     -not -path '*/spu/anim/*' \
+     -not -path '*/spu/cloth/*' \
+     -not -path '*/spu/edge/*' \
+     -not -path '*/spu/edgejob/*' \
+     -not -path '*/spu/meshhier/*' \
+     -not -path '*/spu/meshprep/*' \
+     -not -path '*/spu/mpjob/*' \
+     -not -path '*/spu/pm/*' \
+     -not -path '*/spu/renjob/*' \
+     -not -path '*/spu/scream/*' \
+     -not -path '*/spu/shadows/*' \
+     -not -path '*/spu/tasks/*' | while read -r f; do
     o="$OUT/obj/$(echo "${f#$ROOT/}" | tr '/' '_' | sed 's/\.cpp$/.o/')"
     "$EMCC" "${CXXFLAGS[@]}" -DPS3BASE_BOOT_PROBE=1 -DPS3BASE_INPUT_BUILTIN=1 -c "$f" -o "$o"
 done
