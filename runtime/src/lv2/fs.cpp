@@ -278,8 +278,20 @@ LV2_SYSCALL(802, sys_fs_read) {
      * reports a missing entry, which looks like a mount problem and is not. */
     static const bool fs_log = std::getenv("PS3BASE_FS_LOG") != nullptr;
     if (fs_log) {
-        LOG_INFO("fs", "read fd %u req %llu got %llu -> 0x%llx",
-                 u32arg(ctx, 0), static_cast<unsigned long long>(n),
+        /* The file and the offset belong in this line. "read fd 4 req 10460 got
+         * 10460 -> 0x0" answers whether a read succeeded but not WHICH archive
+         * region it covered, which is the question a load that leaves a buffer
+         * untouched actually asks: the gap is visible only when the reads are
+         * laid out by file and offset and the hole between two of them shows.
+         *
+         * fd->guest is the guest path the fd was opened with, and the offset is
+         * the position BEFORE the read, which is what a caller's "I asked for
+         * bytes [x, x+n)" means. */
+        const int64_t pos = _ftelli64(fd->f) - static_cast<int64_t>(got);
+        LOG_INFO("fs", "read fd %u '%s' off 0x%llx req %llu got %llu -> 0x%llx",
+                 u32arg(ctx, 0), fd->guest.c_str(),
+                 static_cast<unsigned long long>(pos),
+                 static_cast<unsigned long long>(n),
                  static_cast<unsigned long long>(got),
                  static_cast<unsigned long long>(r));
     }

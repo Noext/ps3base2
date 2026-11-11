@@ -351,12 +351,45 @@ def table_dispatch_bctr(img, bctr, lo_fn, hi_fn):
     register that is never rewritten serves every lwzx through it". Every such
     bctr is a switch on the same table.
     """
-    # The dispatch is mtctr then bctr, with the lwzx that feeds it up to eight
+    # The dispatch is mtctr then bctr, with the lwzx that feeds it up to twenty-odd
     # instructions earlier -- ordinary code sits between them (an addic advancing
     # the bytecode cursor, a stw spilling a register). Looking only at bctr-4 and
     # bctr-8 found 92 of the 163 dispatches and missed 0x00d1933c, the one that
     # produces 0x00d1bbec, whose lwzx is five instructions back.
-    if not ((img.word(bctr - 4) >> 26) == 31 and ((img.word(bctr - 4) >> 1) & 0x3FF) == 467):
+    #
+    # Two shape assumptions were wrong here, and each cost a boot.
+    #
+    # 1. mtctr is not always at bctr-4. Measured in f_00d19208: of its 163
+    #    bcctr, 130 put mtctr at -1, but 26 at -2, 3 at -3 and 4 at -4, with a
+    #    real instruction finishing the argument setup in the gap. Its own
+    #    bctr at 0x00d19e98 is one of them:
+    #
+    #        0xd19e90  mtctr r5
+    #        0xd19e94  subfc r30, r3, r30     <- the gap, not a nop
+    #        0xd19e98  bctr
+    #
+    #    Requiring bctr-4 rejected the site, so the lift emitted
+    #    'switch (ctx.ctr) { default: call_indirect }' -- a switch with NO cases
+    #    -- and the run stopped at 'unknown indirect target 0x00d1bbec' holding
+    #    the CORRECT target: r16=0x013f6400, r5=ctr=0x00d1bbec, which is
+    #    table[0x95]. The interpreter was right; the switch was empty.
+    #
+    # 2. The register the mtctr names is the ONLY thing that identifies the
+    #    feeding lwzx. Ignoring it took the loop consumer's lwzx at 0xd1a028
+    #    (0x00d1a008 lwzx r9,r3,r6) instead of 0x00d19ff0 lwzx r5,r16,r5, and
+    #    rebuilt 'a table' at 0x013323f0 with one entry instead of 256.
+    #
+    # With both fixed, 163 of 163 shared-table dispatches in f_00d19208 resolve
+    # to base 0x013f6400. tests/ppu_dispatch_table.py pins both rules.
+    ctr_reg = None
+    for k in range(1, 9):
+        w = img.word(bctr - 4 * k)
+        if (w >> 26) == 31 and ((w >> 1) & 0x3FF) == 467:
+            ctr_reg = (w >> 21) & 0x1F
+            break
+    if ctr_reg is None:
+        return None
+    if ctr_reg == 0:
         return None
     # Find the lwzx that reads THROUGH the table base register, not merely the
     # first lwzx above the dispatch. Red Dead's failing site has two:
@@ -365,9 +398,21 @@ def table_dispatch_bctr(img, bctr, lo_fn, hi_fn):
     # Taking the first one found set base_reg to r3, which is not a table, and the
     # dispatch was emitted with zero cases.
     base_reg = None
-    for k in range(2, 24):
+    base_reg = None
+    # Two independent requirements, both measured, both needed:
+    #
+    # 1. The feeding lwzx is the one whose RT is the register mtctr names. Ignoring
+    #    that took the loop consumer's lwzx (0x00d1a008 lwzx r9,r3,r6) instead of
+    #    0x00d19ff0 lwzx r5,r16,r5 and rebuilt "a table" with one entry.
+    # 2. The window must reach 40 instructions: the longest measured distance in
+    #    f_00d19208 is 21, and loop bodies sit between the read and the dispatch.
+    #
+    # And the candidate must be a real table base (loaded once from lis/addic at
+    # function entry, then only read), which is what tells it from an array
+    # pointer the loop rewrites.
+    for k in range(2, 41):
         w = img.word(bctr - 4 * k)
-        if (w >> 26) == 31 and ((w >> 1) & 0x3FF) == 23:
+        if (w >> 26) == 31 and ((w >> 1) & 0x3FF) == 23 and ((w >> 21) & 0x1F) == ctr_reg:
             cand = (w >> 16) & 0x1F
             if _register_is_table_base(img, cand, bctr, lo_fn):
                 base_reg = cand

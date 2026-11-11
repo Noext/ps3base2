@@ -732,3 +732,129 @@ fatal-I/O retry routine, not a cache wait.
 Same shape as the previous one (0x00d19e04, now lifted via a discovery seed): an
 indirect call from f_00d19278 to a target the lifter never produced. Worked
 through the discovery loop, one seed at a time.
+## 2026-11-11 -- the 0x00d1bbec stop was an empty switch, not an unfilled buffer
+
+### What the stop actually is
+
+The interpreter was running correctly. Its dispatch computed the right target
+and the generated function had no case for it.
+
+    F ppu: unknown indirect target 0x00d1bbec (lr=0x0085c000, thread 0x1000000)
+      r3=0x0 r4=0x2 r9=0xffffffff000000ab r31=0x731cce80 ctr=0xd1bbec
+      r16 = 0x013f6400   r28 = 0x73470975   r30 = 0x71835a40
+
+`ctr` already holds the target, so the table read succeeded. `r16` is the
+table base the function builds at 0xd192a4/0xd192b4, and 0xd1bbec is its entry
+0x95:
+
+    table[0x95] at 0x013f6654 = 0x00d1bbec
+
+Replaying the guest block 0xd19fd0..0xd1a028 with the dumped registers, against
+the byte stream reconstructed from the dump's own word lines:
+
+    0xd19fd0  ori   r3, r28      r3 = 0x73470cf4
+    0xd19fd4  addic r28, r28, 1 r28 = 0x73470cf5   == dumped r28
+    0xd19fd8  lbz   r3, 1(r3)   r3 = byte[0x73470cf5] = 0x95
+    0xd19fdc  slwi  r5, r3, 2   r5 = 0x254
+    0xd19ff0  lwzx  r5, r16, r5 r5 = word[0x013f6654] = 0x00d1bbec == dumped r5
+
+0x95 is a real RAGE opcode. Nothing was uninitialised on this path.
+
+### The 0xCD / 0xDF were a different object
+
+The dump prints `cdcdcdcd` / `dfdfdfdf` in the r6, r7, r25, r27, r30 slots.
+Those are other heap objects, printed at UNALIGNED offsets (the dump walks
+`r + k*4` from an odd address), and none of them is the byte the interpreter
+consumed. The hypothesis that a buffer had not been filled is refuted: no file
+read, decrypt or SPURS job is skipped here.
+
+### The defect: an empty switch, twice over
+
+`table_dispatch_bctr` makes two shape assumptions the title breaks.
+
+1. It required `mtctr` at `bctr-4`. Of f_00d19208's 163 bcctr, 130 put it
+   there, but 26 put it at -2, 3 at -3 and 4 at -4, with real work in the gap:
+
+       0xd19e90  mtctr r5
+       0xd19e94  subfc r30, r3, r30
+       0xd19e98  bctr
+
+   That site was rejected, so the lift emitted
+
+       switch (uint32_t(ctx.ctr)) {  default: ppu::call_indirect(...); return; }
+
+   -- a switch with no cases at all -- and the run stopped on a target the
+   table had listed all along.
+
+2. It took the first `lwzx` in the window without checking which register it
+   wrote. At 0xd1a028 that is the loop consumer's `lwzx r9, r3, r6`, so it
+   rebuilt a one-entry 'table' at 0x013323f0 instead of the real base.
+
+### Fixed
+
+The mtctr is searched for within 8 instructions, the feeding lwzx must write
+the mtctr's source register, and the look-back window is 40 instructions.
+Measured after: **163 of 163** shared-table dispatches in f_00d19208 resolve to
+base 0x013f6400 (was 126).
+
+`tests/ppu_dispatch_table.py` pins both rules synthetically (no disc needed) and
+is registered as the ctest `ppu_dispatch_table`. Reverting either rule stops it
+at the first check, which is what makes it a regression test rather than a
+description.
+
+### Effect, measured (same VFS, same 100 s budget, DISPLAY :79)
+
+    baseline (pristine bdf5066 binary, main/build-rdr):
+      F ... unknown indirect target 0x00d1bbec (lr=0x0085c000)   at t=29.4 s
+      last flip 721
+
+    with the fix:
+      'unknown indirect target' : 0 occurrences
+      fatal lines              : 0
+      last flip                : 2581 at t=96.2 s
+
+The stop is gone and the boot continues past the point where it died.
+
+### How the failing site was named
+
+`PS3BASE_DISPATCH_PROBE=<lr>` logs the host return address of every
+`call_indirect` for one guest lr, which `addr2line` maps to one line of
+generated code. It reported `ctr=0x00d1bbec r16=0x013f6400`, confirming that
+the dispatch itself was correct and only the switch was empty.
+
+### The I/O audit the 0xcd/0xdf hypothesis asked for -- and what it shows
+
+The premise was that the interpreter read an unfilled buffer, so every read
+around the load was logged with file, offset, size and return. `sys_fs_read`'s
+`PS3BASE_FS_LOG=1` line now carries the guest path and the pre-read offset
+(runtime/src/lv2/fs.cpp); before, it printed only `read fd 4 req N got M`, so
+the file and the hole were both invisible.
+
+Fresh VFS, `PS3BASE_FS_LOG=1`, 60 s:
+
+    16474 sys_fs_read calls, all returning 0x0 (no error)
+    16471 from '/dev_bdvd/PS3_GAME/USRDIR/rdr2_installed.sdat'  (the decrypted
+          .dec, 539174912 bytes, offsets 0x0..0x20232800)
+        3 from '/dev_bdvd/PS3_GAME/ICON0.PNG'
+        0 from '/dev_bdvd/PS3_GAME/USRDIR/rdr2_layer0.rpf'
+
+Two short reads, both legitimate end-of-file: ICON0.PNG req 32768 got 10460,
+and sdat off 0x20230000 req 32768 got 10240 (file ends at 0x20232800).
+
+The archive is opened and announced, and then never read:
+
+    I 2.733487 fs: open '/dev_bdvd/PS3_GAME/USRDIR/rdr2_layer0.rpf' flags 00 -> 4
+    I 2.733772 tty: [0] [PACKFILE] Loading archive 'game:/rdr2_layer0.rpf' from optical layer 0
+
+(`flags 00` is O_RDONLY and correct; both facts reproduce on two independent
+fresh VFS runs.) So on this path there is no missing read to blame for
+uninitialised data -- which agrees with the direct finding that the interpreter
+consumed a valid opcode and the switch was empty. The RPF is the next link, not
+this one: the title mounts the archive, writes its cache, and does its reading
+from the SDAT.
+
+One further observation, recorded but not chased here because it is outside
+this task's frame: `gamedata:/rdr2_installed.sdat` is announced as loaded, and
+the reads all come from the decrypted SDAT, which is the NPDRM path working as
+documented. No unimplemented-syscall, ENOSYS or refusal line appears anywhere
+in the run.

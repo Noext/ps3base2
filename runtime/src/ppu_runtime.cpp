@@ -1,4 +1,5 @@
 #include "ppu/ops.h"
+#include <dlfcn.h>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -279,6 +280,35 @@ void call_indirect(Context& ctx, uint8_t* base, uint32_t addr) {
         }
     }
     force::tick();
+    /* PS3BASE_DISPATCH_PROBE=<hex lr>: name the generated dispatch site that
+     * reached call_indirect for calls whose guest lr is that value.
+     *
+     * Measured need. A switch emitted from a recovered table covers the targets
+     * the table lists; every other target falls through to the default arm,
+     * which calls here. When one lifted function contains many dispatches that
+     * can each produce the same target, the target alone does not identify the
+     * site -- the crash registers reproduced identically whichever of
+     * f_00d19208's 163 bcctr ran. The host return address does identify it:
+     * dladdr turns it into a file offset, and addr2line into one line of
+     * generated code, which carries the guest block address as its label.
+     *
+     * The guest lr is part of the key because call_indirect is on the hot path:
+     * without it this costs a getenv and a dladdr per indirect call in the
+     * program. */
+    static const char* dispatch_probe = std::getenv("PS3BASE_DISPATCH_PROBE");
+    if (dispatch_probe && static_cast<uint32_t>(ctx.lr) == static_cast<uint32_t>(std::strtoul(dispatch_probe, nullptr, 0))) {
+        Dl_info info{};
+        const void* ra = __builtin_return_address(0);
+        const bool ok = dladdr(ra, &info) != 0;
+        static std::atomic<int> n{0};
+        if (n.fetch_add(1) < 40)
+            LOG_INFO("dispatch", "target 0x%08x ctr=0x%08x ra=%p dl=%d name=%s off=0x%llx r16=0x%08x r28=0x%08x r30=0x%08x",
+                     addr, static_cast<uint32_t>(ctx.ctr), ra, ok ? 1 : 0,
+                     ok && info.dli_sname ? info.dli_sname : "?",
+                     ok ? static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(ra) - reinterpret_cast<uintptr_t>(info.dli_fbase)) : 0ull,
+                     static_cast<uint32_t>(ctx.gpr[16]), static_cast<uint32_t>(ctx.gpr[28]),
+                     static_cast<uint32_t>(ctx.gpr[30]));
+    }
     /* Log the vtable target and its owners just before dispatch from
      * f_0006ee9c (lr 0x6eec4): the target is what returns the decisive 0. */
     if (std::getenv("PS3BASE_VTARGET")) {
