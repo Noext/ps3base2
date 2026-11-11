@@ -81,6 +81,7 @@ HLE_FUNC(cellGcmSys, cellGcmGetConfiguration) {
 }
 
 /* Counted so "the stub ran" is a measurement, not an assumption. */
+std::atomic<uint32_t> g_gcm_stub_cb_addr{0};
 std::atomic<uint32_t> g_gcm_stub_inits{0};
 
 HLE_FUNC(cellGcmSys, _cellGcmInitBody) {
@@ -109,6 +110,20 @@ HLE_FUNC(cellGcmSys, _cellGcmInitBody) {
             vm::write32(context + 0, buf);
             vm::write32(context + 4, buf + (cmd_size ? cmd_size : 0x1000));
             vm::write32(context + 8, buf);
+            /* +12 is the FIFO flush callback: the crash path reads
+             * ld32(callback + 0) as an indirect target. Nothing in the title ever
+             * writes it, so the stub must -- this IS the "stub that counts RSX
+             * commands" milestone 3 asks for. Reserve a two-word block for it:
+             * +0 the handler, +4 its data. */
+            /* Place the callback block inside the FIFO buffer we just reserved,
+             * at its far end, so it is necessarily mapped. */
+            const uint32_t cb = buf + (cmd_size ? cmd_size : 0x1000) - 16;
+            ++g_gcm_stub_cb_addr;
+            if (vm::range_mapped(cb, 8)) {
+                vm::write32(cb + 0, 0);   /* 0 = "no flush needed"; see below */
+                vm::write32(cb + 4, context);
+                vm::write32(context + 12, cb);
+            }
             ++g_gcm_stub_inits;
             ret(ctx, 0);
             return;
