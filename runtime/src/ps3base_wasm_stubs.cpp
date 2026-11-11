@@ -100,3 +100,17 @@ extern "C" void ps3base_bt_report() {
     std::fprintf(stderr, "[btall] branches=%u bi1=%u\n", g_bt_all, g_bt_bi1);
 }
 #endif
+
+/* Every guest store goes through rsv::store_range. Watching one address there says
+ * whether anything at all writes it -- which is the last open question about the
+ * null field at 0x00d72800. */
+extern "C" void ps3base_store_probe(uint32_t ea, const void* data, size_t size) {
+    if (ea < 0x00d70000u || ea >= 0x00d73000u) return;
+    static int n = 0;
+    if (n > 20) return;
+    n++;
+    const uint8_t* d = static_cast<const uint8_t*>(data);
+    uint32_t v = 0;
+    for (size_t i = 0; i < size && i < 4; i++) v |= uint32_t(d[i]) << (8 * i);
+    std::fprintf(stderr, "[d7store] ea=0x%08x size=%zu v=0x%08x\n", ea, size, v);
+}
