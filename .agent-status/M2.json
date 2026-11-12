@@ -1,0 +1,1 @@
+{"status":"running","agent":"M2","task":"cellAudio against RPCS3: log every cellAudio* / cellAudioOut* call of the RDR boot, prove the port buffer is mapped and its read index advances, unit tests per structure"}

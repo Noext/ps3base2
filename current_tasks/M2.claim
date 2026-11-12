@@ -1,0 +1,4 @@
+M2 claim: explore/m2 (worktree /root/Dev/wt-M2), from main 4a5a132.
+Scope: runtime/src/hle/cellAudio.cpp, runtime/src/hle/cellSysutil.cpp (cellAudioOut part),
+tests/cellAudio*, docs/audio*, RESULTS-M2.md, .agent-status/M2.json, current_tasks/M2.claim.
+No other file is touched.
