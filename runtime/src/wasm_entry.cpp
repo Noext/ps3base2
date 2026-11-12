@@ -9,6 +9,7 @@
  * the milestone's claim. It does not draw.
  */
 #include "runtime/menu_marker.h"
+#include "runtime/pgwrite.h"
 #include "runtime/host.h"
 #include "runtime/log.h"
 #include "runtime/memory.h"
@@ -161,7 +162,7 @@ int main(int argc, char** argv) {
         for (int i = 0; i < count; i++) {
             uint32_t len = static_cast<uint32_t>(std::strlen(list[i])) + 1;
             sp -= (len + 15) & ~15u;
-            std::memcpy(vm::ptr(sp), list[i], len);
+            pgw::write(sp, list[i], len);
             addrs.push_back(sp);
         }
         sp -= static_cast<uint32_t>((addrs.size() + 1) * 8 + 15) & ~15u;

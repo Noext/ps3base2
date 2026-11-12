@@ -1,4 +1,5 @@
 #include "object.h"
+#include "runtime/pgwrite.h"
 #include "runtime/vfs.h"
 #include "../crypto/edat.h"
 #include "runtime/trace.h"
@@ -129,11 +130,11 @@ int64_t host_stat(const std::string& host, struct _stat64& st) {
 }
 
 void fill_dirent(uint32_t d, const DirEntry& e) {
-    vm::ptr(d)[0] = e.dir ? 1 : 2;
+    pgw::write8(d + (0), static_cast<uint8_t>(e.dir ? 1 : 2));
     size_t n = std::min<size_t>(e.name.size(), 255);
-    vm::ptr(d)[1] = static_cast<uint8_t>(n);
-    std::memcpy(vm::ptr(d + 2), e.name.data(), n);
-    vm::ptr(d + 2)[n] = 0;
+    pgw::write8(d + (1), static_cast<uint8_t>(static_cast<uint8_t>(n)));
+    pgw::write(d + 2, e.name.data(), n);
+    pgw::write8(d + 2 + (n), static_cast<uint8_t>(0));
 }
 
 int64_t do_read(Fd& fd, uint32_t buf, uint64_t n, uint64_t& got) {
@@ -363,7 +364,7 @@ LV2_SYSCALL(806, sys_fs_readdir) {
     if (!dir || !nread) return CELL_EFAULT;
     if (!fd || !fd->is_dir) return CELL_EBADF;
     if (fd->dir_pos >= fd->entries.size()) {
-        std::memset(vm::ptr(dir), 0, 3);
+        pgw::fill(dir, 0, 3);
         vm::write64(nread, 0);
         return CELL_OK;
     }
@@ -738,7 +739,7 @@ LV2_SYSCALL(817, sys_fs_fcntl) {
             fill_dirent(ptr + 0x34, e);
             n = 1;
         }
-        if (max > n) std::memset(vm::ptr(ptr + n * 0x138), 0, (max - n) * 0x138);
+        if (max > n) pgw::fill(ptr + n * 0x138, 0, (max - n) * 0x138);
         vm::write32(arg + 4, n);
         vm::write32(arg, 0);
         return CELL_OK;

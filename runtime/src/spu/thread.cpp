@@ -1,4 +1,5 @@
 #include "runtime/placement.h"
+#include "runtime/pgwrite.h"
 #include "runtime/host.h"
 #include "runtime/jobsys.h"
 #include "../jobsys/edge_consumer.h"
@@ -1012,7 +1013,7 @@ bool SpuThread::dma_direct(uint32_t cmd, uint32_t lsa, uint32_t ea, uint32_t siz
             cw::block_store(ea, size, ls + lsa, "spu:direct put");
             cw::check_store(ea, size, ls + lsa, "spu:direct");
             cw::note_hit(ea, size, "spu:direct", size >= 4 ? vm::read32(ea) : 0);
-            std::memcpy(vm::ptr(ea), ls + lsa, size);
+            pgw::write(ea, ls + lsa, size);
             edge_direct_puts++;
             return true;
         }

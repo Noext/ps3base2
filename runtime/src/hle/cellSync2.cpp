@@ -1,4 +1,5 @@
 #include "common.h"
+#include "runtime/pgwrite.h"
 
 /* cellSync2: the second-generation synchronisation library.
  *
@@ -111,7 +112,7 @@ HLE_FUNC(cellSync2, _cellSync2MutexAttributeInitialize) {
     const uint32_t attr = a32(ctx, 0);
     const uint32_t sdk = a32(ctx, 1);
     if (!attr || !vm::range_mapped(attr, OBJECT_SIZE)) return ret(ctx, SYNC2_NULL);
-    std::memset(vm::ptr(attr), 0, OBJECT_SIZE);
+    pgw::fill(attr, 0, OBJECT_SIZE);
     vm::write32(attr, sdk);
     vm::write16(attr + 4, 0x000F);  /* all thread types, as the reference sets */
     vm::write16(attr + ATTR_MAX_WAITERS, 15);
@@ -123,7 +124,7 @@ HLE_FUNC(cellSync2, _cellSync2SemaphoreAttributeInitialize) {
     const uint32_t attr = a32(ctx, 0);
     const uint32_t sdk = a32(ctx, 1);
     if (!attr || !vm::range_mapped(attr, OBJECT_SIZE)) return ret(ctx, SYNC2_NULL);
-    std::memset(vm::ptr(attr), 0, OBJECT_SIZE);
+    pgw::fill(attr, 0, OBJECT_SIZE);
     vm::write32(attr, sdk);
     vm::write16(attr + 4, 0x000F);
     vm::write16(attr + ATTR_MAX_WAITERS, 15);

@@ -1,4 +1,5 @@
 #include "common.h"
+#include "runtime/pgwrite.h"
 
 #include <atomic>
 #include <cstdlib>
@@ -191,7 +192,7 @@ HLE_FUNC(cellNetCtl, cellNetCtlGetInfo) {
     const int32_t rc = netctl::get_info(g_netctl.init, unusable, netctl_connected(), code,
                                         netctl_env(), out);
     if (rc == 0 && out.size) {
-        std::memcpy(vm::ptr(info), out.bytes, out.size);
+        pgw::write(info, out.bytes, out.size);
     }
     LOG_INFO("cellNetCtl", "GetInfo(code=0x%x) -> 0x%08x, %u byte(s)",
              static_cast<uint32_t>(code), static_cast<uint32_t>(rc), out.size);

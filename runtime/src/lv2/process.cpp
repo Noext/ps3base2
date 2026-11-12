@@ -1,4 +1,5 @@
 #include "runtime/hostsleep.h"
+#include "runtime/pgwrite.h"
 #include "object.h"
 #include "runtime/loader.h"
 #include "runtime/vfs.h"
@@ -41,8 +42,8 @@ LV2_SYSCALL(30, _sys_process_get_paramsfo) {
     uint32_t buf = u32arg(ctx, 0);
     std::string id = vfs::disc_sfo().str("TITLE_ID");
     if (id.empty()) return CELL_ENOENT;
-    std::memset(vm::ptr(buf), 0, 0x40);
-    std::memcpy(vm::ptr(buf + 1), id.data(), id.size() < 9 ? id.size() : 9);
+    pgw::fill(buf, 0, 0x40);
+    pgw::write(buf + 1, id.data(), id.size() < 9 ? id.size() : 9);
     return CELL_OK;
 }
 
@@ -154,7 +155,7 @@ LV2_SYSCALL(142, sys_timer_sleep) {
 LV2_SYSCALL(865, sys_ss_random_number_generator) {
     uint32_t buf = u32arg(ctx, 1);
     uint64_t size = u64arg(ctx, 2);
-    for (uint64_t i = 0; i < size; i++) vm::ptr(buf)[i] = static_cast<uint8_t>(std::rand());
+    for (uint64_t i = 0; i < size; i++) pgw::write8(buf + (i), static_cast<uint8_t>(static_cast<uint8_t>(std::rand())));
     return CELL_OK;
 }
 

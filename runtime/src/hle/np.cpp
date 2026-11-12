@@ -1,4 +1,5 @@
 #include "common.h"
+#include "runtime/pgwrite.h"
 #include "commerce2_hle.h"
 #include "np_hle.h"
 
@@ -585,7 +586,7 @@ HLE_FUNC(sceNp, sceNpManagerGetNpId) {
     if (r == 0) {
         uint8_t id[np::NPID_SIZE];
         np_self_npid(id);
-        if (vm::range_mapped(p, np::NPID_SIZE)) std::memcpy(vm::ptr(p), id, np::NPID_SIZE);
+        if (vm::range_mapped(p, np::NPID_SIZE)) pgw::write(p, id, np::NPID_SIZE);
     }
     LOG_INFO("sceNp", "ManagerGetNpId -> 0x%08x (%s)", static_cast<uint32_t>(r),
              r == 0 ? "signed in" : "OFFLINE: not signed in");
@@ -601,8 +602,8 @@ HLE_FUNC(sceNp, sceNpManagerGetOnlineId) {
     if (st != np::STATUS_LOGGING_IN && st != SCE_NP_MANAGER_STATUS_ONLINE)
         return ret(ctx, np::E_INVALID_STATE);
     /* SceNpOnlineId: char data[16+1]; char dummy[3] (sceNp.h:1266-1272). */
-    std::memset(vm::ptr(p), 0, 20);
-    std::memcpy(vm::ptr(p), "mcps3base", 9);
+    pgw::fill(p, 0, 20);
+    pgw::write(p, "mcps3base", 9);
     ret(ctx, 0);
 }
 HLE_FUNC(sceNp, sceNpManagerGetAccountAge) {
@@ -629,7 +630,7 @@ HLE_FUNC(sceNp, sceNpManagerGetAccountRegion) {
     if (st != np::STATUS_LOGGING_IN && st != SCE_NP_MANAGER_STATUS_ONLINE)
         return ret(ctx, np::E_INVALID_STATE);
     /* SceNpCountryCode: char data[2]; char term; char padding[1]. */
-    if (vm::range_mapped(cc, 4)) std::memset(vm::ptr(cc), 0, 4);
+    if (vm::range_mapped(cc, 4)) pgw::fill(cc, 0, 4);
     vm::write32(lang, 0);
     ret(ctx, 0);
 }
@@ -1026,8 +1027,8 @@ HLE_FUNC(sceNpTrophy, sceNpTrophyRegisterContext) {
 HLE_FUNC(sceNpTrophy, sceNpTrophyGetGameInfo) {
     const uint32_t details = a32(ctx, 2);
     const uint32_t data = a32(ctx, 3);
-    if (details) std::memset(vm::ptr(details), 0, 1200);
-    if (data) std::memset(vm::ptr(data), 0, 20);
+    if (details) pgw::fill(details, 0, 1200);
+    if (data) pgw::fill(data, 0, 20);
     LOG_INFO("trophy", "GetGameInfo -> 0 trophies (no pack installed)");
     ret(ctx, 0);
 }
@@ -1042,7 +1043,7 @@ HLE_FUNC(sceNpTrophy, sceNpTrophyUnlockTrophy) {
     ret(ctx, 0);
 }
 HLE_FUNC(sceNpTrophy, sceNpTrophyGetTrophyUnlockState) {
-    if (uint32_t p = a32(ctx, 2)) std::memset(vm::ptr(p), 0, 16);
+    if (uint32_t p = a32(ctx, 2)) pgw::fill(p, 0, 16);
     if (uint32_t p = a32(ctx, 3)) vm::write32(p, 0);
     ret(ctx, 0);
 }

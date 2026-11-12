@@ -25,6 +25,7 @@
  *   cellKbGetConfiguration  refs/rpcs3/rpcs3/Emu/Cell/Modules/cellKb.cpp:487-522
  */
 #include "common.h"
+#include "runtime/pgwrite.h"
 #include "sysio_hle.h"
 
 #include <cstdint>
@@ -94,7 +95,7 @@ HLE_FUNC(sys_io, cellKbGetInfo) {
     if (!g_kb.initialized) return ret(ctx, sysio::KB_ERROR_UNINITIALIZED);
     if (!mapped(info_ea, sysio::KB_INFO_SIZE)) return ret(ctx, sysio::KB_ERROR_INVALID_PARAMETER);
 
-    std::memset(vm::ptr(info_ea), 0, sysio::KB_INFO_SIZE);
+    pgw::fill(info_ea, 0, sysio::KB_INFO_SIZE);
     vm::write32(info_ea + sysio::KB_INFO_OFF_MAX_CONNECT, g_kb.max_connect);
     vm::write32(info_ea + sysio::KB_INFO_OFF_NOW_CONNECT, g_kb.now_connect);
     vm::write32(info_ea + sysio::KB_INFO_OFF_INFO, g_kb.info);

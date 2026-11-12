@@ -1,4 +1,5 @@
 #include "runtime/placement.h"
+#include "runtime/pgwrite.h"
 #include "runtime/host.h"
 #include "runtime/session.h"
 #include <immintrin.h>
@@ -3591,7 +3592,7 @@ void nv0039_transfer() {
         if (!readable(s, uint64_t(len - 1) * in_stride + 1) || !readable(d, uint64_t(len - 1) * out_stride + 1)) return;
         vm::host_write(d, uint64_t(len - 1) * out_stride + 1);
         if (in_stride == 1 && out_stride == 1) {
-            std::memmove(vm::ptr(d), vm::ptr(s), len);
+            pgw::copy(d, s, len);
             continue;
         }
         for (uint32_t i = 0; i < len; i++) line[i] = *vm::ptr(s + i * in_stride);
@@ -3681,9 +3682,9 @@ void nv3089_transfer(uint32_t arg) {
         if (overlap) {
             staging.resize(size_t(row) * (y1 - y0));
             for (uint32_t y = y0; y < y1; y++) std::memcpy(&staging[size_t(y - y0) * row], vm::ptr(src + (y - out_y) * in_pitch + (x0 - out_x) * src_bpp), row);
-            for (uint32_t y = y0; y < y1; y++) std::memcpy(vm::ptr(dst + y * dst_pitch + x0 * dst_bpp), &staging[size_t(y - y0) * row], row);
+            for (uint32_t y = y0; y < y1; y++) pgw::write(dst + y * dst_pitch + x0 * dst_bpp, &staging[size_t(y - y0) * row], row);
         } else {
-            for (uint32_t y = y0; y < y1; y++) std::memcpy(vm::ptr(dst + y * dst_pitch + x0 * dst_bpp), vm::ptr(src + (y - out_y) * in_pitch + (x0 - out_x) * src_bpp), row);
+            for (uint32_t y = y0; y < y1; y++) pgw::copy(dst + y * dst_pitch + x0 * dst_bpp, src + (y - out_y) * in_pitch + (x0 - out_x) * src_bpp, row);
         }
         g_stats.blit_fast++;
         return;

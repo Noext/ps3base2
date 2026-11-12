@@ -30,6 +30,7 @@
  *     nothing and always answered CELL_OK.
  */
 #include "common.h"
+#include "runtime/pgwrite.h"
 #include "runtime/loader.h"
 #include "runtime/msgdialog.h"
 #include "sysio_hle.h"
@@ -443,7 +444,7 @@ HLE_FUNC(sys_io, cellPadGetInfo2) {
     const int32_t rc = g_pad.get_info2(out != 0 && vm::range_mapped(out, sysio::PAD_INFO2_SIZE));
     if (rc != 0) return ret(ctx, rc);
 
-    std::memset(vm::ptr(out), 0, sysio::PAD_INFO2_SIZE);
+    pgw::fill(out, 0, sysio::PAD_INFO2_SIZE);
     /* max_connect is the CLAMPED value here ("Here it is forcibly clamped",
      * :974) -- get_max_connect(), not the raw 127-scale argument. */
     vm::write32(out + sysio::PAD_INFO2_MAX_CONNECT, g_pad.get_max_connect());

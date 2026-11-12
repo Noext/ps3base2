@@ -11,6 +11,7 @@
  *   lr<hexaddr>=<value>     override r3 on return when the caller lr matches
  */
 #include "runtime/force.h"
+#include "runtime/pgwrite.h"
 
 #include "lv2/sync.h"
 #include "runtime/log.h"
@@ -113,7 +114,7 @@ void on_return(uint32_t fn_addr, uint32_t lr_addr, uint64_t& r3) {
         else if (r.kind == Rule::Write) {
             if (vm::range_mapped(r.addr, r.size)) {
                 switch (r.size) {
-                case 1: vm::ptr(r.addr)[0] = static_cast<uint8_t>(r.value); break;
+                case 1: pgw::write8(r.addr + (0), static_cast<uint8_t>(static_cast<uint8_t>(r.value))); break;
                 case 2: vm::write16(r.addr, static_cast<uint16_t>(r.value)); break;
                 case 8: vm::write64(r.addr, r.value); break;
                 default: vm::write32(r.addr, static_cast<uint32_t>(r.value)); break;
@@ -173,7 +174,7 @@ void on_call(uint32_t fn_addr) {
     for (Rule& r : g_rules) {
         if (r.kind != Rule::Write || r.addr == 0 || r.size != 1) continue;
         /* byte writes are applied here so they land before the function reads */
-        if (vm::range_mapped(r.addr, 1)) vm::ptr(r.addr)[0] = static_cast<uint8_t>(r.value);
+        if (vm::range_mapped(r.addr, 1)) pgw::write8(r.addr + (0), static_cast<uint8_t>(static_cast<uint8_t>(r.value)));
     }
 }
 

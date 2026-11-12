@@ -33,6 +33,7 @@
 #define PS3BASE_HLE_SYSUTIL_H
 
 #include "runtime/memory.h"
+#include "runtime/pgwrite.h"
 
 #include <cstdint>
 #include <cstring>
@@ -285,7 +286,7 @@ inline void write_sound_mode(uint32_t ea, const SoundMode& m) {
 
 inline void write_audio_out_configuration(uint32_t ea, const AudioOut& out) {
     if (!ea || !vm::range_mapped(ea, AUDIO_OUT_CONFIGURATION_SIZE)) return;
-    std::memset(vm::ptr(ea), 0, AUDIO_OUT_CONFIGURATION_SIZE);
+    pgw::fill(ea, 0, AUDIO_OUT_CONFIGURATION_SIZE);
     vm::write8(ea + 0, out.channel);
     vm::write8(ea + 1, out.encoder);
     vm::write32(ea + 12, out.downmixer);
@@ -293,7 +294,7 @@ inline void write_audio_out_configuration(uint32_t ea, const AudioOut& out) {
 
 inline void write_audio_out_state(uint32_t ea, const AudioOut& out) {
     if (!ea || !vm::range_mapped(ea, AUDIO_OUT_STATE_SIZE)) return;
-    std::memset(vm::ptr(ea), 0, AUDIO_OUT_STATE_SIZE);
+    pgw::fill(ea, 0, AUDIO_OUT_STATE_SIZE);
     vm::write8(ea + 0, out.state);
     vm::write8(ea + 1, out.encoder);
     vm::write32(ea + 8, out.downmixer);
@@ -304,7 +305,7 @@ inline void write_audio_out_state(uint32_t ea, const AudioOut& out) {
  * latency 13 (the value RPCS3 reports), then the modes at offset 8. */
 inline void write_audio_out_device_info(uint32_t ea, const AudioOut& out) {
     if (!ea || !vm::range_mapped(ea, AUDIO_OUT_DEVICE_INFO_SIZE)) return;
-    std::memset(vm::ptr(ea), 0, AUDIO_OUT_DEVICE_INFO_SIZE);
+    pgw::fill(ea, 0, AUDIO_OUT_DEVICE_INFO_SIZE);
     vm::write8(ea + 0, AUDIO_OUT_PORT_HDMI);
     vm::write8(ea + 1, static_cast<uint8_t>(out.modes.count));
     vm::write8(ea + 2, AUDIO_OUT_DEVICE_STATE_AVAILABLE);
@@ -320,7 +321,7 @@ inline void write_audio_out_device_info(uint32_t ea, const AudioOut& out) {
  * odd, but it is what the console does and therefore the specification. */
 inline void write_audio_out_secondary_past_end(uint32_t ea) {
     if (!ea || !vm::range_mapped(ea, AUDIO_OUT_STATE_SIZE)) return;
-    std::memset(vm::ptr(ea), 0, AUDIO_OUT_STATE_SIZE);
+    pgw::fill(ea, 0, AUDIO_OUT_STATE_SIZE);
     vm::write8(ea + 0, 0x10);
     vm::write32(ea + 16, 0xD00C1680);   /* soundMode.layout */
 }
@@ -526,7 +527,7 @@ inline void write_display_mode(uint32_t ea, const DisplayMode& m) {
 inline void write_video_out_state(uint32_t ea, const DisplayMode& mode, int32_t color_space,
                                   int32_t output_state) {
     if (!ea || !vm::range_mapped(ea, VIDEO_OUT_STATE_SIZE)) return;
-    std::memset(vm::ptr(ea), 0, VIDEO_OUT_STATE_SIZE);
+    pgw::fill(ea, 0, VIDEO_OUT_STATE_SIZE);
     vm::write8(ea + 0, static_cast<uint8_t>(output_state));
     vm::write8(ea + 1, static_cast<uint8_t>(color_space));
     write_display_mode(ea + 8, mode);
@@ -613,7 +614,7 @@ inline int32_t video_out_configure(const uint32_t* words) {
 
 inline void write_video_out_configuration(uint32_t ea, const State& s) {
     if (!ea || !vm::range_mapped(ea, VIDEO_OUT_CONFIGURATION_SIZE)) return;
-    std::memset(vm::ptr(ea), 0, VIDEO_OUT_CONFIGURATION_SIZE);
+    pgw::fill(ea, 0, VIDEO_OUT_CONFIGURATION_SIZE);
     vm::write8(ea + 0, static_cast<uint8_t>(s.video_resolution));
     vm::write8(ea + 1, static_cast<uint8_t>(s.video_format));
     vm::write8(ea + 2, static_cast<uint8_t>(s.video_aspect));
@@ -770,7 +771,7 @@ inline std::string system_param_string(uint32_t id, const std::string& username_
  * reflects the calls the title actually made rather than a fabricated one. */
 inline void write_bgm_status(uint32_t ea) {
     if (!ea || !vm::range_mapped(ea, BGM_STATUS_SIZE)) return;
-    std::memset(vm::ptr(ea), 0, BGM_STATUS_SIZE);
+    pgw::fill(ea, 0, BGM_STATUS_SIZE);
     vm::write8(ea + 0, state().bgm_player_state);
     vm::write8(ea + 1, state().bgm_enable_state);
 }

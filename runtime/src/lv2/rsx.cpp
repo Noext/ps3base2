@@ -1,4 +1,5 @@
 #include "runtime/critpath.h"
+#include "runtime/pgwrite.h"
 #include "runtime/rsx_iomap.h"
 #include "runtime/host.h"
 #include "runtime/regions.h"
@@ -163,7 +164,7 @@ void flip_done(uint32_t buffer) {
     vm::write32(h + 8, vm::read32(h + 8) | 0x80000000u);
     vm::write64(h, ppu::timebase());
     vm::write32(h + 0x10, buffer);
-    std::memset(vm::ptr(g_rsx.reports + 0x10), 0, 16);
+    pgw::fill(g_rsx.reports + 0x10, 0, 16);
     g_rsx.flips++;
     rdcapture::maybe_capture(g_rsx.flips);
     if (critpath::g_on) critpath::flip(g_rsx.flips);
@@ -817,7 +818,7 @@ LV2_SYSCALL(670, sys_rsx_context_allocate) {
         vm::write32(r + 0x1400 + i * 16 + 12, 0xFFFFFFFF);
     }
     uint32_t d = g_rsx.driver_info;
-    std::memset(vm::ptr(d), 0, 0x12F8);
+    pgw::fill(d, 0, 0x12F8);
     vm::write32(d + 0x00, 0x211);
     vm::write32(d + 0x04, 0x5C);
     vm::write32(d + 0x08, g_rsx.local_size);
@@ -834,7 +835,7 @@ LV2_SYSCALL(670, sys_rsx_context_allocate) {
     g_rsx.queue_id = add_object(0x8D000000, q);
     g_rsx.port_id = add_object(0x0E000000, std::make_shared<DummyPort>());
     vm::write32(d + 0x12D0, g_rsx.queue_id);
-    std::memset(vm::ptr(area), 0, 0x100);
+    pgw::fill(area, 0, 0x100);
     if (g_rsx.device_addr) vm::write32(g_rsx.device_addr + 0x30, 1);
     vm::write32(u32arg(ctx, 0), CONTEXT_ID);
     vm::write64(u32arg(ctx, 1), g_rsx.dma_control);

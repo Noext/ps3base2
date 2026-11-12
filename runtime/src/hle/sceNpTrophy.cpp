@@ -1,4 +1,5 @@
 #include "common.h"
+#include "runtime/pgwrite.h"
 
 #include "nptrophy_hle.h"
 
@@ -180,9 +181,9 @@ void write_game_details(uint32_t ea, const GameDetails& d) {
     vm::write32(ea + 8, d.numGold);
     vm::write32(ea + 12, d.numSilver);
     vm::write32(ea + 16, d.numBronze);
-    std::memcpy(vm::ptr(ea + offsetof(GameDetails, title)), d.title, TITLE_MAX_SIZE);
-    std::memcpy(vm::ptr(ea + offsetof(GameDetails, description)), d.description, GAME_DESCR_MAX_SIZE);
-    std::memset(vm::ptr(ea + offsetof(GameDetails, reserved)), 0, sizeof(d.reserved));
+    pgw::write(ea + offsetof(GameDetails, title), d.title, TITLE_MAX_SIZE);
+    pgw::write(ea + offsetof(GameDetails, description), d.description, GAME_DESCR_MAX_SIZE);
+    pgw::fill(ea + offsetof(GameDetails, reserved), 0, sizeof(d.reserved));
 }
 
 void write_game_data(uint32_t ea, const GameData& d) {
@@ -196,17 +197,17 @@ void write_game_data(uint32_t ea, const GameData& d) {
 void write_trophy_details(uint32_t ea, const TrophyDetails& d) {
     vm::write32(ea + 0, static_cast<uint32_t>(d.trophyId));
     vm::write32(ea + 4, d.trophyGrade);
-    std::memcpy(vm::ptr(ea + offsetof(TrophyDetails, name)), d.name, NAME_MAX_SIZE);
-    std::memcpy(vm::ptr(ea + offsetof(TrophyDetails, description)), d.description, DESCR_MAX_SIZE);
+    pgw::write(ea + offsetof(TrophyDetails, name), d.name, NAME_MAX_SIZE);
+    pgw::write(ea + offsetof(TrophyDetails, description), d.description, DESCR_MAX_SIZE);
     vm::ptr(ea + offsetof(TrophyDetails, hidden))[0] = d.hidden;
-    std::memset(vm::ptr(ea + offsetof(TrophyDetails, reserved)), 0, sizeof(d.reserved));
+    pgw::fill(ea + offsetof(TrophyDetails, reserved), 0, sizeof(d.reserved));
 }
 
 void write_trophy_data(uint32_t ea, const TrophyData& d) {
     vm::write64(ea + 0, d.timestamp);
     vm::write32(ea + 8, static_cast<uint32_t>(d.trophyId));
     vm::ptr(ea + offsetof(TrophyData, unlocked))[0] = d.unlocked;
-    std::memset(vm::ptr(ea + offsetof(TrophyData, reserved)), 0, sizeof(d.reserved));
+    pgw::fill(ea + offsetof(TrophyData, reserved), 0, sizeof(d.reserved));
 }
 
 /* Extract an already-selected TRP. The selection itself (prepare_entries) is
@@ -574,8 +575,8 @@ HLE_FUNC(sceNpTrophy, sceNpTrophyGetGameInfo) {
         return ret(ctx, ERR_CONF_DOES_NOT_EXIST);
     }
 
-    if (details_ea) std::memset(vm::ptr(details_ea), 0, sizeof(GameDetails));
-    if (data_ea) std::memset(vm::ptr(data_ea), 0, sizeof(GameData));
+    if (details_ea) pgw::fill(details_ea, 0, sizeof(GameDetails));
+    if (data_ea) pgw::fill(data_ea, 0, sizeof(GameData));
 
     TrophyConf conf;
     if (!conf.parse(conf_bytes)) {

@@ -40,6 +40,7 @@
  * repeated inline below at the point of use, with the RPCS3 line.
  */
 #include "common.h"
+#include "runtime/pgwrite.h"
 #include "commerce2_hle.h"
 #include "runtime/cbwatch.h"
 #include "runtime/loader.h"
@@ -179,7 +180,7 @@ HLE_FUNC(sceNpCommerce2, sceNpCommerce2CreateSessionFinish) {
          * -329). The bytes are ZEROED, not filled: there is no store to read a
          * currency from, and RPCS3's USD block is behind "if (false)". */
         const uint32_t n = com2::session_info_zero_bytes(static_cast<int32_t>(loader::g_process.sdk_version));
-        std::memset(vm::ptr(info), 0, n);
+        pgw::fill(info, 0, n);
         vm::host_write(info, n);
     }
     COM2_LOG("CreateSessionFinish", "ctx=%u info=0x%08x -> 0x%08x", ctx_id, info,

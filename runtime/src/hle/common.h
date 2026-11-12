@@ -1,6 +1,7 @@
 #pragma once
 
 #include "runtime/hle.h"
+#include "runtime/pgwrite.h"
 #include "runtime/log.h"
 #include "runtime/memory.h"
 #include "ppu/ops.h"
@@ -33,8 +34,8 @@ inline std::string gstr(uint32_t addr, size_t max = 1024) {
 inline void put_str(uint32_t addr, const std::string& s, size_t cap) {
     if (!addr || !cap) return;
     size_t n = s.size() < cap - 1 ? s.size() : cap - 1;
-    std::memcpy(vm::ptr(addr), s.data(), n);
-    vm::ptr(addr)[n] = 0;
+    pgw::write(addr, s.data(), n);
+    pgw::write8(addr + (n), static_cast<uint8_t>(0));
 }
 
 /* A guest callback with up to five arguments. The fifth is real: a trophy

@@ -1,4 +1,5 @@
 #include "object.h"
+#include "runtime/pgwrite.h"
 
 #include "runtime/image.h"
 #include "runtime/log.h"
@@ -312,7 +313,7 @@ int32_t map_shared_memory(uint32_t addr, uint32_t id, uint64_t flags) {
     if (!vm::map(addr, m->size)) return CELL_ENOMEM;
     /* The object's own buffer is the backing store, so a write through one
      * mapping is visible through every other one at the next map/unmap. */
-    std::memcpy(vm::ptr(addr), m->data.data(), m->size);
+    pgw::write(addr, m->data.data(), m->size);
     g_maps[addr] = id;
     m->counter++;
     return CELL_OK;
@@ -336,7 +337,7 @@ int32_t search_and_map(uint32_t start, uint32_t id, uint32_t out) {
         }
         if (used) continue;
         if (!vm::map(static_cast<uint32_t>(a), m->size)) return CELL_ENOMEM;
-        std::memcpy(vm::ptr(static_cast<uint32_t>(a)), m->data.data(), m->size);
+        pgw::write(static_cast<uint32_t>(a), m->data.data(), m->size);
         g_maps[static_cast<uint32_t>(a)] = id;
         m->counter++;
         vm::write32(out, static_cast<uint32_t>(a));

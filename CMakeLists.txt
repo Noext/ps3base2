@@ -41,12 +41,17 @@ set(PS3BASE_ARCH_FLAGS ${PS3BASE_CLANG}-march=x86-64-v3 ${PS3BASE_CLANG}-ffp-con
 # codewatch.cpp is the write-side guard that rsv::store_range calls into. It has
 # to live in the same library: the small test binaries link reservation.cpp and
 # would otherwise see an undefined reference to the guard's entry point.
-add_library(ps3base_ppu_ops STATIC runtime/src/ppu_ops.cpp runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/backtrace_port.cpp runtime/src/memory.cpp runtime/src/regions.cpp runtime/src/mem.cpp runtime/src/log.cpp runtime/src/host.cpp)
+add_library(ps3base_ppu_ops STATIC runtime/src/ppu_ops.cpp runtime/src/reservation.cpp runtime/src/pgwrite.cpp runtime/src/codewatch.cpp runtime/src/backtrace_port.cpp runtime/src/memory.cpp runtime/src/regions.cpp runtime/src/mem.cpp runtime/src/log.cpp runtime/src/host.cpp)
 target_include_directories(ps3base_ppu_ops PUBLIC runtime/include "${CMAKE_SOURCE_DIR}/out/include")
 target_compile_options(ps3base_ppu_ops PRIVATE ${PS3BASE_ARCH_FLAGS} ${PS3BASE_EH})
 
 file(GLOB GOWA_RUNTIME_SOURCES CONFIGURE_DEPENDS runtime/src/*.cpp runtime/src/lv2/*.cpp runtime/src/hle/*.cpp runtime/src/media/*.cpp runtime/src/spu/*.cpp runtime/src/spu/edge/*.cpp runtime/src/spu/renjob/*.cpp runtime/src/spu/scream/*.cpp runtime/src/spu/cloth/*.cpp runtime/src/spu/shadows/*.cpp runtime/src/spu/meshprep/*.cpp runtime/src/spu/pm/*.cpp runtime/src/spu/edgejob/*.cpp runtime/src/spu/meshhier/*.cpp runtime/src/spu/anim/*.cpp runtime/src/spu/tasks/*.cpp runtime/src/spu/mpjob/*.cpp runtime/src/jobsys/*.cpp runtime/src/rsx/*.cpp runtime/src/gpu/*.cpp runtime/src/crypto/*.cpp)
-list(REMOVE_ITEM GOWA_RUNTIME_SOURCES "${CMAKE_SOURCE_DIR}/runtime/src/ppu_ops.cpp" "${CMAKE_SOURCE_DIR}/runtime/src/main.cpp" "${CMAKE_SOURCE_DIR}/runtime/src/reservation.cpp" "${CMAKE_SOURCE_DIR}/runtime/src/memory.cpp runtime/src/regions.cpp runtime/src/mem.cpp" "${CMAKE_SOURCE_DIR}/runtime/src/log.cpp" "${CMAKE_SOURCE_DIR}/runtime/src/host.cpp")
+# The funnel must live in ps3base_ppu_ops, not in the runtime object library: the
+# small test binaries link memory.cpp and reservation.cpp directly, and
+# pgw::write would otherwise be an undefined reference there. It is removed from
+# the GLOB for the same reason codewatch.cpp is -- defining it twice breaks every
+# link.
+list(REMOVE_ITEM GOWA_RUNTIME_SOURCES "${CMAKE_SOURCE_DIR}/runtime/src/ppu_ops.cpp" "${CMAKE_SOURCE_DIR}/runtime/src/main.cpp" "${CMAKE_SOURCE_DIR}/runtime/src/reservation.cpp" "${CMAKE_SOURCE_DIR}/runtime/src/pgwrite.cpp" "${CMAKE_SOURCE_DIR}/runtime/src/memory.cpp runtime/src/regions.cpp runtime/src/mem.cpp" "${CMAKE_SOURCE_DIR}/runtime/src/log.cpp" "${CMAKE_SOURCE_DIR}/runtime/src/host.cpp")
 
 set(PS3BASE_SPU_NATIVE_GEN_DIR "${CMAKE_SOURCE_DIR}/out/gen/spu" CACHE PATH "Directory with generated native SPU sources (tools/setup.py)")
 set(GOWA_SPU_ROUNDING_SUBDIRS edge renjob scream cloth shadows meshprep jwhole)
@@ -436,6 +441,16 @@ target_include_directories(lwmutex_hle PRIVATE runtime/include "${CMAKE_SOURCE_D
 target_compile_options(lwmutex_hle PRIVATE ${PS3BASE_ARCH_FLAGS})
 target_link_libraries(lwmutex_hle PRIVATE ${CMAKE_DL_LIBS} pthread)
 add_test(NAME lwmutex_hle COMMAND lwmutex_hle)
+
+# A host memcpy into guest memory bypassed reservation invalidation entirely: the
+# line version never moved, so a PPU thread holding lwarx on that line committed a
+# value it never observed. This test measures both spellings -- the raw memcpy and
+# the pgw funnel -- and the diagnostic page guard's read watch.
+add_executable(host_write_invalidation tests/host_write_invalidation.cpp runtime/src/ppu_ops.cpp runtime/src/memory.cpp runtime/src/regions.cpp runtime/src/mem.cpp runtime/src/reservation.cpp runtime/src/pgwrite.cpp runtime/src/codewatch.cpp runtime/src/backtrace_port.cpp runtime/src/host.cpp runtime/src/log.cpp)
+target_include_directories(host_write_invalidation PRIVATE runtime/include "${CMAKE_SOURCE_DIR}/runtime/src")
+target_compile_options(host_write_invalidation PRIVATE ${PS3BASE_ARCH_FLAGS})
+target_link_libraries(host_write_invalidation PRIVATE ${CMAKE_DL_LIBS} pthread)
+add_test(NAME host_write_invalidation COMMAND host_write_invalidation)
 
 add_executable(list_walk_guard tests/list_walk_guard.cpp runtime/src/memory.cpp runtime/src/regions.cpp runtime/src/mem.cpp runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/backtrace_port.cpp runtime/src/host.cpp runtime/src/log.cpp)
 target_include_directories(list_walk_guard PRIVATE runtime/include "${CMAKE_SOURCE_DIR}/runtime/src")

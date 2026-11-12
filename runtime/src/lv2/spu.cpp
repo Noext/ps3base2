@@ -1,4 +1,5 @@
 #include "event.h"
+#include "runtime/pgwrite.h"
 #include "../spu/thread.h"
 #include "../spu/natsched.h"
 #include "runtime/vfs.h"
@@ -53,7 +54,7 @@ int64_t load_image(const uint8_t* data, size_t size, uint32_t img) {
     uint16_t phn = be16(data + 0x2C);
     uint32_t mem = vm::alloc(vm::Region::User64K, static_cast<uint32_t>(size), 0x10000);
     if (!mem) return CELL_ENOMEM;
-    std::memcpy(vm::ptr(mem), data, size);
+    pgw::write(mem, data, size);
     auto im = std::make_shared<SpuImage>();
     im->entry = entry;
     im->mem = mem;
@@ -440,7 +441,7 @@ LV2_SYSCALL(251, sys_spu_thread_group_connect_event_all_threads) {
             if (t) t->spup[p] = eq;
         }
         for (auto& t : g->aux) t->spup[p] = eq;
-        vm::ptr(out)[0] = static_cast<uint8_t>(p);
+        pgw::write8(out + (0), static_cast<uint8_t>(static_cast<uint8_t>(p)));
         return CELL_OK;
     }
     return CELL_EISCONN;

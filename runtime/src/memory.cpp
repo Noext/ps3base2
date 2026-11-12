@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <vector>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <cstdlib>
 #include <string>
@@ -267,8 +268,190 @@ bool watch_fault(uint32_t addr, bool repair_stale) {
     return handled;
 }
 
+
+/* ---------------------------------------------------------------------------
+ * Non-fatal diagnostic page guard.
+ *
+ * The write watch above is the renderer's: a fault means "the guest wrote a
+ * page I was reading", the page is repaired and the read is redone. There was no
+ * way to trace an arbitrary address: GOWA_TRAP needs the address up front and
+ * leaves the page unreadable for one instruction, and watch_range is only
+ * called by the texture path.
+ *
+ * This guard is the diagnostic counterpart. Every page of a guarded range is
+ * PROT_NONE, so a guest load OR store faults; the fault handler reports it and
+ * opens the page for exactly one instruction (single-step), then re-arms it. A
+ * read and a write are both reported, and distinguished, which is the read watch
+ * the investigation needed: who READS the guard word at 0x0177caa8.
+ *
+ * A host write cannot fault. It is reported by host_write(), which the pgwrite
+ * funnel calls before it stores -- so a host write on a guarded page is named
+ * as a host write, not guessed at.
+ *
+ * Nothing here can kill the run: the page is always repaired and the
+ * instruction retried. PS3BASE_GUARD=<lo-hi[,...]> arms it at startup,
+ * PS3BASE_GUARD_MAX caps the logged hits per range (default 16).
+ * ------------------------------------------------------------------------- */
+
+std::atomic<uint8_t> g_guard_page[0x100000];
+/* One load in host_write's prologue when nothing is armed: the diagnostic guard
+ * is off in every ordinary run and must cost nothing there. */
+std::atomic<bool> g_guard_any{false};
+std::atomic<uint64_t> g_guard_hits{0};
+std::atomic<uint64_t> g_guard_host_hits{0};
+
+namespace {
+
+struct GuardRange {
+    uint32_t lo;
+    uint32_t hi;
+    std::atomic<uint32_t> logged{0};
+};
+std::mutex g_guard_lock;
+std::vector<std::unique_ptr<GuardRange>> g_guard_ranges;
+
+uint32_t guard_max() {
+    static const uint32_t n = [] {
+        const char* e = std::getenv("PS3BASE_GUARD_MAX");
+        return e ? static_cast<uint32_t>(std::strtoul(e, nullptr, 0)) : 16u;
+    }();
+    return n;
+}
+
+/* The range a faulted address belongs to, for the hit cap. nullptr when the
+ * page was armed directly through guard_arm() rather than an env range. */
+GuardRange* range_of(uint32_t addr) {
+    for (auto& r : g_guard_ranges) {
+        if (addr >= r->lo && addr < r->hi) return r.get();
+    }
+    return nullptr;
+}
+
+}  // namespace
+
+bool guard_armed(uint32_t addr) { return g_guard_page[addr >> 12].load(std::memory_order_acquire) != 0; }
+
+uint64_t guard_hits() { return g_guard_hits.load(std::memory_order_relaxed); }
+
+bool guard_arm(uint32_t addr, uint32_t size) {
+    if (!size) return false;
+    const uint64_t end = std::min<uint64_t>(uint64_t(addr) + size, 0x100000000ull);
+    const uint32_t first = addr >> 12;
+    const uint32_t last = static_cast<uint32_t>((end + 0xFFF) >> 12);
+    bool ok = true;
+    for (uint32_t page = first; page < last; page++) {
+        /* mem::protect returns true in bitset mode, where it cannot enforce
+         * anything. Report that honestly rather than claiming a guard exists. */
+        if (!mem::protect(g_base, uint64_t(page) << 12, 0x1000, mem::Prot::None)) {
+            ok = false;
+            continue;
+        }
+        g_guard_page[page].store(1, std::memory_order_release);
+    }
+    if (ok) g_guard_any.store(true, std::memory_order_relaxed);
+    return ok;
+}
+
+/* Called by the fault handler: the page is opened for one instruction and will
+ * be re-armed at the single-step trap. Returns false when the page is not
+ * guarded, so the caller can fall through to the write watch. */
+bool guard_fault(uint32_t addr) {
+    const uint32_t page = addr >> 12;
+    if (!g_guard_page[page].load(std::memory_order_acquire)) return false;
+    g_guard_hits.fetch_add(1, std::memory_order_relaxed);
+    mem::protect(g_base, uint64_t(page) << 12, 0x1000, mem::Prot::ReadWrite);
+    return true;
+}
+
+/* Re-arms after the single-step completed. The flag stays set for the whole
+ * time, so a second fault on the same page inside one instruction (a store that
+ * spans two pages) reports again instead of being missed. */
+void guard_rearm(uint32_t page) {
+    if (!g_guard_page[page].load(std::memory_order_acquire)) return;
+    mem::protect(g_base, uint64_t(page) << 12, 0x1000, mem::Prot::None);
+}
+
+/* Does this fault still have reporting budget? Keeps a hot page from filling the
+ * log, which is what makes a guard usable on a word the title reads every
+ * frame. */
+bool guard_wants_log(uint32_t addr) {
+    std::lock_guard lk(g_guard_lock);
+    GuardRange* r = range_of(addr);
+    if (!r) return true;
+    return r->logged.fetch_add(1, std::memory_order_relaxed) < guard_max();
+}
+
+bool guard_host_begin(uint32_t addr, uint64_t size) {
+    if (!g_guard_any.load(std::memory_order_relaxed)) return false;
+    bool any = false;
+    const uint64_t end = std::min<uint64_t>(uint64_t(addr) + size, 0x100000000ull);
+    for (uint64_t a = addr & ~uint64_t(0xFFF); a < end; a += 0x1000) {
+        const uint32_t page = static_cast<uint32_t>(a >> 12);
+        if (!g_guard_page[page].load(std::memory_order_acquire)) continue;
+        mem::protect(g_base, a, 0x1000, mem::Prot::ReadWrite);
+        any = true;
+    }
+    return any;
+}
+
+void guard_host_end(uint32_t addr, uint64_t size) {
+    if (!g_guard_any.load(std::memory_order_relaxed)) return;
+    const uint64_t end = std::min<uint64_t>(uint64_t(addr) + size, 0x100000000ull);
+    for (uint64_t a = addr & ~uint64_t(0xFFF); a < end; a += 0x1000) {
+        const uint32_t page = static_cast<uint32_t>(a >> 12);
+        if (!g_guard_page[page].load(std::memory_order_acquire)) continue;
+        mem::protect(g_base, a, 0x1000, mem::Prot::None);
+    }
+}
+
+void guard_note_host_write(uint32_t addr) {
+    if (!g_guard_page[addr >> 12].load(std::memory_order_acquire)) return;
+    g_guard_host_hits.fetch_add(1, std::memory_order_relaxed);
+}
+
+std::string guard_report() {
+    char b[192];
+    std::snprintf(b, sizeof b, "guard: %llu guest faults, %llu host writes",
+                  static_cast<unsigned long long>(g_guard_hits.load(std::memory_order_relaxed)),
+                  static_cast<unsigned long long>(g_guard_host_hits.load(std::memory_order_relaxed)));
+    return b;
+}
+
+/* PS3BASE_GUARD=lo-hi[,lo-hi...]. Parsed here so every build gets it, including
+ * the ones that do not install signals (there it simply never faults). */
+void guard_init_from_env() {
+    const char* e = std::getenv("PS3BASE_GUARD");
+    if (!e) return;
+    std::string list = e;
+    size_t pos = 0;
+    while (pos < list.size()) {
+        size_t end = list.find(',', pos);
+        if (end == std::string::npos) end = list.size();
+        const std::string item = list.substr(pos, end - pos);
+        pos = end + 1;
+        if (item.empty()) continue;
+        uint32_t lo = 0, hi = 0;
+        if (std::sscanf(item.c_str(), "%x-%x", &lo, &hi) != 2 || hi <= lo) {
+            LOG_WARN("vm", "PS3BASE_GUARD item '%s' is not lo-hi, ignored", item.c_str());
+            continue;
+        }
+        auto r = std::make_unique<GuardRange>();
+        r->lo = lo;
+        r->hi = hi;
+        const bool ok = guard_arm(lo, hi - lo);
+        LOG_INFO("vm", "guard 0x%08x-0x%08x armed%s", lo, hi, ok ? "" : " (protection not enforceable by this backend)");
+        std::lock_guard lk(g_guard_lock);
+        g_guard_ranges.push_back(std::move(r));
+    }
+}
+
 void host_write(uint32_t addr, uint64_t size) {
     if (!size) return;
+    /* A host store does not fault, so an armed diagnostic page cannot see it any
+     * other way. Count it here and name it in the log; pgwrite calls this before
+     * every host store for exactly this reason. */
+    if (g_guard_any.load(std::memory_order_relaxed))
+        for (uint64_t a = addr; a < uint64_t(addr) + size && a < 0x100000000ull; a += 0x1000) guard_note_host_write(static_cast<uint32_t>(a));
     uint64_t end = std::min<uint64_t>(uint64_t(addr) + size, 0x100000000ull);
     uint32_t first = addr >> 12, last = uint32_t((end + 0xFFF) >> 12);
     for (uint32_t page = first; page < last;) {

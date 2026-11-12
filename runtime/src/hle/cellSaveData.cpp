@@ -1,4 +1,5 @@
 #include "common.h"
+#include "runtime/pgwrite.h"
 #include "savedata_hle.h"
 
 #include "runtime/cbwatch.h"
@@ -142,13 +143,13 @@ void write_param(const std::string& dir, const std::string& dir_name, uint32_t p
 }
 
 void fill_param(uint32_t param, const vfs::Psf& sfo) {
-    std::memset(vm::ptr(param), 0, 0x610);
+    pgw::fill(param, 0, 0x610);
     put_str(param + P_TITLE, sfo.str("TITLE"), 128);
     put_str(param + P_SUBTITLE, sfo.str("SUB_TITLE"), 128);
     put_str(param + P_DETAIL, sfo.str("DETAIL"), 1024);
     vm::write32(param + P_ATTRIBUTE, sfo.num("ATTRIBUTE"));
     std::string lp = sfo.str("SAVEDATA_LIST_PARAM");
-    std::memcpy(vm::ptr(param + P_LIST_PARAM), lp.data(), std::min<size_t>(lp.size(), 8));
+    pgw::write(param + P_LIST_PARAM, lp.data(), std::min<size_t>(lp.size(), 8));
 }
 
 std::string save_root() { return vfs::host_path("/dev_hdd0/home/00000001/savedata"); }
@@ -177,7 +178,7 @@ struct Op {
 int32_t report_cbresult(const Op& op, int32_t cbresult);
 
 void fill_stat(const Op& op, uint32_t sg, bool exists) {
-    std::memset(vm::ptr(sg), 0, SG_SIZE);
+    pgw::fill(sg, 0, SG_SIZE);
     vm::write32(sg + SG_FREE_KB, 40 * 1024 * 1024);
     vm::write32(sg + SG_IS_NEW, exists ? 0 : 1);
     put_str(sg + SG_DIR + 0x18, op.dir_name, 32);
@@ -230,7 +231,7 @@ void fill_stat(const Op& op, uint32_t sg, bool exists) {
         n++;
         const uint32_t e = buf + listed * 0x38;
         if (listed < list_max && buf && (listed + 1) * 0x38 <= buf_size) {
-            std::memset(vm::ptr(e), 0, 0x38);
+            pgw::fill(e, 0, 0x38);
             /* CellSaveDataFileStat.fileType: SECUREFILE is 0, NORMALFILE is 1
              * (refs/.../cellSaveData.h:103). content_type() returns 1 for an
              * ordinary file, and the old code turned that into 0 -- it stamped
@@ -318,9 +319,9 @@ int32_t run_op(Op& op) {
                  op.dir_name.c_str(), op.func_stat, op.func_file);
         return ERR_PARAM;
     }
-    std::memset(vm::ptr(cb), 0, 0x20);
+    pgw::fill(cb, 0, 0x20);
     vm::write32(cb + 0x10, op.userdata);
-    std::memset(vm::ptr(ss), 0, 0x10);
+    pgw::fill(ss, 0, 0x10);
     call_guest(op.ctx, op.func_stat, cb, sg, ss);
     int32_t result = static_cast<int32_t>(vm::read32(cb));
     if (result < 0) {
@@ -345,7 +346,7 @@ int32_t run_op(Op& op) {
     }
     LOG_INFO("savedata", "%s '%s' (%s) stat result %d setParam 0x%x recreate 0x%x indicator 0x%x needKB %d progress %u", op.save ? "save" : "load", op.dir_name.c_str(), exists ? "existing" : "new", result,
              set_param, vm::read32(ss + 0x4), vm::read32(ss + 0x8), static_cast<int32_t>(vm::read32(cb + 0x8)), vm::read32(cb + 0x4));
-    std::memset(vm::ptr(fg), 0, 0x44);
+    pgw::fill(fg, 0, 0x44);
     const bool trace_files = std::getenv("PS3BASE_SAVEDATA_TRACE") != nullptr;
     if (trace_files) {
         LOG_INFO("savedata",
@@ -405,9 +406,9 @@ int32_t run_op(Op& op) {
     };
     const bool trace_state = trace_files && !op.save;
     for (int iter = 0; result == CB_OK_NEXT && iter < 4096; iter++) {
-        std::memset(vm::ptr(cb), 0, 0x20);
+        pgw::fill(cb, 0, 0x20);
         vm::write32(cb + 0x10, op.userdata);
-        std::memset(vm::ptr(fs), 0, 0x30);
+        pgw::fill(fs, 0, 0x30);
         call_guest(op.ctx, op.func_file, cb, fg, fs);
         result = static_cast<int32_t>(vm::read32(cb));
         if (trace_state) {
@@ -558,9 +559,9 @@ int32_t list_auto_load_op(ppu::Context& ctx, const std::string& root, uint32_t s
     const uint32_t cb = g_scratch + CB_RESULT;
     const uint32_t list_get = g_scratch + CB_RESULT + 0x40;
     const uint32_t fixed_set = list_get + 0x60;
-    std::memset(vm::ptr(list_get), 0, 0x60);
-    std::memset(vm::ptr(fixed_set), 0, 0x10);
-    std::memset(vm::ptr(cb), 0, 0x20);
+    pgw::fill(list_get, 0, 0x60);
+    pgw::fill(fixed_set, 0, 0x10);
+    pgw::fill(cb, 0, 0x20);
     vm::write32(cb + 0x10, stack_userdata);
     vm::write32(list_get + 8, buf);   /* dirList points at the caller's buffer */
 
@@ -587,22 +588,22 @@ int32_t list_auto_load_op(ppu::Context& ctx, const std::string& root, uint32_t s
         if (buf && buf_size && clear_at == 0) {
             /* The firmware clears the caller's buffer only when the first
              * match is found, so an empty account leaves it untouched. */
-            std::memset(vm::ptr(buf), 0, buf_size);
+            pgw::fill(buf, 0, buf_size);
         }
         clear_at++;
         if (listed >= dir_list_max) continue;
         const uint64_t need = (uint64_t(listed) + 1) * 0x30;
         if (!buf || need > buf_size) continue;
         const uint32_t e = buf + listed * 0x30;
-        std::memset(vm::ptr(e), 0, 0x30);
-        std::memcpy(vm::ptr(e), name.data(), std::min<size_t>(name.size(), 31));
+        pgw::fill(e, 0, 0x30);
+        pgw::write(e, name.data(), std::min<size_t>(name.size(), 31));
         /* SAVEDATA_LIST_PARAM comes from the entry's own PARAM.SFO; the list
          * shows the sort order from it, and garbage there reorders or drops
          * entries in the title's own view. */
         vfs::Psf sfo;
         sfo.load(root + "/" + name + "/PARAM.SFO");
         std::string lp = sfo.str("SAVEDATA_LIST_PARAM");
-        if (!lp.empty()) std::memcpy(vm::ptr(e + 0x20), lp.data(), std::min<size_t>(lp.size(), 8));
+        if (!lp.empty()) pgw::write(e + 0x20, lp.data(), std::min<size_t>(lp.size(), 8));
         listed++;
     }
     vm::write32(list_get + 0, static_cast<uint32_t>(names.size()));
@@ -774,7 +775,7 @@ HLE_FUNC(cellSaveData, cellSaveDataGetListItem) {
     }
 
     if (dir) {
-        std::memset(vm::ptr(dir), 0, 0x38);
+        pgw::fill(dir, 0, 0x38);
         vm::write64(dir + 0x0, file_time(path, 0));
         vm::write64(dir + 0x8, file_time(path, 1));
         vm::write64(dir + 0x10, file_time(path, 2));
@@ -1025,12 +1026,12 @@ HLE_FUNC(cellSaveData, cellSaveDataListDelete) {
     const uint32_t cb = g_scratch + CB_RESULT;
     const uint32_t list_get = cb + 0x40;
     const uint32_t list_set = list_get + 0x60;
-    std::memset(vm::ptr(list_get), 0, 0x60);
-    std::memset(vm::ptr(list_set), 0, 0x18);
+    pgw::fill(list_get, 0, 0x60);
+    pgw::fill(list_set, 0, 0x18);
 
     /* The buffer is cleared exactly once, and only when a match was found
      * (cellSaveData.cpp:863-868). */
-    if (listing.clear_buffer && buf && buf_size) std::memset(vm::ptr(buf), 0, buf_size);
+    if (listing.clear_buffer && buf && buf_size) pgw::fill(buf, 0, buf_size);
 
     vm::write32(list_get + 0x0, listing.dir_num);
     vm::write32(list_get + 0x4, listing.dir_list_num);
@@ -1038,16 +1039,15 @@ HLE_FUNC(cellSaveData, cellSaveDataListDelete) {
     for (uint32_t i = 0; i < listing.dir_list_num; i++) {
         const uint32_t at = buf + i * savedata::DIR_LIST_SIZE;
         if (!vm::range_mapped(at, savedata::DIR_LIST_SIZE)) break;
-        std::memset(vm::ptr(at), 0, savedata::DIR_LIST_SIZE);
+        pgw::fill(at, 0, savedata::DIR_LIST_SIZE);
         put_str(at + 0x00, entries[i].dir_name, savedata::DIRNAME_SIZE);
-        std::memcpy(vm::ptr(at + 0x20), entries[i].list_param.data(),
-                    std::min<size_t>(entries[i].list_param.size(), 8));
+        pgw::write(at + 0x20, entries[i].list_param.data(), std::min<size_t>(entries[i].list_param.size(), 8));
     }
 
     /* focusPosition starts at DIRNAME (= 0) for a delete list
      * (cellSaveData.cpp:965, refs/.../cellSaveData.h:127). */
     vm::write32(list_set + 0x0, 0);
-    std::memset(vm::ptr(cb), 0, 0x20);
+    pgw::fill(cb, 0, 0x20);
     vm::write32(cb + 0x10, userdata);
     call_guest(ctx, func_list, cb, list_get, list_set);
     const int32_t list_result = static_cast<int32_t>(vm::read32(cb));

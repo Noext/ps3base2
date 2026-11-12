@@ -1,4 +1,5 @@
 #include "runtime/placement.h"
+#include "runtime/pgwrite.h"
 #include "runtime/cbwatch.h"
 #include "runtime/codewatch.h"
 #include "runtime/host.h"
@@ -65,7 +66,7 @@ uint32_t push_strings(uint32_t& sp, const char* const* list, int count) {
     for (int i = 0; i < count; i++) {
         uint32_t len = static_cast<uint32_t>(std::strlen(list[i])) + 1;
         sp -= (len + 15) & ~15u;
-        std::memcpy(vm::ptr(sp), list[i], len);
+        pgw::write(sp, list[i], len);
         addrs.push_back(sp);
     }
     sp -= static_cast<uint32_t>((addrs.size() + 1) * 8 + 15) & ~15u;
@@ -282,6 +283,11 @@ int main(int argc, char** argv) {
         }
     }
     if (!vm::init()) return 1;
+    /* PS3BASE_GUARD=lo-hi[,...]: arm the non-fatal diagnostic page guard, which
+     * reports every guest load and store on a page and cannot kill the run. This
+     * is the read watch: GOWA_TRAP can only watch addresses named before the run
+     * starts, and it does not distinguish a read from a write unless told. */
+    vm::guard_init_from_env();
     /* The title image is whatever the profile names; a build with no profile
      * uses the first image in the manifest, which for a generated tree is the
      * game itself. The runtime never spells a game name. */
@@ -534,6 +540,11 @@ int main(int argc, char** argv) {
          * any thread came close to overrunning, and a measurement nobody prints
          * is a measurement nobody can act on. */
         stacks::dump();
+        /* The funnel counters are the proof that the host-write path is the one
+         * actually taken: a site left unconverted would make the count lower
+         * than the writes the guest must have received. */
+        LOG_INFO("main", "%s", pgw::stats().c_str());
+        if (vm::guard_hits()) LOG_INFO("main", "%s", vm::guard_report().c_str());
         if (const uint64_t sc = spu::aot::shadow_checks(); sc || spu::aot::shadow_diffs())
             LOG_INFO("main", "SPU SHADOW: %llu block executions mirrored, %llu divergences -- %s",
                      static_cast<unsigned long long>(sc), static_cast<unsigned long long>(spu::aot::shadow_diffs()),

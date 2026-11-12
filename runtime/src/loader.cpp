@@ -1,4 +1,5 @@
 #include "runtime/loader.h"
+#include "runtime/pgwrite.h"
 #include "runtime/image.h"
 #include "runtime/files.h"
 #include "runtime/log.h"
@@ -77,9 +78,9 @@ bool load_image(int index) {
                 LOG_ERROR("loader", "map failed 0x%llx+0x%llx", static_cast<unsigned long long>(vaddr), static_cast<unsigned long long>(memsz));
                 return false;
             }
-            std::memcpy(vm::ptr(static_cast<uint32_t>(vaddr)), &data[off], filesz);
+            pgw::write(static_cast<uint32_t>(vaddr), &data[off], filesz);
             if (!(be32(ph + 4) & 2) && filesz == memsz) vm::mark_immutable(static_cast<uint32_t>(vaddr), static_cast<uint32_t>(filesz));
-            std::memset(vm::ptr(static_cast<uint32_t>(vaddr + filesz)), 0, memsz - filesz);
+            pgw::fill(static_cast<uint32_t>(vaddr + filesz), 0, memsz - filesz);
         } else if (type == 7 && !im.prx) {
             g_process.tls_vaddr = static_cast<uint32_t>(vaddr);
             g_process.tls_filesz = static_cast<uint32_t>(filesz);

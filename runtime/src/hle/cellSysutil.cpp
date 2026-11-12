@@ -1,4 +1,5 @@
 #include "common.h"
+#include "runtime/pgwrite.h"
 #include "sysutil_hle.h"
 
 #include <atomic>
@@ -271,7 +272,7 @@ HLE_FUNC(cellSysutil, cellVideoOutGetConfiguration) {
         return ret(ctx, rc);
     }
     if (zeroed) {
-        std::memset(vm::ptr(cfg), 0, su::VIDEO_OUT_CONFIGURATION_SIZE);
+        pgw::fill(cfg, 0, su::VIDEO_OUT_CONFIGURATION_SIZE);
     } else {
         su::write_video_out_configuration(cfg, view);
     }
@@ -360,7 +361,7 @@ HLE_FUNC(cellSysutil, cellAudioOutGetDeviceInfo) {
     const int32_t rc = su::audio_out_get_device_info(audio_out, device_index, view, zeroed_past_end);
     if (rc < 0) return ret(ctx, rc);
     if (zeroed_past_end) {
-        std::memset(vm::ptr(info), 0, su::AUDIO_OUT_DEVICE_INFO_SIZE);
+        pgw::fill(info, 0, su::AUDIO_OUT_DEVICE_INFO_SIZE);
         return ret(ctx, 0);
     }
     su::write_audio_out_device_info(info, view);
@@ -791,7 +792,7 @@ HLE_FUNC(cellSysutil, cellVideoOutGetDeviceInfo) {
 
     /* Zero first: the caller may read fields this runtime has nothing to say
      * about, and a stale stack value would be read as a capability. */
-    std::memset(vm::ptr(out), 0, kDeviceInfoSize);
+    pgw::fill(out, 0, kDeviceInfoSize);
 
     uint8_t* p = vm::ptr(out);
     p[0] = 1;    /* portType: HDMI */
@@ -811,10 +812,10 @@ HLE_FUNC(cellSysutil, cellVideoOutGetDeviceInfo) {
     /* availableModes at +0x20, 8 bytes each. */
     uint32_t mode_ea = out + 0x20;
     for (const VideoMode& m : kModes) {
-        vm::ptr(mode_ea)[0] = m.resolution_id;
-        vm::ptr(mode_ea)[1] = 0;        /* scanMode: progressive */
-        vm::ptr(mode_ea)[2] = 0;        /* conversion: none */
-        vm::ptr(mode_ea)[3] = m.aspect;
+        pgw::write8(mode_ea + (0), static_cast<uint8_t>(m.resolution_id));
+        pgw::write8(mode_ea + (1), static_cast<uint8_t>(0));        /* scanMode: progressive */
+        pgw::write8(mode_ea + (2), static_cast<uint8_t>(0));        /* conversion: none */
+        pgw::write8(mode_ea + (3), static_cast<uint8_t>(m.aspect));
         vm::write16(mode_ea + 6, m.refresh_bits);
         mode_ea += 8;
     }

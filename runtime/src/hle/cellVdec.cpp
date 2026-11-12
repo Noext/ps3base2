@@ -1,4 +1,5 @@
 #include "common.h"
+#include "runtime/pgwrite.h"
 #include "runtime/thread.h"
 #include "runtime/video_decoder.h"
 
@@ -430,7 +431,7 @@ int32_t query_attr(uint32_t codec, uint32_t level, uint32_t attr) {
     vm::write32(attr, 0);
     if (!codec_ok(codec, level)) return VDEC_ERROR_ARG;
     vm::write32(attr, kMemSize);
-    vm::ptr(attr + 4)[0] = kCmdDepth;
+    pgw::write8(attr + 4 + (0), static_cast<uint8_t>(kCmdDepth));
     vm::write32(attr + 8, 0x4890000);
     vm::write32(attr + 12, 0x00020000);
     return CELL_OK;
@@ -645,12 +646,12 @@ HLE_FUNC(libvdec, cellVdecGetPicItem) {
     if (!d->mem_addr || !slots) return ret(ctx, VDEC_ERROR_FATAL);
     uint32_t item = d->mem_addr + (d->slot++ % slots) * kSlotSize;
     uint32_t info = item + kItemSize;
-    std::memset(vm::ptr(item), 0, kSlotSize);
+    pgw::fill(item, 0, kSlotSize);
     const Meta& mm = pic->meta;
     vm::write32(item + 0x00, d->codec);
     vm::write32(item + 0x04, mm.au[0].start);
     vm::write32(item + 0x08, mm.au[0].size + (mm.au_num > 1 ? mm.au[1].size : 0));
-    vm::ptr(item + 0x0c)[0] = mm.au_num;
+    pgw::write8(item + 0x0c + (0), static_cast<uint8_t>(mm.au_num));
     for (int k = 0; k < 2; k++) {
         const AuInfo& a = k < mm.au_num ? mm.au[k] : AuInfo{};
         vm::write32(item + 0x10 + 8 * k, a.pts_hi);
@@ -662,7 +663,7 @@ HLE_FUNC(libvdec, cellVdecGetPicItem) {
     vm::write32(item + 0x40, 0);
     vm::write32(item + 0x44, 0);
     vm::write32(item + 0x48, info);
-    if (!mm.info.empty()) std::memcpy(vm::ptr(info), mm.info.data(), std::min<size_t>(mm.info.size(), kInfoSize));
+    if (!mm.info.empty()) pgw::write(info, mm.info.data(), std::min<size_t>(mm.info.size(), kInfoSize));
     vm::write32(pp, item);
     ret(ctx, CELL_OK);
 }
@@ -692,7 +693,7 @@ HLE_FUNC(libvdec, cellVdecGetPicture) {
     if (buf) {
         size_t n = Decoder::out_bytes(key, pic.frame);
         vm::host_write(buf, n);
-        if (pic.conv_key == key) std::memcpy(vm::ptr(buf), pic.conv.data(), n);
+        if (pic.conv_key == key) pgw::write(buf, pic.conv.data(), n);
         else d->convert(pic.frame, key, vm::ptr(buf));
     }
     ret(ctx, CELL_OK);

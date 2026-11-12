@@ -126,6 +126,9 @@ int g_watch_count = 0;
 uint32_t g_trap_max = 50;
 std::mutex g_trap_lock;
 thread_local uint32_t t_step_page = 0;
+/* Set when the single step belongs to the diagnostic page guard rather than to a
+ * GOWA_TRAP: the two use the same trap flag, and only one of them re-arms. */
+thread_local bool t_step_guard = false;
 thread_local std::vector<PendingHit> t_hits;
 
 void process_hit(const PendingHit& h) {
@@ -154,6 +157,35 @@ void process_hit(const PendingHit& h) {
         std::snprintf(fn, sizeof fn, "trap_%08x.bin", t.addr);
         trace::dump_memory(fn);
     }
+}
+
+/* The diagnostic page guard. A guarded page is PROT_NONE, so both a load and a
+ * store land here, which is what makes it a READ watch as well as a write one.
+ * The page is opened, the trap flag is set, and the instruction is retried;
+ * trap_handler() re-arms the page after that one instruction. Nothing here can
+ * kill the run, and the report names the direction, the guest context and the
+ * host stack. */
+bool guard_fault(uint32_t g, bool is_write, ucontext_t* uc) {
+    if (!vm::guard_armed(g)) return false;
+    if (vm::guard_wants_log(g)) {
+        void* pcs[12];
+        const int n = stack_from(uc, pcs, 12);
+        guest::Thread* t = guest::current();
+        /* The value the guest sees, read through the opened page below; the
+         * address and the direction are what matter for a read watch. */
+        LOG_INFO("guard", "%s 0x%08x by %s%s", is_write ? "write" : "read", g,
+                 t ? t->name.c_str() : host::thread_name().c_str(), n ? "" : " (no stack)");
+        if (n) {
+            std::string stack;
+            for (int i = 0; i < n; i++) stack += " <- " + symbol_of(reinterpret_cast<uintptr_t>(pcs[i]));
+            LOG_INFO("guard", "  %s", stack.c_str());
+        }
+    }
+    vm::guard_fault(g);
+    t_step_page = (g >> 12) + 1;
+    t_step_guard = true;
+    uc->uc_mcontext.gregs[REG_EFL] |= 0x100;
+    return true;
 }
 
 bool trap_fault(uint32_t g, bool is_write, ucontext_t* uc) {
@@ -192,7 +224,10 @@ void fault_handler(int sig, siginfo_t* si, void* ctx) {
     bool is_write = (uc->uc_mcontext.gregs[REG_ERR] & 2) != 0;
     if (guest) {
         uint32_t g = static_cast<uint32_t>(fault - vm::g_base);
-        /* Traps first. watch_fault would otherwise repair the page and clear its
+        /* The diagnostic guard first: it is an explicit request by address, so
+         * it outranks the texture watch's implicit repair. */
+        if (vm::guard_armed(g) && guard_fault(g, is_write, uc)) return;
+        /* Traps next. watch_fault would otherwise repair the page and clear its
          * watched bit, so a trap on the same page fired exactly once and the
          * writer of interest never appeared in the log. */
         if (g_watch_count && trap_fault(g, is_write, uc)) return;
@@ -273,10 +308,15 @@ void trap_handler(int, siginfo_t*, void* ctx) {
     uint32_t page = t_step_page - 1;
     t_step_page = 0;
     uc->uc_mcontext.gregs[REG_EFL] &= ~0x100ll;
+    const bool guard = t_step_guard;
+    t_step_guard = false;
     std::vector<PendingHit> hits;
     hits.swap(t_hits);
     for (const PendingHit& h : hits) process_hit(h);
-    host::vm_protect(vm::g_base + (uint64_t(page) << 12), 4096, g_trap_pages[page]);
+    /* Guarded pages go back to PROT_NONE so the next access faults too; a trap
+     * page goes back to whatever GOWA_TRAP asked for. */
+    if (guard) vm::guard_rearm(page);
+    else host::vm_protect(vm::g_base + (uint64_t(page) << 12), 4096, g_trap_pages[page]);
 }
 
 const int kSampleSig = SIGRTMIN + 2;

@@ -44,8 +44,62 @@ uint64_t watch_stale_repairs();
 void host_write(uint32_t addr, uint64_t size);
 void watch_reset(uint32_t addr, uint64_t size);
 
+/* ---------------------------------------------------------------------------
+ * Non-fatal page guard. The existing write watch (watch_range/watch_fault)
+ * serves the renderer's texture cache: the fault means "the guest wrote a page
+ * I was reading", and the page is repaired and the read redone. This is the
+ * diagnostic counterpart, for tracing ANY address:
+ *
+ *   PS3BASE_GUARD=lo-hi[,lo-hi...]   arm at startup, PROT_NONE
+ *   vm::guard_arm(addr, size)        arm at run time
+ *   vm::guard_report()               counts
+ *
+ * A guest load or store into a guarded page takes a fault that is REPAIRED and
+ * the instruction is RETRIED (write: the page is made writable for one
+ * instruction; read: the page is made readable for one instruction), so the
+ * guest never dies for the privilege of being watched. The first
+ * PS3BASE_GUARD_REPORT<n> hits per range are logged with the host stack, the
+ * guest thread and the LR. That is the difference from GOWA_TRAP: this one does
+ * not require naming the address in advance, does not depend on the page being
+ * remapped by a caller, and cannot abort the run.
+ *
+ * Host writes do NOT fault. They are reported by host_write(), which is why the
+ * pgwrite funnel calls it.
+ * ------------------------------------------------------------------------- */
+
 /* Dump snapshot ranges at the given second (PS3BASE_TEX_SNAPSHOT). */
 void tex_snapshot_tick(int seconds);
+
+/* Non-fatal diagnostic page guard, see the comment block above. */
+bool guard_arm(uint32_t addr, uint32_t size);
+bool guard_armed(uint32_t addr);
+uint64_t guard_hits();
+std::string guard_report();
+void guard_init_from_env();
+
+/* Fault-handler side. guard_fault() opens the page for one instruction and
+ * returns false when the page is not guarded (so the write watch can have it);
+ * guard_rearm() closes it again after the single step; guard_wants_log() applies
+ * the per-range hit cap. */
+bool guard_fault(uint32_t addr);
+void guard_rearm(uint32_t page);
+bool guard_wants_log(uint32_t addr);
+
+/* host_write() calls this: a host store cannot fault, so a guarded page learns
+ * about it here instead. */
+void guard_note_host_write(uint32_t addr);
+
+/* A host store to a guarded page must not fault -- it would fault inside the
+ * runtime's own memcpy, where the guest context is meaningless. So the funnel
+ * opens the guarded pages before it stores and re-arms them afterwards:
+ *
+ *   bool any = guard_host_begin(addr, size);
+ *   rsv::store_range(...);
+ *   if (any) guard_host_end(addr, size);
+ *
+ * Either call is a no-op when nothing is armed. */
+bool guard_host_begin(uint32_t addr, uint64_t size);
+void guard_host_end(uint32_t addr, uint64_t size);
 
 inline uint8_t* ptr(uint32_t addr) { return g_base + addr; }
 
