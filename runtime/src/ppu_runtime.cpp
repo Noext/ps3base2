@@ -190,17 +190,22 @@ int32_t resolve(uint32_t index, ImportSlot& slot) {
         if (imp.name && *imp.name && l.find(std::string(",") + imp.name + ",") != std::string::npos) slot.log_args = true;
     }
     if (imp.name && *imp.name) slot.tap = hle::find_tap(imp.module, imp.name);
-#if PS3BASE_HLE_OVER_LLE
-    /* Milestone 3 requires the display path to be a STUB, not the firmware. The
-     * LLE export would otherwise win the search below and run the real GCM body,
-     * which needs an RSX the wasm build deliberately omits. */
-    if (imp.name && *imp.name && std::strcmp(imp.module, "cellGcmSys") == 0) {
-        if (hle::Fn fn = hle::find(imp.module, imp.name)) {
-            slot.hle = fn;
-            return kHle;
-        }
-    }
-#endif
+/* DELIBERATELY ABSENT: a PS3BASE_HLE_OVER_LLE override that made cellGcmSys
+ * imports resolve to our HLE instead of the firmware body.
+ *
+ * It was introduced for a wasm build that could not run the LLE, and it was the
+ * one configuration difference that changed the guest's own output: the HLE
+ * _cellGcmInitBody returns before the firmware does, so the guest never saw the
+ * context the native reference sees. Measured on both sides (G1):
+ *
+ *   native : 0 lines [gcmstub], rsx: context at 0x50100000
+ *   wasm   : [gcmstub] context=0xd72800 ... [imp119] ret=0x0, context elsewhere
+ *
+ * The LLE body runs now that the RSX context region can be placed (see
+ * runtime/src/regions.cpp: the compact layout reserved a slot for it), and the
+ * wasm gets the same 0x50100000 the native does. With the override removed the
+ * resolution below is the same code on both sides: LLE export first, HLE only
+ * when the image is not loaded -- which is also what the native does. */
     for (uint32_t i = 0; i < image::export_count; i++) {
         const image::ExportEntry& e = image::exports[i];
         if (e.nid == imp.nid && std::strcmp(e.module, imp.module) == 0 && loader::image_loaded(static_cast<int>(e.image))) {

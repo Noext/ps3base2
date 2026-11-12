@@ -42,7 +42,15 @@ RegionInfo* region_table() {
         t[0] = {0x00010000, 0x0FFF0000, 0x10000};
         t[1] = {0, 0x10000000, 0x10000};
         t[2] = {0, 0x10000000, 0x100000};
-        t[3] = {0, 0x10000000, 0x100000};
+        /* RSX context: 128 MB under the compact layout only, 256 MB otherwise.
+         * It holds the device block (1 MB), the command context (3 MB) and the
+         * reports window, so even 128 MB is four times what a run uses. At
+         * 256 MB the compact layout had no slot able to contain it (0x50000000
+         * + 0x10000000 crosses the shifted video base), which made the region
+         * unplaceable and turned into CELL_ENOMEM inside the LLE
+         * sys_rsx_context_allocate. The sparse layout keeps 256 MB and still
+         * places it at 0x50000000, exactly as before. */
+        t[3] = {0, b.compact ? 0x8000000u : 0x10000000u, 0x100000};
         t[4] = {b.video, 0x10000000, 0x100000};
         t[5] = {b.stack, 0x10000000, 0x10000};
         t[6] = {b.spu, b.spu_size, 0x10000};

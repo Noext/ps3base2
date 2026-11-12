@@ -583,6 +583,23 @@ void fifo_thread() {
             hist_put[hist_n & 63] = put;
             hist_n++;
         }
+#if defined(PS3BASE_RSXB_PROBE) && PS3BASE_RSXB_PROBE
+        /* One line per header exactly as this decoder consumes it, in the same
+         * shape the native rsxb tool prints, so the two streams can be diffed
+         * header for header. Compile-time because getenv is inert in wasm. */
+        {
+            static std::atomic<int> rn{0};
+            const int k = rn.fetch_add(1, std::memory_order_relaxed);
+            if (k < 200) {
+                uint32_t r0 = vm::read32(ea), r1 = vm::read32(ea + 4), r2 = vm::read32(ea + 8), r3v = vm::read32(ea + 12);
+                uint32_t cnt = (cmd >> 18) & 0x7FFu;
+                uint32_t meth = cmd & 0xFFFCu;
+                bool ni = (cmd & 0xE0030003u) == 0x40000000u;
+                LOG_INFO("rsxb", "ea 0x%08x raw %08x %08x %08x %08x count %u method 0x%04x noninc %d put 0x%08x",
+                         ea, r0, r1, r2, r3v, cnt, meth, ni ? 1 : 0, vm::read32(ctrl + 0x40));
+            }
+        }
+#endif
         static const bool trace = std::getenv("GOWA_RSX_TRACE") != nullptr;
         if (trace) LOG_INFO("rsxc", "get 0x%08x cmd 0x%08x", get, cmd);
         if ((cmd & 0xE0000003) == 0x20000000 || (cmd & 0xE0000003) == 0x00000001) {
@@ -765,6 +782,14 @@ void vblank_thread() {
 
 uint32_t rsx_address(uint32_t offset, uint32_t loc) { return get_address(offset, loc); }
 
+/* The one RSX context block, whoever created it. The HLE _cellGcmInitBody and
+ * the FIFO reader in gpu/gcm_fifo.cpp must name the SAME block or the reader
+ * watches memory nobody feeds -- measured: "context at 0x00e00000 (hle init)"
+ * next to "reader armed: context=0x01100000", two blocks, zero methods decoded. */
+uint32_t rsx_context_base() { return g_rsx.dma_control; }
+
+uint32_t rsx_control_block() { return g_rsx.dma_control ? g_rsx.dma_control + 0x40 : 0; }
+
 uint32_t rsx_io_to_ea(uint32_t io) { return io_to_ea(io); }
 
 uint64_t rsx_flip_count() { return std::atomic_ref<uint64_t>(g_rsx.flips).load(std::memory_order_relaxed); }
@@ -846,17 +871,7 @@ int32_t rsx_setup_for_hle() {
     }
     if (g_rsx.ctx_base) return CELL_OK;   /* already set up */
     if (!g_rsx.local_size) return CELL_EINVAL;
-    /* The context MUST be the same block the guest writes put/get into, and the
-     * native puts it at video+0x100000 = 0x50100000 (measured: "rsx: context at
-     * 0x50100000"). Region::RsxContext is refused in the real allocation order
-     * (track G5), and falling back to Main gave 0x00e00000 -- a DIFFERENT block
-     * from the one gcm_fifo reads, so two command processors diverged and neither
-     * followed the guest. Carve it from the local-memory window instead. */
     uint32_t area = vm::alloc(vm::Region::RsxContext, 0x300000, 0x100000);
-    if (!area) {
-        const uint32_t local = LOCAL_BASE + 0x100000u;
-        if (vm::map(local, 0x300000)) area = local;
-    }
     if (!area) area = vm::alloc(vm::Region::Main, 0x300000, 0x100000);
     if (!area) return CELL_ENOMEM;
     g_rsx.ctx_base = area;

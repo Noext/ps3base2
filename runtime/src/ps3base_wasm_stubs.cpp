@@ -175,7 +175,4 @@ void profile_thread(void*, const char*) {}
 void log_here(const char*) {}
 }  // namespace crash
 extern "C" {
-const char* stbi_failure_reason(void) { return "unavailable"; }
-void stbi_image_free(void*) {}
-unsigned char* stbi_load_from_memory(const unsigned char*, int, int*, int*, int*, int) { return nullptr; }
 }
