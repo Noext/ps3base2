@@ -1,0 +1,1 @@
+{"agent":"M5","status":"running","task":"closed-loop drive of RDR: read the title screen, press START via xdotool, capture the following screens before the 23 s abort","branch":"explore/m5","worktree":"/root/Dev/wt-M5","started":"2026-11-12T21:12Z"}

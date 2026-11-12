@@ -1,0 +1,4 @@
+M5 -- closed-loop driving of RDR from the title screen
+worktree /root/Dev/wt-M5 branch explore/m5
+display :964 (Xvfb 1280x720x24) build build-64
+deliverable: capture of the screen that follows Press START
