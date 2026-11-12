@@ -59,3 +59,36 @@ parce que l'evenement n'a pas lieu.
 1. pourquoi `cellPadRead` n'est jamais appele (est-il garde par un etat que le jeu n'atteint pas ?) ;
 2. ce que le thread principal attend a `lr=0x0021c18c` — remonter au call site dans le code lifte ;
 3. si `sceNp ManagerGetNpId` OFFLINE est ce qui bloque, ou si c'est autre chose.
+---
+
+# Correction : la fonction est cellPadGetData
+
+J'avais ecrit `cellPadRead` : ce nom n'existe pas. La table d'imports contient :
+
+    {"sys_io", 0x1CF98800u, "cellPadInit", 0},
+    {"sys_io", 0x578E3C98u, "cellPadSetPortSetting", 0},
+    {"sys_io", 0x8B72CDA1u, "cellPadGetData", 0},
+    {"sys_io", 0xA703A51Du, "cellPadGetInfo2", 0},
+
+Mesure sur 148 s de run : `cellPadGetData` = **0 occurrence**, `cellPadGetInfo` = 0,
+`cellPadInit` = **1**. Le jeu initialise le pad et **ne le lit jamais**.
+
+## Ce que cela signifie
+
+Le blocage n'est pas dans le chemin d'entree : il est **avant**. Le jeu n'atteint pas l'ecran ou il
+interrogerait le pad. Tant que `cellPadGetData` n'est pas appele, aucun script — fichier, integre ou
+issu de la page — ne peut changer quoi que ce soit.
+
+## Le thread principal au meme moment
+
+    I 4.843092 status: ppu 0x1000000 'main_thread' running, last 0 (r3 0x42528210) syscalls +6
+
+6 syscalls en 4,8 s : le thread tourne mais n'appelle presque rien. Les deux handlers SPURS sont
+bloques en 130 et 178, comme en natif.
+
+## La question a trancher
+
+Le jeu a fait 10 s d'activite reelle (pngdec, fs, sceNp) puis s'est endormi a `pc=0x003a18b0`.
+Il faut remonter du `lr=0x0021c18c` au call site dans le code lifte pour savoir **quelle condition**
+il attend. C'est une fonction d'une image annexe (pas de `table.cpp`), donc la recherche doit couvrir
+`out-mc/gen/reloc/*.elf` lifts, pas seulement `out/ppu/mc_*.cpp`.
