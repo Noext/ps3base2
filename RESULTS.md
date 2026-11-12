@@ -223,3 +223,39 @@ Each later milestone is one edit to that line plus a History row:
 The measurement that will set each number is the same one used here: capture the
 frame, read it, count the flips, and note the second at which the first SPURS
 assertion appears.
+
+### M7 -- reproduction on the committed tree
+
+The criterion is re-measured on b2bcf74, with the same command a user runs:
+
+    $ cd /root/Dev/wt-T5 && git rev-parse --short HEAD
+    b2bcf74
+    $ DISPLAY_NUM=:920 SECONDS_PER_GAME=120 tools/regress.sh rdr
+    regress: 120s per game on display :920
+    rdr          PASS  SPURS abort     flips=2101   crashes=0 screen=socialclub@11s abort=at 75s
+
+    regress: all present games passed (0 skipped)
+    exit=0
+
+Four RDR runs across the session read the notice at 10 s, 11 s, 13 s and 14 s,
+with 2101-2641 flips and the abort at 75-98 s. Every one passes; the numbers
+move with the machine's load, which is why the floor is 2000 rather than the
+lowest measured value.
+
+### Files changed
+
+    tools/regress.sh              third expectation kind, 'screen': captures the
+                                  window, reads it with tesseract, greps the marker;
+                                  reads flips=, screen= and abort_after= from the
+                                  baseline; a SPURS stop is named rather than
+                                  reported as a bare exit code; a missing OCR/grab
+                                  tool is SKIP (environment), never a pass.
+    docs/regress-baseline.md      bars become key=value fields; rdr moves from
+                                  'flips >= 0' to
+                                  'flips=2000 screen=socialclub abort_after=60';
+                                  history row and a section on why 2000 and not 0.
+    docs/progress.md              the milestone with its proof.
+    RESULTS.md                    this file.
+
+Minecraft's 6500 and GTA's 6300 are the same two numbers as before the change,
+only spelled flips=6500 and flips=6300 so the script can read them.
