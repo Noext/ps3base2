@@ -300,7 +300,17 @@ HLE_FUNC(cellGcmSys, cellGcmSetDisplayBuffer) {
     ret(ctx, 0);
 }
 
+/* The title registers a function pointer here and expects the runtime to call it on
+ * every flip. Discarding the argument (ret(ctx,0)) meant the handler at 0x00bbe658
+ * was NEVER invoked: track E measured 267,220 consecutive empty waits at
+ * lr=0x002dc33c in wasm against 3,985 series of median 22 natively. Store it so the
+ * flip path can call it. */
+static uint32_t g_flip_handler = 0;
+uint32_t gcm_flip_handler() { return g_flip_handler; }
+
 HLE_FUNC(cellGcmSys, cellGcmSetFlipHandler) {
+    g_flip_handler = static_cast<uint32_t>(ctx.gpr[3]);
+    LOG_INFO("gcm", "cellGcmSetFlipHandler(0x%08x)", g_flip_handler);
     ret(ctx, 0);
 }
 

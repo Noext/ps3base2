@@ -158,7 +158,24 @@ void rsx_write32(uint32_t addr, uint32_t value) {
     rsv::store_locked(addr, &be, 4);
 }
 
+extern uint32_t gcm_flip_handler();
+
+/* Call the guest handler on a scratch context so we do not disturb the caller's
+ * registers. The handler takes the flip buffer id in r3, as the native path does. */
+void rsx_flip_callback(uint32_t handler_ea) {
+    if (!handler_ea) return;
+    ppu::Context c{};
+    c.gpr[1] = 0x6001F000u;
+    c.gpr[3] = 0;
+    c.lr = 0;
+    ppu::call_indirect(c, vm::g_base, handler_ea);
+}
+
 void flip_done(uint32_t buffer) {
+    /* Call the handler the title registered with cellGcmSetFlipHandler. Without this,
+     * track E measured 267,220 consecutive empty waits (wasm) against 3,985 series of
+     * median 22 (native): the guest waits for its own flip callback and never gets it. */
+    if (const uint32_t h = gcm_flip_handler()) rsx_flip_callback(h);
     uint32_t h = head_addr(1);
     vm::write32(h + 8, vm::read32(h + 8) | 0x80000000u);
     vm::write64(h, ppu::timebase());
