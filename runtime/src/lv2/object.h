@@ -20,6 +20,10 @@ struct Object {
     std::string name;
 };
 
+/* Defined in memory.cpp, where the container type lives. sys_mmapper asks this
+ * before charging an allocation to a caller-named container. */
+bool container_exists(uint32_t cid);
+
 uint32_t add_object(uint32_t base, std::shared_ptr<Object> obj);
 std::shared_ptr<Object> get_object(uint32_t id);
 bool remove_object(uint32_t id);

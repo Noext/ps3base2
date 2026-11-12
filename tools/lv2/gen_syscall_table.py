@@ -35,7 +35,11 @@ def implemented(number, name):
     # This tree registers handlers as LV2_SYSCALL(<num>, <name>), so a syscall
     # is implemented when that macro names it -- not when a function happens to
     # be called like it.
-    pat = re.compile(r"LV2_SYSCALL\(\s*" + re.escape(str(number)) + r"\s*,")
+    #
+    # MMAPPER_SYSCALL is the same registration with a logging wrapper around the
+    # body (runtime/src/lv2/mmapper.cpp), so it counts. Without this the table
+    # claimed the eight sys_mmapper entries were unimplemented while they ran.
+    pat = re.compile(r"(?:LV2_|MMAPPER_)SYSCALL\(\s*" + re.escape(str(number)) + r"\s*,")
     for fn in sorted(os.listdir(d)):
         if fn.endswith((".c", ".cpp")):
             try:

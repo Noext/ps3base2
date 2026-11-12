@@ -354,6 +354,19 @@ target_compile_options(spurs PRIVATE ${PS3BASE_ARCH_FLAGS})
 target_link_libraries(spurs PRIVATE pthread)
 add_test(NAME spurs COMMAND spurs)
 
+# sys_mmapper against RPCS3, one check per deviation. The handlers are static in
+# the module, so the test includes it and drives the logic functions directly;
+# the address allocator is the real one, because the deviation that matters most
+# -- an area handed out over a guest image -- lives in their interaction.
+add_executable(mmapper_conformance tests/mmapper_conformance.cpp
+    runtime/src/memory.cpp runtime/src/regions.cpp runtime/src/mem.cpp
+    runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/backtrace_port.cpp
+    runtime/src/host.cpp runtime/src/log.cpp runtime/src/lv2/object.cpp)
+target_include_directories(mmapper_conformance PRIVATE runtime/include runtime/src runtime/src/lv2)
+target_compile_options(mmapper_conformance PRIVATE ${PS3BASE_ARCH_FLAGS})
+target_link_libraries(mmapper_conformance PRIVATE pthread)
+add_test(NAME mmapper_conformance COMMAND mmapper_conformance)
+
 # Proves wgpu-native works here and measures the pipeline-cache cost that decides
 # whether the WebGPU port is cheap or expensive. Optional: only built when the
 # library is present, so a machine without it still configures.

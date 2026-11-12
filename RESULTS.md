@@ -84,3 +84,120 @@ exercises today -- they are the ones it will exercise when the SPURS abort is
 fixed and the title gets past startup. The audit below reads each of the eight
 implemented handlers against refs/rpcs3/rpcs3/Emu/Cell/lv2/sys_mmapper.cpp and
 records every place the two disagree.
+## Measurement 2 -- the audit, the deviations, and the fixes
+
+runtime/src/lv2/mmapper.cpp was read line by line against
+refs/rpcs3/rpcs3/Emu/Cell/lv2/sys_mmapper.cpp. Eleven deviations were found.
+Each is fixed, and tests/mmapper_conformance.cpp has one check per deviation
+(D-numbers below); the test drives the logic functions directly, with the real
+address allocator linked, so the image-overlap rule is exercised rather than
+assumed.
+
+### Deviation table
+
+| # | syscall | RPCS3 says (file:line) | this tree did | fixed to |
+|---|---------|------------------------|---------------|----------|
+| D1 | allocate_address | size % 0x10000000 -> EALIGN (:214-217) | same | same |
+| D2 | allocate_address | size > u32 max -> ENOMEM (:219-222) | absent; size cast to u32 and truncated | ENOMEM |
+| D3 | allocate_address | alignment 0 means 0x10000000 (:226-229) | same | same |
+| D4 | allocate_address | page size must be 0/0x400/0x200 else EINVAL (:231-243) | absent -- any flag accepted | EINVAL |
+| D5 | allocate_address | page-fault notify needs RAW_SPU or SPU_THR (:245-251) | absent | EINVAL |
+| D6 | allocate_address | SPU_THR + notify is legal | n/a | accepted |
+| D7 | allocate_address | align must be 0x10000000/0x20000000/0x40000000/0x80000000 else EALIGN (:253-273) | absent -- any align passed to reserve_slot | EALIGN |
+| D12 | free_address | addr outside 0x20000000..0xC0000000 -> EINVAL (:652-655) | absent | EINVAL |
+| D13 | free_address | addr not an area -> EINVAL (:663-666) | same answer by accident (erase returned 0) | explicit |
+| D16 | allocate_shared_memory | size 0 -> EALIGN (:304-307) | same | same |
+| D17/18 | allocate_shared_memory | granularity 0/0x400 -> 1M, 0x200 -> 64K (:310-335) | page from (flags & 0xF00) == 0x200, so 0x100 (4K) fell through to 1M | granularity switch; 0x100 -> EINVAL |
+| D19 | allocate_shared_memory | unknown granularity -> EINVAL (:331-334) | silently 1M | EINVAL |
+| D24-29 | allocate_shared_memory | create_lv2_shm honours ipc_key and the 0xc000/0x8000 create mode (:188-206) | key ignored entirely -- two guests agreeing on a key got two heaps | keyed map; EEXIST / reuse / EPERM on size mismatch / ESRCH |
+| D36 | map_shared_memory | mem.align < area page -> EINVAL (:772-775) | returned EALIGN for both this and the address case | EINVAL |
+| D37 | map_shared_memory | addr % page -> EALIGN (:777-780) | same | same |
+| D40 | map_shared_memory | counter++, several mappings allowed (:798) | one mapped_at, so a SECOND mapping of the same object returned EBUSY | counter; N mappings |
+| D46 | map_shared_memory | one utils::shm per lv2_memory, so a write through one mapping is seen by the next map (:46-54, :787) | zero-fill on every map; data lost on unmap | object-owned buffer, copied in on map and out on unmap |
+| D47 | free_shared_memory | counter != 0 -> EBUSY (:726-729) | EBUSY while the single mapped_at was set | EBUSY while any mapping exists |
+| D54 | search_and_map | start_addr must BE the area base (:838) | only "inside the area" | exact base required |
+| D55 | search_and_map | mem.align < page -> EALIGN here, unlike map EINVAL (:850-855) | returned EINVAL | EALIGN (asymmetry preserved deliberately) |
+| D67 | change_address_access_right | returns CELL_OK, todo-logged (:637-644) | not registered at all -- ENOSYS | CELL_OK |
+| D68-70 | allocate_fixed_address | maps 0xB0000000+0x10000000, EEXIST if already done (:276-288) | not registered at all -- ENOSYS | CELL_OK / EEXIST |
+| D31 | free_shared_memory | unmapped object frees; a second free is ESRCH | same | same |
+| D43 | unmap_shared_memory | always writes *mem_id, then counter-- (:952-956) | wrote it only when non-zero | always |
+
+Two entries were unimplemented entirely -- sys_mmapper_allocate_fixed_address (326)
+and sys_mmapper_change_address_access_right (336) -- so both returned ENOSYS
+"the feature is not yet implemented" for operations the console performs.
+That is the failure mode AGENTS.md names: sys_fs_chmod, sys_fs_utime,
+sys_net_infoctl and sys_net_bnet_sysctl were made to refuse things RPCS3 accepts,
+libnet then initialised against a socket layer that was up and a stack nobody
+had built, and the title went from 7081 flips to zero.
+
+### A defect the audit exposed in the shared-memory model
+
+The old module kept one mapped_at per object and zero-filled guest memory on
+every map. That is wrong in two directions at once: a second mapping of the same
+object was refused with EBUSY (which no console does), and a write made through
+one mapping vanished the moment it was unmapped, so a ring buffer shared between
+two threads would read back zeroes. lv2_memory::shm in RPCS3 is one buffer with
+a reference count (:46-54, :782-798), which is what makes the second mapping see
+the first one data. The rewrite keeps that buffer on the object.
+
+## Measurement 3 -- the call table does not change, because it is the same three calls
+
+Same command as Measurement 1, against the fixed tree:
+
+    I   0.439209 mmapper: sys_mmapper_allocate_address r3=0x10000000 r4=0xf0 r5=0x10000000 r6=0xd004fa94 r7=0x0 -> 0x0
+    I   0.439232 mmapper: sys_mmapper_allocate_address r3=0x10000000 r4=0xf0 r5=0x10000000 r6=0xd004fa94 r7=0x0 -> 0x0
+    I   0.439249 mmapper: sys_mmapper_allocate_address r3=0x10000000 r4=0xf0 r5=0x10000000 r6=0xd004fa94 r7=0x0 -> 0x0
+
+Identical arguments, identical CELL_OK, identical three areas. The fixes above
+are inert for these arguments by construction (they add checks RDR call already
+satisfies, and arity changes nothing), and the boot is unchanged:
+
+    baseline  /tmp/W2.log   flip 661, The SPURS is aborted at 45.44 s
+    fixed     /tmp/W2b.log  flip 601, The SPURS is aborted at 23.02 s
+
+both ending in
+
+    E spu: thread 0x200 SecondaryCellSpursKernel0 DMA GET REFUSED cmd 0x40 (unmapped) ea 0x00000000 size 0x80 lsa 0x1a100 pc 0x06428
+    tty: [0] The SPURS is aborted.
+    ppu: process exit -2147418100 from thread 0x1000004 lr=0x3000c7e8 liblv2+0xc7e8 (no lifted code)
+
+The wall is still the +0x060 field, not mmapper. The flip counts differ because
+the two runs are cut by the 130 s timeout at different points of their own
+timelines; nothing after the abort executes in either.
+
+## The generated syscall table was stale, and the generator could not see MMAPPER_SYSCALL
+
+tools/lv2/gen_syscall_table.py marks a syscall implemented by finding
+LV2_SYSCALL(<num>, in runtime/src/lv2/. The logging wrapper this task added
+registers through MMAPPER_SYSCALL, which the pattern did not match, so
+regenerating would have flipped the eight mmapper entries back to unimplemented
+while they ran. The pattern now accepts both macros.
+
+Regenerating also found eleven entries that were already stale on main -- the
+handlers existed and the table said 0:
+
+    { 300, "sys_vm_memory_map", 0 },                         -> 1
+    { 302, "sys_vm_append_memory", 0 },                      -> 1
+    { 303, "sys_vm_return_memory", 0 },                      -> 1
+    { 306, "sys_vm_touch", 0 },                              -> 1
+    { 312, "sys_vm_get_statistics", 0 },                     -> 1
+    { 326, "sys_mmapper_allocate_fixed_address", 0 },        -> 1
+    { 336, "sys_mmapper_change_address_access_right", 0 },   -> 1
+    { 722, "sys_net_infoctl", 0 },                           -> 1
+    { 725, "sys_net_bnet_sysctl", 0 },                       -> 1
+    { 815, "sys_fs_utime", 0 },                              -> 1
+    { 834, "sys_fs_chmod", 0 },                              -> 1
+
+so the coverage number this tree reports was understated by eleven throughout.
+After regeneration: gen_syscall_table: 451 syscalls listed, 191 implemented (42.4%).
+
+## Proof -- tests
+
+    $ cd /root/Dev/wt-W2/build-31 && ./mmapper_conformance
+    mmapper: 76 checks, 0 failed
+
+    $ ctest --output-on-failure
+    100% tests passed, 0 tests failed out of 34
+
+mmapper_conformance is new and registered as ctest case 34. The other 33 are the
+suite as it stood on main; none of them changed result.

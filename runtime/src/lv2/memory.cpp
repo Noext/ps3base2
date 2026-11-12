@@ -232,6 +232,18 @@ LV2_SYSCALL(352, sys_memory_get_user_memory_size) {
     return CELL_OK;
 }
 
+/* Does this container id name a container that exists?
+ *
+ * sys_mmapper_allocate_shared_memory_from_container has to answer CELL_ESRCH for
+ * an unknown one (refs/rpcs3/rpcs3/Emu/Cell/lv2/sys_mmapper.cpp:402-407), and the
+ * container type lives in this file. RPCS3's default container is a real object;
+ * here the guest ids 0 and 0xFFFFFFFF are the default one, matching what
+ * sys_memory_container_get_size below already accepts. */
+bool container_exists(uint32_t cid) {
+    if (cid == 0xFFFFFFFF || cid == 0) return true;
+    return get<Container>(cid) != nullptr;
+}
+
 LV2_SYSCALL(324, sys_memory_container_create) {
     uint32_t out = u32arg(ctx, 0);
     auto c = std::make_shared<Container>();
