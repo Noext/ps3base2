@@ -405,3 +405,69 @@ inline cost of whichever diagnostic is enabled). The list fixes are
 correctness fixes for a path this title does not take, which is exactly why
 M2's zero notify-bit count matters: they cannot be the cause of the abort, and
 they cannot be its cure either.
+
+### M9 -- final clean run, no diagnostic switches
+
+    env DISPLAY=:920 PS3BASE_DISC_DIR=/root/Dev/rdr-port/vfs/dev_bdvd PS3BASE_LOG=info timeout 150 ./build-20/ps3base --no-launcher > /tmp/U1-final.log
+    $ grep -c 'rsx: flip' /tmp/U1-final.log
+    65
+    $ grep 'rsx: flip' /tmp/U1-final.log | tail -1
+    I 137.368459 [2350119] rsx: flip 3841 (buffer 0) worst 1111.9 ms, >50ms 2, >100ms 2
+    $ grep -c 'unmapped ea' /tmp/U1-final.log
+    2
+
+3841 flips, then the same abort. The list fixes neither help nor hurt this
+title, which is what M2 predicts.
+
+## Result
+
+**The DMA list hypothesis is refuted by measurement, not by argument.**
+
+1. The faulting transfer is MFC_GET cmd 0x40 -- a SINGLE transfer. The channel
+   history at the fault (M3) shows ch16 <- 0x1a100, ch18 <- 0x0,
+   ch19 <- 0x80, ch21 <- 0x40. It is not 0x44/0x45/0x46, so the list walker is
+   never entered on this path.
+2. The title never uses stall-and-notify: 0 notify bits in 122478 elements
+   over 32791 list commands (M2). A walker that re-read elements ahead of time
+   would still be a defect, but it cannot produce this fault, because the
+   stall path never runs.
+3. The zero external address is the guest's OWN table entry. A plain GET at
+   pc 0x076c4 copies guest 0x0177cc00..0x0177cc90 into LS 0x36200; word 0 of the
+   entry at guest 0x0177cc60 is 0x00000000, the copy is byte-faithful (M7),
+   rotqbyi r4,r53,4 loads that word into r4 (M4 correction), and the trap at
+   pc 0x06400 measures r4 = 0x00000000 entering the routine (M4).
+
+**The audit did find two real defects in the list path, and both are fixed:**
+
+* the queue slot was taken on every stall instead of once per list command, so
+  a list stalling N times exhausted RCHCNT(MFC_Cmd) and eventually stopped the
+  SPURS kernel issuing commands (RPCS3 3460-3478, 5463, 5529);
+* a list command above 0x4000 bytes (the 2048-element maximum) was walked
+  anyway instead of being refused (RPCS3 5041).
+
+Everything else in the audit table matched RPCS3 already: the 8-byte element
+layout, size = word0 & 0x7FFF, the notify bit as the high bit of word0, the
+8-byte list alignment, the 16-byte lsa masking, the lsa advance by each
+element's rounded size, no stall on the final element, resume by re-reading
+local storage at acknowledgement time, and the stall-status tag bits.
+
+**Deliverables**
+
+* runtime/include/spu/dma_list.h -- the walker and the queue/stall bookkeeping
+  as a state machine, every rule citing its RPCS3 line.
+* tests/spu_dma_list.cpp -- 64 checks, registered as the spu_dma_list CTest
+  target, including the required case: a list whose second element is only
+  filled AFTER the stall event, with the pre-stall read asserted to be
+  eal 0 / size 0 so the test cannot pass vacuously.
+* Diagnostic switches left on the branch, all default-off:
+  PS3BASE_SPU_LIST_TRACE (every list and element), PS3BASE_SPU_MFC_HIST (the
+  last 8 MFC parameter writes, dumped at a refused DMA), PS3BASE_SPU_PC_TRAP
+  (registers at one pc), PS3BASE_SPU_FAULT_LS (local storage dump at a refused
+  DMA), PS3BASE_SPU_LS_WATCH (transfers whose LS destination is watched).
+
+**Where the leaf goes next.** The evidence now says the guest reads a table
+entry it never filled at guest 0x0177cc60 (word 0 zero, neighbours valid, and
+word 4 in that table alternating 0/1 between reads). Chasing the list walker
+further cannot help. The remaining question is whether the guest was supposed
+to have filled that slot, which is a question about the SPURS workload
+dispatch the table describes, not about MFC list semantics.
