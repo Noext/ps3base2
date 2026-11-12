@@ -11,9 +11,13 @@
 #
 #   minecraft   a generated world (docs/PLAY.md), reachable at about 410 s
 #   gta-sa      in game at Grove Street (docs/recon/gta-sa.md)
-#   rdr         the furthest point known. A black screen still passes while the
-#               flip count rises and nothing crashes: "flips without draws" is a
-#               known missing-module symptom (docs/FIRMWARE.md), not a regression
+#   rdr         the Rockstar Social Club legal notice -- the title's own front
+#               end, drawn from its own assets -- with more than 2000 flips and
+#               no SPURS abort before 60 s. The screen is checked by reading the
+#               captured frame back (tesseract), because a flip count alone
+#               cannot tell the legal notice from a black screen; the text is
+#               the title's, so seeing it proves its renderer is drawing its
+#               own resource, not just presenting an empty buffer.
 #
 # Usage:
 #   tools/regress.sh                 # all three
@@ -30,6 +34,8 @@ DISPLAY_NUM=${DISPLAY_NUM:-:0}
 # Each game: binary, disc dir, and what a pass looks like.
 #   alive   must reach the budget (exit 124) with flips
 #   either  may also stop cleanly on a discovery (exit 3)
+#   screen  must reach a named screen (baseline 'screen='), keep flips up, and
+#           not abort before the recorded deadline (baseline 'abort_after=')
 game_binary() {
     case "$1" in
         minecraft) echo "$ROOT/build/ps3base" ;;
@@ -44,27 +50,58 @@ game_disc() {
         rdr)       echo "${RDR_DISC:-$HOME/Dev/rdr-port/vfs/dev_bdvd}" ;;
     esac
 }
-# The flip floor for a game, from docs/regress-baseline.md. Read rather than
-# hard-coded so raising a baseline is one edit in one place.
-baseline_flips() {
-    f="$ROOT/docs/regress-baseline.md"
-    [ -f "$f" ] || { echo 0; return; }
-    # "minecraft   flips >= 6780 ..." -> 6780
-    awk -v g="$1" '$1 == g && $2 == "flips" { print $4; exit }' "$f"
-}
-game_expect() {
+game_window() {
     case "$1" in
-        rdr) echo "either" ;;
-        *)   echo "alive" ;;
+        minecraft) echo "Minecraft" ;;
+        gta-sa)    echo "Grand Theft Auto" ;;
+        rdr)       echo "Red Dead Redemption" ;;
+        *)         echo "" ;;
     esac
+}
+# The numbers that decide a pass live in docs/regress-baseline.md, one line per
+# game: "rdr   flips=2000 screen=socialclub abort_after=60". Raising a bar is
+# one edit in one place and the history table beside it says why.
+baseline_file() { echo "$ROOT/docs/regress-baseline.md"; }
+baseline_get() {
+    f=$(baseline_file)
+    [ -f "$f" ] || return 0
+    awk -v g="$1" -v k="$2" '$1 == g { for (i = 2; i <= NF; i++) { split($i, a, "="); if (a[1] == k) { print a[2]; exit } } }' "$f"
+}
+baseline_flips() {
+    n=$(baseline_get "$1" flips)
+    echo "${n:-0}"
+}
+
+# Frame capture needs a display, a window finder, a grabber and an OCR reader.
+# Without them the 'screen' criterion cannot be judged, and the run is reported
+# as an environment problem rather than as a pass it did not earn.
+capture_ready() {
+    command -v xdotool >/dev/null 2>&1 &&
+    command -v import  >/dev/null 2>&1 &&
+    command -v tesseract >/dev/null 2>&1
+}
+window_of() {  # display, window name -> id (empty if not found yet)
+    w=$(DISPLAY="$1" xdotool search --name "$2" 2>/dev/null | tail -1)
+    [ -n "$w" ] || w=$(DISPLAY="$1" xdotool search --class ps3base 2>/dev/null | tail -1)
+    printf '%s' "$w"
+}
+frame_shows() {  # png, marker text
+    tesseract "$1" - 2>/dev/null | grep -qi -- "$2"
 }
 
 list_points() {
     cat <<'EOF'
 minecraft   a generated world      pass = alive at the budget, flips rising, 0 crashes
 gta-sa      in game, Grove Street  pass = alive at the budget, flips rising, 0 crashes
-rdr         furthest known         pass = alive or a clean discovery stop, flips rising, 0 crashes
+rdr         Social Club notice     pass = notice read on screen, flips >= 2000, no abort before 60 s
 EOF
+}
+
+game_expect() {
+    case "$1" in
+        rdr) echo "screen" ;;
+        *)   echo "alive" ;;
+    esac
 }
 
 run_one() {
@@ -83,11 +120,54 @@ run_one() {
     fi
 
     log="/tmp/regress-$name.log"
-    rm -f "$log"
-    # Bounded because this run is measured, not watched.
+    shots="/tmp/regress-$name-shots"
+    rm -f "$log"; rm -rf "$shots"; mkdir -p "$shots"
+    screen_hit=0
+    screen_at=""
+
+    marker=""
+    [ "$expect" = screen ] && marker=$(baseline_get "$name" screen)
+
+    if [ "$expect" = screen ] && ! capture_ready; then
+        printf '%-12s SKIP  screen check needs xdotool, import and tesseract\n' "$name"
+        return 2
+    fi
+    if [ "$expect" = screen ] && [ -z "$marker" ]; then
+        printf '%-12s SKIP  no screen= marker in docs/regress-baseline.md\n' "$name"
+        return 2
+    fi
+
+    # Bounded because this run is measured, not watched. The title is started in
+    # the background so the frame sampler can read the display while it runs;
+    # the sampler stops as soon as the marker is seen.
     PS3BASE_DISC_DIR="$disc" PS3BASE_LOG=info DISPLAY="$DISPLAY_NUM" \
     XDG_RUNTIME_DIR="/run/user/$(id -u)" \
-        timeout "$SECONDS_PER_GAME" "$bin" --no-launcher >"$log" 2>&1
+        timeout "$SECONDS_PER_GAME" "$bin" --no-launcher >"$log" 2>&1 &
+    pid=$!
+    started=$(date +%s)
+    if [ "$expect" = screen ]; then
+        wname=$(game_window "$name")
+        i=0
+        # Two seconds is the sampling interval: finer than the ~9 s the notice
+        # stays up, coarse enough that OCR does not load the machine the title
+        # is running on, which would move the flip count it is being judged by.
+        while [ "$i" -lt 30 ] && kill -0 "$pid" 2>/dev/null; do
+            sleep 2
+            i=$((i + 1))
+            [ "$i" -ge 2 ] || continue          # the window does not exist yet
+            w=$(window_of "$DISPLAY_NUM" "$wname")
+            [ -n "$w" ] || continue
+            png="$shots/f$(printf '%02d' "$i").png"
+            DISPLAY="$DISPLAY_NUM" import -window "$w" "$png" 2>/dev/null || continue
+            if frame_shows "$png" "$marker"; then
+                screen_hit=1
+                screen_at=$(($(date +%s) - started))
+                cp "$png" "$shots/hit.png" 2>/dev/null
+                break
+            fi
+        done
+    fi
+    wait "$pid"
     code=$?
 
     flips=$(grep -a 'rsx: flip' "$log" 2>/dev/null | tail -1 | grep -oE 'flip [0-9]+' | grep -oE '[0-9]+')
@@ -103,6 +183,19 @@ run_one() {
         134) verdict="ABORT" ;;
         *)   verdict="exit $code" ;;
     esac
+    # A SPURS stop exits through _sys_process_exit, so the code is the title's
+    # own and not a signal; name the stop instead of printing a bare number.
+    grep -aq 'The SPURS is aborted' "$log" 2>/dev/null && verdict="SPURS abort"
+
+    # When the SPURS side gives up, the title exits through _sys_process_exit
+    # with CELL_SPURS_TASK_ERROR_FATAL. That is a stop, not a crash, so it is
+    # judged by *when* it happens: the criterion is no abort before the deadline.
+    abort_t=$(awk '/SPURS is aborted|_sys_process_exit\(0x8001000c\)|PS3 SDK INTERNAL ASSERTION FAILURE/ { print $2; exit }' "$log" 2>/dev/null)
+    abort_t=${abort_t:-}
+    abort_after=$(baseline_get "$name" abort_after)
+    abort_after=${abort_after:-60}
+    abort_note="none"
+    [ -n "$abort_t" ] && abort_note=$(printf 'at %.0fs' "$abort_t")
 
     # Compare against the recorded baseline, not against zero. A game that is
     # meant to flip must keep flipping; a game that is blocked at zero passes on
@@ -115,13 +208,29 @@ run_one() {
     case "$expect" in
         alive)  [ "$code" = 124 ] || ok=0 ;;
         either) case "$code" in 124|3) ;; *) ok=0 ;; esac ;;
+        screen)
+            # The screen itself, then the deadline. An abort after the deadline
+            # is allowed and expected: it is the next milestone's work, not a
+            # regression, and the exit code is therefore not judged here.
+            [ "$screen_hit" = 1 ] || ok=0
+            if [ -n "$abort_t" ]; then
+                awk -v t="$abort_t" -v lim="$abort_after" 'BEGIN { exit !(t+0 < lim+0) }' && ok=0
+            fi
+            ;;
     esac
 
+    screen_note=""
+    if [ "$expect" = screen ]; then
+        if [ "$screen_hit" = 1 ]; then screen_note=" screen=$marker@${screen_at}s"
+        else screen_note=" screen=MISSING"; fi
+        screen_note="$screen_note abort=$abort_note"
+    fi
+
     if [ "$ok" = 1 ]; then
-        printf '%-12s PASS  %-15s flips=%-6s crashes=%s\n' "$name" "$verdict" "$flips" "$crashes"
+        printf '%-12s PASS  %-15s flips=%-6s crashes=%s%s\n' "$name" "$verdict" "$flips" "$crashes" "$screen_note"
         return 0
     fi
-    printf '%-12s FAIL  %-15s flips=%-6s crashes=%-3s log=%s\n' "$name" "$verdict" "$flips" "$crashes" "$log"
+    printf '%-12s FAIL  %-15s flips=%-6s crashes=%-3s%s log=%s\n' "$name" "$verdict" "$flips" "$crashes" "$screen_note" "$log"
     return 1
 }
 
