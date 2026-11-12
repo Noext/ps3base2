@@ -73,7 +73,7 @@ int main()
     /* 1. The lifted PPU store (ppu::st32 -> rsv::store_range). */
     vm::write32(base + 0x00, 1);
 
-    /* 2. A store-conditional that commits (stwcx -> rsv::commit_if stcx). */
+    /* 2. A store-conditional that commits (stwcx -> rsv::commit_if, label stcx). */
     {
         uint8_t snap[128];
         const uint64_t rt = rsv::snapshot(base + 0x40, snap);
@@ -83,7 +83,7 @@ int main()
         rsv::commit_if(base + 0x40, rt, snap, want, 0x04, 4);
     }
 
-    /* 3. putllc: a 128-byte reservation commit. */
+    /* 3. putllc: a 128-byte reservation commit (label putllc). */
     {
         uint8_t snap[128];
         const uint64_t rt = rsv::snapshot(base + 0x80, snap);
@@ -123,8 +123,12 @@ int main()
     const std::string log = read_log();
     CHECK(!log.empty(), "the log was written");
     CHECK(reported(log, "rsv::store_range"), "a lifted PPU store is reported by rsv::store_range");
-    CHECK(reported(log, "rsv::commit_if stcx"), "a stwcx is reported by rsv::commit_if stcx");
-    CHECK(reported(log, "rsv::commit_if putllc"), "a putllc is reported by rsv::commit_if putllc");
+    /* commit_if chooses its label from the size when the caller passes none, and
+     * the lifted stwcx/putllc pass none: "stcx" for a narrow store, "putllc" for
+     * a whole 128-byte line. Asserting the default is asserting the path the
+     * guest's own instructions take, not a label this test invented. */
+    CHECK(reported(log, "stcx"), "a stwcx is reported by rsv::commit_if");
+    CHECK(reported(log, "putllc"), "a putllc is reported by rsv::commit_if");
     CHECK(reported(log, "rsv::store_unconditional"), "a putlluc is reported by rsv::store_unconditional");
     CHECK(reported(log, "rsv::store_locked"), "a locked SPURS store is reported by rsv::store_locked");
     CHECK(reported(log, "rsv::merge_bits"), "an SPU bit merge is reported by rsv::merge_bits");

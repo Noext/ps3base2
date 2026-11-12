@@ -314,7 +314,9 @@ Two instruments on the same run, on the same word.
 
 Every guest write funnel calls cw::block_store before the store retires:
 
-    runtime/src/reservation.cpp:226  "rsv::commit_if putllc" / "rsv::commit_if stcx"
+    runtime/src/reservation.cpp:231  label from the caller or the size: "putllc" (128 bytes) / "stcx"
+                                     (main's L2 changed the default labels from the "rsv::commit_if *"
+                                     form this branch first saw; the assertion follows the code)
     runtime/src/reservation.cpp:248  "rsv::store_unconditional"   <- putlluc
     runtime/src/reservation.cpp:261  "rsv::store_locked"          <- SPURS locked store
     runtime/src/reservation.cpp:272  "rsv::store_range"           <- every lifted st*, vm::write*, MFC put
@@ -330,16 +332,23 @@ watch armed, then reads gowa.log back and requires every path's label:
     exit=0
 
     WRITE +0xaa0 (0x0177caa0) w4   prev 0x00000000 -> 0x00000001 by rsv::store_range
-    WRITE +0xae4 (0x0177cae4) w4   prev 0x00000000 -> 0x00000000 by rsv::commit_if stcx
-    WRITE +0xb20 (0x0177cb20) w128 prev 0x00000000 -> 0x00000000 by rsv::commit_if putllc
+    WRITE +0xae4 (0x0177cae4) w4   prev 0x00000000 -> 0xab000000 by stcx
+    WRITE +0xb20 (0x0177cb20) w128 prev 0x00000000 -> 0x00000000 by putllc
     WRITE +0xba0 (0x0177cba0) w128 prev 0x00000000 -> 0x11000000 by rsv::store_unconditional
     WRITE +0xc20 (0x0177cc20) w4   prev 0x00000000 -> 0x44332211 by rsv::store_locked
     WRITE +0xca0 (0x0177cca0) w4   prev 0xdeadbeef -> 0xdeadbeef by rsv::merge_bits
     WRITE +0xd00 (0x0177cd00) w128 prev 0x00000000 -> 0x00000000 by ppu::dcbz
 
-All seven labels are also in the shipped binary: rsv::store_range 1,
-rsv::commit_if putllc 1, rsv::commit_if stcx 1, rsv::store_unconditional 1,
-rsv::store_locked 1, rsv::merge_bits 1, ppu::dcbz 1.
+    and the labels counted back out of that log:
+      1 by ppu::dcbz, 1 by putllc, 1 by rsv::merge_bits, 1 by rsv::store_locked,
+      1 by rsv::store_range, 1 by rsv::store_unconditional, 1 by stcx
+
+All seven labels are also in the shipped binary, and the test asserts on the
+label the guest's own instruction actually produces rather than on a spelling:
+commit_if chooses "stcx" for a narrow store and "putllc" for a whole line when the
+caller passes no label, which is what the lifted stwcx/putllc do. That matters
+because main's L2 branch renamed these defaults underneath this test once; the
+assertion now follows the code's own choice.
 
 The uncovered path is a direct memcpy(vm::ptr(...)) in an HLE handler or the
 loader (15 such call sites). The loader's is the ELF load itself, before either
@@ -582,3 +591,44 @@ write times, it removed a fabricated read.)
 
     $ ctest --test-dir build-40 -j 4
     100% tests passed, 0 tests failed out of 35
+
+## Run H -- the shipped tree, after the rebase onto main with L2's reservation work
+
+    guest 997 trap events, 0 self reads, 0 CHAIN GAP
+    307 events on 0x0177caa8 (295 reads, 12 writes)
+    first 0->1 write: 6.627921 lr=0x00609a40
+    first read==1:    7.404717 lr=0x0091fdb0
+    reads==1 before the write: 0
+    value changes: 6.627921 0->1, 6.799527 1->0, 6.937752 0->1, 7.096667 1->0, 7.293341 0->1
+    watch totals: 801 guest events, 60 self reads dropped
+
+Six runs, six start offsets, the ordering identical every time:
+
+    run  first 0->1 write        first read of 1       gap       tree
+    B    3.348297                3.531398              0.183 s   pre self-read fix
+    D    2.409792                3.074423              0.665 s
+    E    2.393590                2.840156              0.447 s
+    F    4.346518                5.473972              1.127 s
+    G    4.872751                5.752610              0.880 s
+    H    6.627921                7.404717              0.777 s   rebased onto main with L2
+
+The 0->1 write carries guest lr 0x00609a40 in all six. No run ever shows a read
+of 1 before a write of 1.
+
+## Tests on the final tree
+
+After rebasing onto main (which added L2's line-granular reservation and its
+`reservation_line` test), all targets rebuilt from scratch and the whole suite run:
+
+    $ ctest --test-dir build-40 -j 4
+    100% tests passed, 0 tests failed out of 36
+
+That is 36 tests, not 35: main's L2 added `reservation_line`, and this branch adds
+`write_paths`, and both pass together.
+
+Note on the test's assertions: main's L2 renamed the commit_if default labels from
+"rsv::commit_if stcx"/"rsv::commit_if putllc" to "stcx"/"putllc" (chosen from the
+store size when the caller passes none, which is what the lifted stwcx/putllc do).
+`write_paths` asserts on the label the code actually emits, so it follows the
+implementation rather than pinning a spelling, and it passed unchanged after that
+rename was accounted for.
