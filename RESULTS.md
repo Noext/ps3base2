@@ -328,3 +328,28 @@ lifted code changed, tests pass, and only report lines and two tables differ).
     $ sh tools/check_no_dup_symbols.sh
     gowa_stubs: no known duplicate definitions
 
+
+### M12 -- the two green titles stay green, on trees with NO landmark/span tables
+
+Both were relinked against their own generated tree, which has no landmarks.txt
+and therefore no landmark/span tables at all. That is the case the weak
+declarations in runtime/include/runtime/image.h exist for, and it links and runs:
+
+    $ cmake --build build-T4 --target ps3base      # -DPS3BASE_GENERATED_DIR=out-mc/ppu
+    [103/103] Linking CXX executable ps3base
+    done=0
+
+    $ DISPLAY=:919 PS3BASE_DISC_DIR=/root/Dev/mc-port/disc ./build-T4/ps3base --no-launcher
+    I 121.339093 [1884843] rsx: flip 5401 (buffer 0) worst 54.9 ms, >50ms 1, >100ms 0
+    91 "rsx: flip" lines, 0 FATAL, 0 "unknown indirect target", no landmark lines
+
+    $ cmake --build build-T4 --target ps3base      # -DPS3BASE_GENERATED_DIR=out-gta/ppu
+    [86/86] Linking CXX executable ps3base
+    done=0
+
+    $ DISPLAY=:919 PS3BASE_DISC_DIR=/root/Dev/gta-port/disc ./build-T4/ps3base --no-launcher
+    I 123.101868 [1900673] rsx: flip 5761 (buffer 0) worst 25.1 ms, >50ms 0, >100ms 0
+    97 "rsx: flip" lines, 0 FATAL, 0 "unknown indirect target", no landmark lines
+
+Minecraft 5401 flips and GTA 5761 flips in 100 s, both alive to the timeout --
+the PASS shape the task text records (7141 and 6781 over the full window).
