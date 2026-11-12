@@ -934,3 +934,44 @@ CELL_SPURS_TASK_ERROR_FATAL (which is 0x80410914, cellSpurs.h:64).
 
 Lift diff against HEAD: table.cpp only, 76793 functions both sides. Minecraft
 5401 flips, GTA 5761 flips, both alive; tests/ppu_seed_forms.py 16 checks.
+
+## Milestone: the Red Dead Redemption title screen, captured
+
+RDR reaches its title screen at about 22 s: **RED DEAD REDEMPTION** with
+**Press START**, on black. The capture is committed as evidence because the
+screen is the milestone's whole criterion and a description of it is not proof:
+
+    docs/evidence/rdr-title-screen-raw.png      69897 bytes, 1280x720, frame b017
+    docs/evidence/rdr-title-screen-bright.png   the same frame at x20
+    docs/evidence/rdr-title-text.png            the title area at x30
+
+The logo is dark red on black -- 829862 pixels #000000 and 41204 pixels #370000 --
+which is why it reads as an almost empty frame in a colour count and was missed
+on the first pass. Captured by sampling the window every 0.4 s; the title is on
+screen for only about 1.2 s before the SPURS abort.
+
+Proof commands:
+
+    $ grep -a 'rsx: flip [0-9]' /tmp/burst.log | tail -1
+    I  22.059848 rsx: flip 601 (buffer 0) worst 57.3 ms, >50ms 1, >100ms 0
+
+    $ python3 -c "..."  # bounding box of the non-black region
+    the two-line title block near the top centre, Press START below it
+
+An A/B against a binary built from 22d2a0c, before every fix below, gives the
+same 601 flips and the same 23 s abort, so the fixes do not move this number:
+
+    reference (22d2a0c) : flip 601, abort 23.0 s
+    current   (adedf57) : flip 601, abort 23.2 s
+
+What is still wrong, stated so it is not mistaken for done: the SPURS abort at
+23 s is a refused DMA GET whose effective address is 0, and the title never gets
+past Press START. The chain established since:
+
+    count = 1 because flag 0x40 of the descriptor word 0x10ca is set
+    -> bne cr7 at 0x920054 skips the store to 0x0177cda8
+    -> +0x60 of 0x0177cc00 stays 0
+    -> the SPU loads that 0 and issues wrch ch18 with it
+
+That is a configuration condition, not a race: an earlier reading of the guard
+word at 0x0177caa8 as a contended counter was refuted by measurement.
