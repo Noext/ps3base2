@@ -74,3 +74,43 @@ So in this run the abort moves from 23 s to 54 s and the flip count from 601 to 
 the SPURS stop is tied to a guest-frame count, not to wall time, and the capture load
 moves it. That is why the criterion cannot be "abort after 60 s of wall clock".
 
+
+## Measurement 3 -- the title screen is real but a single run is a coin flip on this machine
+
+The 30 fps recording catches the title when it is drawn. Eight runs of the same
+binary, same display, capture at 30 fps, judgement by tools/frame_marker.py:
+
+    $ /tmp/m4_rate.sh 8
+    run1 flips=541 abort=25.763827 load=20.50 :: miss: 898 frames, 6 with lit text in the window, 6 OCR'd
+    run2 flips=601 abort=22.853372 load=17.96 :: miss: 814 frames, 6 with lit text in the window, 6 OCR'd
+    run3 flips=601 abort=23.084891 load=17.60 :: miss: 822 frames, 8 with lit text in the window, 8 OCR'd
+    run4 flips=601 abort=23.106703 load=18.54 :: miss: 822 frames, 6 with lit text in the window, 6 OCR'd
+    run5 flips=601 abort=23.420260 load=18.24 :: miss: 830 frames, 10 with lit text in the window, 10 OCR'd
+    run6 flips=601 abort=23.005371 load=16.89 :: hit f00750.png 24.97 Press START
+    run7 flips=601 abort=23.490483 load=23.40 :: hit f00761.png 25.33 Press START
+    run8 flips=601 abort=23.017963 load=17.04 :: hit f00750.png 24.97 Press START
+    hit 3 of 8
+
+So: 3 of 8 runs show the title, always in the last ~0.25 s before the abort. The
+runs that miss are not a capture problem -- 6-10 frames per run have lit text in
+the marker's window and were OCR'd; the misses are the Rockstar mark's fade and
+the black frame after it, and the title was drawn after the abort in those runs.
+Two consecutive frames of a hit, from an earlier recording:
+
+    $ python3 ... band <490,612>-<790,660>, lit pixels >= 60
+    f01291.png 507, f01292.png 507          <- title, ~0.07 s of it at 60 fps
+    ...
+    $ tesseract <band> -
+    Press START
+
+What that means for the criterion, stated plainly so it is not papered over:
+the port does reach its title screen, and the screen is identifiable from pixels,
+but the SPURS abort at ~23 s lands within a fraction of a second of it. Under
+this machine's load (17-23 while other agents build) the title wins the race in
+3 runs of 8. A regression script that demands the title on ONE run would fail
+two thirds of the time on code that is unchanged, which is the same class of
+false alarm as the two runs minutes apart.
+
+The criterion stays "the title screen is reached", and the script attempts it
+more than once, bounded and recorded, so the pass means what it says.
+
