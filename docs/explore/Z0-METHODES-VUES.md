@@ -60,3 +60,37 @@ binaire comme oracle, pas un build wasm.
 | Z3 | n'a rien produit (squelette) |
 | Z4 | **12 PASS / 0 FAIL sur HEAD**, test C repare |
 | Z5 | 38 lignes, en cours |
+---
+
+# Hypothese de l'ordre des octets : REFUTEE
+
+J'ai suppose que le natif swappait (`LineReader::read` finit par `__builtin_bswap32`) et que le wasm
+non (`vm::read32`), donc que le decodeur lisait des en-tetes inverses.
+
+**C'est faux.** `runtime/include/runtime/memory.h:52` en entier :
+
+    inline uint32_t read32(uint32_t addr) { uint32_t v; std::memcpy(&v, g_base + addr, 4);
+        return __builtin_bswap32(v); }
+
+Le wasm **fait** le bswap. Les deux lisent donc dans le meme ordre. La preuve par la valeur :
+
+    gcmfifo: probe: ring+0x1000=00041d6c 00000ff0 00041d70 00010000
+
+`00041d6c` est un en-tete NV4097 valide (type 0, methode 0x1D6C). Si le swap manquait, on lirait
+`6c1d0400`.
+
+Mon erreur : j'ai lu une ligne tronquee (`...return __buil`) et conclu avant de lire la ligne
+entiere. C'est la meme faute que `grep -c flip` : conclure sur une vue partielle.
+
+## Ce que cela elimine
+
+| hypothese | statut |
+|---|---|
+| l'ordre des octets differe | **refute** |
+| le decodeur lit des en-tetes inverses | **refute** |
+
+## Ce qui reste pour Z1
+
+La difference n'est pas dans la lecture d'un mot, elle est dans **ce qui est lu** : quel ring, quel
+get, quel put, et jusqu'ou. Le dump comparatif des 500 premieres commandes des deux cotes est la
+seule mesure qui tranchera.
