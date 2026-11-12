@@ -2070,3 +2070,105 @@ A/B against the `origin/main` binary on this machine in the same minute:
 After `git rebase origin/main` (main `4a5a132`): `ctest -j 4` 40/40 (the 40th
 is `cellAudio`), `tools/check_no_dup_symbols.sh` clean. The diff adds no
 deletion: 6 files, +2112/-85, and `RESULTS.md` is append-only here.
+
+## M1 -- the 0x920054 branch, down to the leaf: the skip is correct
+
+**Answer, one line: the `0x40` is not written by anyone at run time. It is bit 6 of
+the literal `li r6, 0x10ca` at `0x00609a28`, the ONLY occurrence of that
+immediate in the executable segment; `cellMSSystemGetNeededMemorySize` turns it
+into `count = 1` with pure arithmetic on the descriptor, so the console computes
+the same 1, takes the same `bne` at `0x920054`, and skips the same store. The
+skip is CORRECT; the defect is downstream, in the value the SPU consumes.**
+
+Every call site, by direct-branch scan of the image
+(`tools/ms_descriptor_sites.py bin/rdr/EBOOT.elf`):
+
+    cellMSSystemGetNeededMemorySize f_0091f364 callers:
+      bl at 0x00609a3c -> return address 0x00609a40
+        stw r31, 0xb0(r1) at 0x00609a24
+        stw r4, 0xb4(r1) at 0x00609a30
+        stw r5, 0xb8(r1) at 0x00609a34
+        stw r6, 0xbc(r1) at 0x00609a38
+      bl at 0x0091fd94 -> return address 0x0091fd98
+    cellMSSystemInit f_0091fd18 callers:
+      bl at 0x009211e8 -> return address 0x009211ec
+
+    every instruction forming the immediate 0x10ca in the executable segment:
+      0x00609a28 op14 0x38c010ca
+
+So: `f_006099e8` (`bl` at 0x609a3c) builds `{numStreams, 0x12, 5, 0x10ca}` on its
+own stack frame; `f_0091fd18` (`bl` at 0x91fd94) passes the identical object
+through from its own `r4`; `f_00921138` (`bl` at 0x9211e8) is the only caller of
+the init function and supplies the port object at `0x0177cd98` as r3. A scan of
+every 4-aligned word in every image for those four code addresses found **no
+function-pointer table entry**, so there is no indirect third caller.
+
+Measured live, `GOWA_HOOK='91f364:d3=16'`:
+
+    I  15.115069 hook: -> f_0091f364 #0 lr 00609a40 [PPU main_thread] r3=d004ed30 r4=12 r5=5 r6=10ca ...
+    I  15.115699 hook:    r3@d004ed30: 00000060 00000012 00000005 000010ca
+    I  15.115870 hook: <- f_0091f364 #0 r3=1f0aaa
+
+**Where count comes from -- three bit tests, no load, no lock, no import:**
+
+    0x91f3a4 lwz    r5, 0xc(r3)            ; word3 = 0x10ca
+    0x91f3a8 li     r10, 0                 ; count = 0
+    0x91f3b0 rlwinm r0, r5, 0, 0x1b, 0x1b  ; bit 4
+    0x91f3cc li r10, 1 ; li r0, 0x80       ; count=1, size=0x80   (taken: bit4 set? no)
+    0x91f3dc rlwinm r0, r5, 0, 0x1a, 0x1a  ; bit 5
+    0x91f3fc rlwinm r0, r5, 0, 0x19, 0x19  ; bit 6
+
+0x10ca = 0b1_0000_1100_1010: bit4=0, bit5=0, bit6=1 -> one increment.
+
+Measured at the global the branch reads, from both call sites
+(`PS3BASE_BLOCKWATCH=177ca90-177cab0`), count = `0x0177caa8`, size = `0x0177caa4`:
+
+    I   9.916742 blockwatch: WRITE +0x018 (0x0177caa8) prev 0x00000000 -> 0x00000000 | guest lr 0x00609a40
+    I  10.013322 blockwatch: WRITE +0x014 (0x0177caa4) prev 0x00000000 -> 0x00000400 | guest lr 0x00609a40
+    I  10.100120 blockwatch: WRITE +0x018 (0x0177caa8) prev 0x00000000 -> 0x00000001 | guest lr 0x00609a40
+    I  10.190165 blockwatch: WRITE +0x014 (0x0177caa4) prev 0x00000400 -> 0x00000200 | guest lr 0x00609a40
+
+Final state after the call: **count = 1, size = 0x200**. Being a pure function of
+word3, the console computes the same 1 from the same literal.
+
+**What the branch skips -- and it is not +0x60:**
+
+    0x920038 lwz  r28, -0x7d78(r2)   ; &0x0177cda4  = block + 0x1a4
+    0x920050 stw  r9, 0(r28)         ; [0x1a4] = r9          <- always taken
+    0x920054 bne  cr7, 0x9206f4      ; count != 0 -> taken
+    0x920058 lwz  r18, -0x7d74(r2)   ; &0x0177cda8  = block + 0x1a8
+    0x920064 stw  r9, 0(r18)         ; [0x1a8] = r9          <- SKIPPED
+
+The skipped slot is `block + 0x1a8` = `0x0177cda8`, not block + 0x60. `0x1a8` is
+a *pointer*; the SPU reads `[ptr + 0x60]`, and with the store skipped ptr is 0,
+which is the GET at guest 0. `[0x1a4]` and `[0x1a8]` are a two-entry ring
+(`base`, `base + 0x400`); in a one-stream configuration only the first 0x400
+buffer exists, so the second stays 0 -- on the console as well. `block + 0x60`
+IS written, contrary to the earlier note:
+
+    I  20.579604 blockwatch: WRITE +0x060 (0x0177cc60) w4 prev 0x00000000 -> 0x00000000 | guest lr 0x0177cde0
+
+**Nothing ever writes 0x0177cda8 -- measured, 70 s to the abort.**
+`PS3BASE_BLOCKWATCH=177cc00-177d000`; the distinct offsets written in that line
+include `+0x1a4` and `+0x1ac` but **not `+0x1a8`**:
+
+    $ grep -a 'WRITE +0x1a8' /tmp/M1run6.log
+    (nothing)
+
+    E  28.422809 spu: thread 0x200 'SecondaryCellSpursKernel0' DMA GET REFUSED cmd 0x40 (unmapped) ea 0x00000000 size 0x80 lsa 0x1a100 pc 0x06428
+    I  28.438501 tty: [0] The SPURS is aborted.
+    I  28.438744 process: _sys_process_exit(0x8001000c)
+
+Control run, no hooks, no watch, same machine, same minute:
+
+    E  34.969310 spu: thread 0x200 'SecondaryCellSpursKernel0' DMA GET REFUSED cmd 0x40 (unmapped) ea 0x00000000 size 0x80 lsa 0x1a100 pc 0x06428
+    I  34.977208 tty: [0] The SPURS is aborted.
+
+**The next question is on the SPU side, not here:** which structure does the SPU
+read, and should that field be the `0x1a4` buffer instead of the `0x1a8` one.
+
+Post-rebase proof (`origin/main` 4d310dd, this branch 0648470): `ctest` in a
+fresh configure of this worktree **40/40 passed**. The diff adds
+`tools/ms_descriptor_sites.py` and `RESULTS-M1.md` and modifies no source file;
+`RESULTS.md` is append-only here (this section is appended, nothing removed).
+
