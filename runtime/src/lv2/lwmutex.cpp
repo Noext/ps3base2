@@ -142,6 +142,15 @@ void probe_fail(int op, uint32_t id, int64_t rc, const ppu::Context& ctx) {
         char tag[32];
         std::snprintf(tag, sizeof tag, "  caller r%d", 29 + i);
         probe_dump_struct(tag, ea, "");
+        /* The task asks for "the +0x60 field". The lwmutex itself is 24 bytes, so
+         * +0x60 is not one of its fields; it is a word in whatever the caller
+         * keeps around it. Report it raw rather than guess what it is for: a
+         * value with no interpretation is evidence, an interpretation with no
+         * value is not. */
+        if (i == 1 && vm::range_mapped(ea + 0x60, 4)) {
+            LOG_INFO("lwprobe", "  caller+0x60 ea=0x%08x value=0x%08x",
+                     ea + 0x60, vm::read32(ea + 0x60));
+        }
     }
 }
 
@@ -222,8 +231,10 @@ void syscall_error_report(const char* where) {
     LOG_WARN("syserr", "at %s: %llu ESRCH/EPERM answers across %zu (syscall, code) pairs",
              where, static_cast<unsigned long long>(total), err_table().size());
     for (auto& e : err_table()) {
-        const char* spec = spec_name(e.num);
-        LOG_WARN("syserr", "  %u (%s) -> 0x%08x x%llu", e.num, spec ? spec : "?",
+        /* The number only. spec_name() lives with the dispatch table in
+         * ppu_runtime.cpp, which a unit test deliberately does not link; naming
+         * the call is the dispatcher's job, and it logs ENOSYS itself. */
+        LOG_WARN("syserr", "  syscall %u -> 0x%08x x%llu", e.num,
                  static_cast<uint32_t>(e.code), static_cast<unsigned long long>(e.n));
     }
 }
@@ -310,6 +321,20 @@ LV2_SYSCALL(95, _sys_lwmutex_create) {
         probe_dump_struct("create-out", out, extra);
     }
     return CELL_OK;
+}
+
+/* A test drives the handler through this: the handler itself is static to this
+ * file (that is what LV2_SYSCALL makes it), and a test that copies the body
+ * proves nothing about the body. One forwarder keeps the subject the real code. */
+int64_t lwmutex_syscall_create(ppu::Context& ctx, uint8_t* base) {
+    return _sys_lwmutex_create(ctx, base);
+}
+
+/* The name a create stored, so the test can see the has_name rule without
+ * reaching into a LwMutex it cannot name from here. */
+std::string lwmutex_name_of(uint32_t id) {
+    auto m = get<LwMutex>(id);
+    return m ? m->name : std::string();
 }
 
 LV2_SYSCALL(96, _sys_lwmutex_destroy) {

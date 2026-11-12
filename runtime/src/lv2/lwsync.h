@@ -3,6 +3,7 @@
 #include "object.h"
 
 #include <list>
+#include <string>
 
 namespace lv2 {
 
@@ -29,6 +30,13 @@ struct LwMutex : Object {
  * status dump and at exit. Always counted; only formatted when the probe or a
  * report asks. Defined in lwmutex.cpp. */
 void lwmutex_probe_report(const char* where);
+
+/* TEST ENTRY. The syscall handlers are static to lwmutex.cpp; a test that copies
+ * a handler's body proves nothing about the body. These two call straight into
+ * the real handler and the real object, so tests/lwmutex_create.cpp exercises the
+ * shipped code. */
+int64_t lwmutex_syscall_create(ppu::Context& ctx, uint8_t* base);
+std::string lwmutex_name_of(uint32_t id);
 
 
 }

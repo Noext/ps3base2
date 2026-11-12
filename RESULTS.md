@@ -1439,3 +1439,75 @@ CELL_ESRCH is the console's answer too. Suppressing it would be the "fake
 success" AGENTS.md forbids: the guest would be told a mutex it never created is
 held. The fix belongs in whatever creates the mutex EARLIER, not in this handler.
 
+## Measurement 3 -- the fix, the test, and the red/green proof
+
+### What was wrong (both found by reading RPCS3, not by guessing)
+
+`refs/rpcs3/rpcs3/Emu/Cell/lv2/sys_lwmutex.cpp`:
+
+    :31  if (protocol != SYS_SYNC_FIFO && protocol != SYS_SYNC_RETRY && protocol != SYS_SYNC_PRIORITY)
+    :33      return CELL_EINVAL;
+    :41  if (!(has_name < 0)) name = 0;          // keep the name only if has_name < 0
+
+Ours had neither: it minted an object for ANY protocol and returned CELL_OK, and
+it kept the name for any non-zero has_name. RDR passes protocol 0x1/0x2 and
+has_name 0x80000001 (negative), so on THIS title both bugs were invisible -- the
+name was kept by accident and no bad protocol was ever passed. They are still
+deviations from the console, and both are now fixed.
+
+### The test
+
+`tests/lwmutex_create.cpp`, registered as ctest `lwmutex_create`. It calls the
+REAL handler through `lv2::lwmutex_syscall_create` -- a one-line forwarder, not a
+copy -- because a test that re-implements the handler proves nothing about it.
+
+    $ ./build-50/lwmutex_create
+    protocol 0x1 -> rc 0x0 id 0x95000000
+    protocol 0x2 -> rc 0x0 id 0x95000100
+    protocol 0x4 -> rc 0x0 id 0x95000200
+    _sys_lwmutex_create: unknown protocol 0x0, returning CELL_EINVAL
+    protocol 0x0 -> rc 0xffffffff80010002 out 0x00000000
+    ... 0x3, 0x5, 0xff likewise ...
+    has_name<0 name='name1234' has_name>0 name='' has_name=0 name=''
+    control +0x00: 0xaaaaaaaa -> 0xaaaaaaaa
+    ... all six words unchanged ...
+    28 checks, 0 failures
+
+### Red first, which is the only proof the test bites
+
+With the fix reverted (validation removed, `if (has_name)` restored):
+
+    28 checks, 9 failures
+    [FAIL] an unknown lwmutex protocol must return CELL_EINVAL
+    [FAIL] a refused create must not write an id to *out
+    [FAIL] has_name>0 must DROP the name (RPCS3 sys_lwmutex.cpp:41)
+    ... 0x0, 0x3, 0x5, 0xff each produce two of those ...
+
+Restored, it is 0 failures again. The test fails on exactly the two deviations and
+on nothing else.
+
+### The regression check on the real title
+
+Same command as measurement 2, rebuilt binary:
+
+    W  37.549762 syserr: at process exit: 881 ESRCH/EPERM answers across 1 (syscall, code) pairs
+    W  37.549776 syserr:   syscall 97 -> 0x80010005 x881
+    W  37.549747 lwprobe: counts at process exit: lock-ESRCH=881 unlock-ESRCH=0
+       trylock-ESRCH=0 unlock2-ESRCH=0 destroy-ESRCH=0 unlock-EPERM=0
+
+781 flips, same `_sys_process_exit(0x8001000c)` at 37.5 s. No protocol was
+rejected on the title (0 `unknown protocol` lines), which is the expected result:
+the fix cannot change RDR's behaviour, and it did not.
+
+### The +0x60 field
+
+The task asks for "the +0x60 field value". The lwmutex structure is 24 bytes
+(+0 lock_var, +8 attribute, +12 recursive_count, +16 sleep_queue), so +0x60 is
+NOT a field of it. Read at the caller's own copy of the structure pointer
+(r30 = 0x0165afc8, so +0x60 = 0x0165b028), raw:
+
+    I   0.697908 lwprobe:   caller+0x60 ea=0x0165b028 value=0x00000000
+
+**0x00000000.** Stated without interpretation because none is earned: the address
+lies in the same BSS zero-fill block and nothing in this investigation wrote it.
+
