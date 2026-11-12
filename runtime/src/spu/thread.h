@@ -132,6 +132,8 @@ struct SpuThread : Host {
 
     uint32_t mfc_lsa = 0, mfc_eal = 0, mfc_size = 0, mfc_tag = 0;
     struct MfcHist { uint32_t ch = 0, value = 0, pc = 0; } mfc_hist[8]{};
+    struct TrapRec { uint32_t pc = 0, ch = 0, value = 0, r3 = 0, r4 = 0, r0 = 0; } trap_ring[16]{};
+    uint32_t trap_ring_i = 0;
     uint32_t mfc_hist_i = 0;
     void mfc_hist_note(uint32_t ch, uint32_t value, uint32_t pc);
     /* The tag-status state machine lives in spu/channel_state.h so the unit test

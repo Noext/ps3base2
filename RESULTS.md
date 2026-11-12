@@ -192,3 +192,59 @@ The bump pointer at the fault, from the same dump:
 unlike the 0x23800 in the task text. Local storage in this run has only 28
 non-zero 128-byte lines and 0x1a100, the fault's LSA, is not one of them: the
 destination was zero and stayed zero.
+
+### M4 -- the caller passed the null EAL: pc 0x06400 enters with r4 = 0
+
+PS3BASE_SPU_PC_TRAP=<pc> records the argument registers at one instruction, in
+a ring dumped at a refused DMA. Trapping the faulting routine's entry
+(pc 0x06400):
+
+    env PS3BASE_LOG=info PS3BASE_SPU_PC_TRAP=0x6400 PS3BASE_SPU_MFC_HIST=1 timeout 150 ./build-20/ps3base --no-launcher > /tmp/U1-trap3.log
+    $ grep -c 'rsx: flip' /tmp/U1-trap3.log
+    57
+
+Raw log, /tmp/U1-trap3.log:3146-3152:
+
+    E 126.027583 [2224541] spu: thread 0x200 'SecondaryCellSpursKernel0' DMA GET cmd 0x40 unmapped ea 0x00000000 size 0x80 lsa 0x1a100 pc 0x06428
+    E 126.027645 [2224541] spu:   pc 0x06400 ch16 <- 0x0001a100 r3 0x1a100 r4 0x00000000 r0 0x06b34
+    E 126.027653 [2224541] spu:   -1: ch19 <- 0x00000080 at pc 0x06410
+    E 126.027660 [2224541] spu:   -2: ch18 <- 0x00000000 at pc 0x06408
+    E 126.027666 [2224541] spu:   -3: ch16 <- 0x0001a100 at pc 0x06400
+    E 126.027672 [2224541] spu:   -4: ch19 <- 0x00000930 at pc 0x068ec
+    E 126.027679 [2224541] spu:   -5: ch18 <- 0x70c90b70 at pc 0x068e8
+    E 126.027685 [2224541] spu:   -6: ch16 <- 0x0003b100 at pc 0x068bc
+
+r3 = 0x1a100 (the LSA argument) and r4 = 0x00000000 (the EAL argument), with
+r0 = 0x6b34, the return address. The null external address is not produced
+inside the routine: it is PASSED IN.
+
+The call site, from the disassembly:
+
+    06b20: 42d08003  ila r3,0x1a100       # LSA
+    06b24: 33dee7b5  lqr r53,0x36260      # a 16-byte table entry
+    06b28: 408000e8  il r104,0x1
+    06b2c: 3f811a84  rotqbyi r4,r53,4     # r4 = the entry's 3rd word
+    06b30: 337f1700  brsl r0,0x063e8      # call the fetch-and-bump routine
+    06b34: 327fba00  br r0,0x06904
+
+rotqbyi r4,r53,4 moves word 2 of the entry into r4, so the EAL is
+ls32[0x36268]. In the dump taken at the fault:
+
+    0x36260: 0x00000000 0x00000000 0x70dc9000 0x70dd8000
+    0x36270: 0x00000005 0x00000000 0x0177cbc0 0x00000000
+
+Word 2 is 0x70dc9000, NOT zero -- and no store to 0x362xx appears anywhere in
+the 26 KB of disassembly:
+
+    $ grep -nE 'stqr .*0x362|stqd .*0x362|stqa .*0x362' /tmp/U1-dis.txt
+    (no output)
+
+The guest reads a table entry that this runtime's disassembled code never
+writes, and passes whatever is there as its EAL. The register carried 0 while
+the same address in the dump holds 0x70dc9000 at a different moment, so the
+entry is filled by a transfer the local-storage dump cannot see (an SPU-to-SPU
+or PPU-to-SPU write). That is where the null EAL comes from -- not the list
+walker.
+
+No element anywhere in the run carries a non-zero size with an eal below
+0x10000, so the faulting transfer is not a list element either.

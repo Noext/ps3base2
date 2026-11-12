@@ -223,6 +223,10 @@ int main() {
         /* 2047 transfers of 8 bytes, each advancing 16, plus the final eal's low
          * nibble (0x10000 + 2047*8 = 0x13FF8, nibble 8). */
         check(w.xfers.back().lsa == 2047 * 16 + 8, "the last element's lsa is 2047 transfers of 16 bytes in, plus the eal nibble");
+
+        /* The 0x4000 limit is the command's, not the walker's: RPCS3 rejects a
+         * list command above 0x4000 bytes outright (SPUThread.cpp:5041). */
+        check(0x4000 / 8 == 2048, "0x4000 bytes is the 2048-element list maximum (5041)");
     }
 
     /* ======================================================================

@@ -483,6 +483,31 @@ uint32_t SpuThread::read_channel(uint32_t ch) {
 }
 
 void SpuThread::write_channel(uint32_t ch, uint32_t value) {
+    /* PS3BASE_SPU_PC_TRAP=<pc>: log the registers at one instruction. The
+     * question "where did this zero come from" is answered by the argument
+     * registers, which exist only at the instruction that builds them. */
+    {
+        static const uint32_t trap_pc = []() -> uint32_t {
+            const char* e = std::getenv("PS3BASE_SPU_PC_TRAP");
+            return e ? static_cast<uint32_t>(std::strtoul(e, nullptr, 16)) : 0xFFFFFFFFu;
+        }();
+        if (ctx.pc == trap_pc) {
+            /* A ring, not a prefix: the entry that matters is the last one
+             * before the fault, which a first-N print never reaches. */
+            TrapRec& t = trap_ring[trap_ring_i % 16];
+            t.pc = ctx.pc; t.ch = ch; t.value = value;
+            t.r3 = ctx.gpr[3].u32[3]; t.r4 = ctx.gpr[4].u32[3]; t.r0 = ctx.gpr[0].u32[3];
+            trap_ring_i++;
+            static std::atomic<int> n{0};
+            if (n.fetch_add(1) < 12) {
+                LOG_ERROR("spu", "thread 0x%x TRAP pc 0x%05x ch%u <- 0x%08x", id, ctx.pc, ch, value);
+                for (int r = 0; r < 32; r++) {
+                    LOG_ERROR("spu", "    r%-2d = 0x%08x%08x", r,
+                              static_cast<unsigned>(ctx.gpr[r].u32[0]), static_cast<unsigned>(ctx.gpr[r].u32[3]));
+                }
+            }
+        }
+    }
     switch (ch) {
     case 14: ctx.srr0 = value & 0x3FFFC; return;
     case 16: mfc_lsa = value; mfc_hist_note(ch, value, ctx.pc); return;
@@ -1074,6 +1099,11 @@ void SpuThread::dma(uint32_t cmd, uint32_t lsa, uint32_t ea, uint32_t size) {
                     }
                 }
             }
+            for (uint32_t k = 0; k < 16 && k < trap_ring_i; k++) {
+                const TrapRec& t = trap_ring[(trap_ring_i - 1 - k) % 16];
+                LOG_ERROR("spu", "  pc 0x%05x ch%u <- 0x%08x r3 0x%05x r4 0x%08x r0 0x%05x",
+                          t.pc, t.ch, t.value, t.r3, t.r4, t.r0);
+            }
             for (uint32_t k = 0; k < 8 && k < mfc_hist_i; k++) {
                 const auto& h = mfc_hist[(mfc_hist_i - 1 - k) % 8];
                 LOG_ERROR("spu", "  -%u: ch%u <- 0x%08x at pc 0x%05x", k + 1, h.ch, h.value, h.pc);
@@ -1184,6 +1214,17 @@ bool SpuThread::run_list(uint32_t tag, uint32_t cmd, uint32_t lsa, uint32_t list
     /* The walker is spu/dma_list.h, which the unit test drives directly, so a
      * defect cannot be fixed here and left in the test's copy or vice versa. */
     const uint32_t base_cmd = cmd & ~0xFu;
+    /* RPCS3 refuses a list command whose size exceeds 0x4000 (SPUThread.cpp:5041,
+     * "if (ch_mfc_cmd.size <= 0x4000)" -- anything larger falls through to its
+     * unknown-command throw). 0x4000 bytes is the 2048-element maximum. Walking
+     * past it reads local storage the guest never meant as a list. */
+    if (size > 0x4000) {
+        static std::atomic<int> big_list{0};
+        if (big_list.fetch_add(1) < 8)
+            LOG_ERROR("spu", "thread 0x%x list cmd 0x%02x size 0x%x exceeds the 2048-element maximum; refused (RPCS3:5041)",
+                      id, cmd, size);
+        return true;
+    }
     spu::ListCursor c = spu::list_start(lsa, list, size);
 
     static const bool ltrace = std::getenv("PS3BASE_SPU_LIST_TRACE") != nullptr;
