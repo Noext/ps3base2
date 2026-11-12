@@ -110,3 +110,28 @@ directory, exclude it in `CMakeLists.txt` -- do not satisfy the symbol twice.
 this and exits non-zero when one reappears. Run it after touching
 `gowa_stubs.cpp`.
 
+
+## The merge queue: rebase, ff-only, one at a time
+
+Three times in one session an agent merged work that silently deleted another
+agent's files. Each had branched before the other landed, so its diff carried a
+removal it never intended: `tests/spu_dma_list.cpp`, `tests/spu_channel_conformance.cpp`,
+and the DMA-list header, all deleted by an agent that had simply never seen them.
+
+The rule is therefore mechanical, not judgement:
+
+1. **Rebase before every commit that lands on main, and again just before
+   declaring done.** `git fetch && git rebase origin/main`. An agent's branch is
+   never allowed to be behind main at the moment it reports.
+2. **The agent's tests and everyone else's must pass after the rebase.** A green
+   tree before the rebase is not evidence; the combination is what lands.
+3. **Merges are ff-only and serialised.** `git merge --ff-only`, one branch at a
+   time, under a lock. No merge commits, no octopus merges, no resolving a
+   conflict by hand at merge time -- if `--ff-only` refuses, the branch is stale
+   and goes back to be rebased.
+4. **The verifier rejects two shapes outright:** a branch whose diff deletes a
+   file it did not create, and a branch whose diff modifies no source file. Both
+   are evidence the branch was built against a tree that no longer exists.
+
+This is written down because the alternative -- reading each diff by eye at merge
+time -- failed three times while the diff was being read.
