@@ -81,3 +81,81 @@ b[2] = 0x08 is START (PS3 pad layout, runtime/src/host_input.cpp:427) and it is 
 in the bytes cellPadGetData hands the title. So the input path works end to end; the
 presses in that run simply ended at game t=21.35 s, ~0.8 s before the title is drawn.
 
+
+## Measurement 3 -- the deliverable does not exist: the title screen IS the last frame
+
+Two arms, same binary, same display (:964), same minute, back to back, each recorded at
+60 fps from before launch to after the process died. INPUT IS INJECTED THROUGH THE
+RUNTIME'S OWN PAD QUEUE (`PS3BASE_INPUT_CMD`, applied in fill() AFTER poll_pad, so X
+latency and window focus cannot be blamed):
+
+    arm P: input.cmd = "start 100000"  -> hold = atof(100000)*60/1000 frames, i.e. START
+           down for 100 s, so b[2]=0x08 is in EVERY cellPadGetData the title makes
+    arm N: input.cmd empty            -> same runtime, no input
+
+The pad bytes the title sees, from PS3BASE_PAD_LOG (arm P, W-P run, verbatim):
+
+    I  16.103531 [125662] pad: frame 1 bytes 00 7c 08 00 80 80 80 80 t=14.69
+    I  22.908559 [125662] pad: frame 330 bytes 00 7c 08 00 80 80 80 80 t=21.49
+    I  22.979285 [125662] pad: frame 331 bytes 00 7c 08 00 80 80 80 80 t=21.56
+
+331 frames with b[2]=0x08. The last one the title ever takes is at game t=21.56 s.
+
+The frames (root grab, 1280x720, 60 fps, video index / 60 = video seconds; the recorder
+starts 0.30 s before the process so game t = video - 0.30):
+
+    arm P:  i=1391 t=23.18  2130 non-black, 72817 dark-red px, mean 0.69   TITLE (fade in)
+            i=1392..1399 t=23.20-23.32  the same frame, 8 samples
+            i=1400 t=23.33  60 non-black, 0 dark-red, mean 0.02           WINDOW GONE
+            SPURS abort at log t=22.999838, DMA GET REFUSED ea 0x0
+
+    arm N:  i=1370 t=22.83  2130 non-black, 72817 dark-red px, mean 0.69   TITLE (fade in)
+            i=1370..1376 t=22.83-22.93  the same frame, 7 samples
+            i=1377 t=22.95  60 non-black, 0 dark-red, mean 0.02           WINDOW GONE
+            SPURS abort at log t=22.611980
+
+Same screen, same duration, with START held throughout and with no input at all. There
+is no "screen that follows Press START": the guest is killed during the title's own fade
+in, 0.15 s (arm P) and 0.18 s (arm N) after the first frame of that fade.
+
+Why the press cannot win, stated as a number rather than a guess: the title's
+cellPadGetData loop runs until game t=21.56 s; the title is not drawn until game t≈22.85 s.
+For the whole 0.15 s the title is on screen, the guest makes **zero** pad reads, so no
+press -- held, tapped, queued, or through X -- can reach the title's wait-for-START
+routine inside the window it exists. Everything the press could do it had already done
+1.3 s earlier, on the intro.
+
+Corroboration from the census run (PS3BASE_CENSUS_CALLS=1, a slower run kept alive to
+35.6 s): cellPadGetData stops at `t=33.01`, the SPURS abort is at 35.57 s, and the
+title is drawn at video frame 2152/60 = 35.9 s -- again after the last pad read.
+
+Evidence committed (the frames above, unchanged):
+
+    docs/evidence/rdr-title-start-held.png   arm P title frame, START held in every poll
+    docs/evidence/rdr-title-control.png      arm N title frame, no input
+    docs/evidence/rdr-after-title-exit.png   what follows in BOTH arms: black, window gone
+
+Negative controls run and rejected as explanations (each a same-minute A/B, each
+recorded at 60 fps, each showing the same 0.15 s budget):
+
+    xdotool keydown/Return held from 14-20 s     title still appears and the process dies
+    xdotool taps at 25 Hz from the intro         same
+    START held from t=1 s before the first poll  same
+    queue fed continuously to process death      same (measured: title spans 23.18..23.32)
+
+## Status: done
+
+The closed loop was built and run. It cannot yield a post-START screen, because the
+SPURS abort that this tree still has kills the guest during the title screen's fade-in,
+and the guest stops polling the pad 1.3 s before that screen is drawn. The deliverable
+capture therefore does not exist, and no amount of input timing creates it: the blocker
+is the DMA GET REFUSED at ea 0 (SPU wrch ch18 with the value that the skipped store at
+0x920054 should have supplied), not the input path. The input path is proven good --
+b[2]=0x08 is in the pad bytes at every one of 331 consecutive polls.
+
+Scripts (in the worktree, reproducible verbatim):
+
+    /tmp/m5/W.sh        the two-arm run above (8 lines each, PID-waited, not pgrep)
+    /tmp/m5/W-P/f/      every recorded frame of arm P
+    /tmp/m5/W-N/f/      every recorded frame of arm N
+
