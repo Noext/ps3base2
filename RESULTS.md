@@ -1991,3 +1991,82 @@ with the gate on and with the gate off at the same time.
 | the gate opening at every blocking point | runtime/src/lv2/object.h `wait_for`, ppu_thread.cpp yield/join, process.cpp 141/142, spu.cpp 177/178, thread.cpp exit |
 | PT_PROC_PARAM decode and RPCS3's acceptance rules | runtime/include/runtime/loader.h, runtime/src/proc_param.cpp, wired in runtime/src/loader.cpp |
 | 76 checks over both | tests/start_gate.cpp, registered as ctest `start_gate` |
+
+
+---
+
+# M2 -- cellAudio against RPCS3
+
+Branch `explore/m2`, worktree `/root/Dev/wt-M2`, from main `4a5a132`. Full raw
+proof, measurement by measurement, is in `RESULTS-M2.md`; this is the summary
+that belongs in the shared file.
+
+## What was wrong
+
+The old `runtime/src/hle/cellAudio.cpp` answered `CELL_AUDIO_ERROR_AUDIOSYSTEM`
+(`0x80310702`) for `PortOpen` before init instead of `NOT_INIT`, returned
+`NOT_INIT` (`0x80310703`) where `PARAM` belongs, never read `attr` or `level`,
+wrote `v = ch*blocks*256*4` as the port size but allocated and zeroed whatever
+`vm::alloc` rounded, and -- the one that matters -- advanced the read index in
+the mixer's own loop without any of it being checkable: `cellAudioGetPortConfig`
+reported the values but nothing established they were the console's.
+
+## What it is now
+
+| what | where |
+|---|---|
+| the state machine: every entry point, its check order and its cited RPCS3 line range | `runtime/src/hle/audio_hle.h` |
+| the imports, the audio thread, the per-period mixer step | `runtime/src/hle/cellAudio.cpp` |
+| 214 checks over the structures, the codes, the index and the events | `tests/cellAudio.cpp` (ctest `cellAudio`) |
+
+`CellAudioPortConfig` is written field by field as the console's 32-byte guest
+layout: readIndexAddr 0, status **4**, nChannel 8, nBlock 16, portSize 24,
+portAddr 28. status sits at 4 because a vm pointer is 32-bit
+(`refs/.../vm_ptr.h:20,29`); reading it as 64-bit shifts every later field and
+the title reads a channel count out of `portSize`. `portSize` is now exactly
+`max(1,ch)*blocks*256*4` (0x10000 for RDR port 0, 0x8000 for RDR port 1), the
+buffer is mapped at least that large, and `PortStart` zeroes all of it
+(`cellAudio.cpp:1850`). The port count (4 at sdk <= 0x35ffff, else 8) and the
+notify-queue depth (2/8) come from the process's own SDK version, not a
+constant.
+
+## Proof the buffer exists and the read index advances
+
+Unit level: the suite walks a started 8-block port's index through
+1,2,3,4,5,6,7,0,1,2 over ten periods, checks it freezes when stopped and when
+closed, and checks `portAddr` is writable over the whole `portSize`.
+
+Live level, which is the claim that matters -- the guest must READ what the
+runtime publishes. Trapping the index slot in the running title:
+
+    $ GOWA_TRAP=r12180010+8 GOWA_TRAP_MAX=100000 DISPLAY=:961 timeout 40 build-61/ps3base --no-launcher
+    $ grep -c "trap 0 read" /tmp/M2-trap2.log
+    598
+    I   4.599749 trap: trap 0 read 0x12180014 prev 0x00000000 -> 0x00000002 (guest lr 0x0060a724) by [RAGE Audio] Multistream
+    I   4.677980 trap: trap 0 read 0x12180014 prev 0x00000000 -> 0x00000005 (guest lr 0x0060a724) by [RAGE Audio] Multistream
+    $ grep -c "trap 0 write" /tmp/M2-trap2.log
+    1543
+
+598 guest loads by `[RAGE Audio] Multistream` from the loop at
+`out-rdr/ppu/rdr_061.cpp:6317`, and 1543 writes by `hle::audio::step` on the
+same word. The loop is closed in both directions.
+
+Content level: both titles' second ports are 16/16 blocks non-zero, measured
+from the buffer at the address `GetPortConfig` returned -- RDR `port1 16/16
+filled` at 18.19 s, gta-sa `port0 16/16` then `port1 16/16` after `port0`'s
+close.
+
+## Not claimed
+
+RDR's port 0 (8ch x 8 blocks) is 0/8 filled at every sample, and a non-zero
+write trap over its whole 0x10000 reports zero writes: the SPU multistream
+mixer is producing silence in the first 23 s. That is stated as the open
+question, not as green.
+
+## No regression, and the merge-queue checks
+
+A/B against the `origin/main` binary on this machine in the same minute:
+601 flips and the abort at 23.09 s on BOTH, process exit 0x8001000c on both.
+After `git rebase origin/main` (main `4a5a132`): `ctest -j 4` 40/40 (the 40th
+is `cellAudio`), `tools/check_no_dup_symbols.sh` clean. The diff adds no
+deletion: 6 files, +2112/-85, and `RESULTS.md` is append-only here.
