@@ -23,6 +23,7 @@ void profile_thread(void* native, const char* name);
 
 namespace lv2 {
 void lwmutex_debug(uint32_t id);
+void lwmutex_probe_report(const char* where);
 }
 
 namespace guest {
@@ -88,6 +89,7 @@ Thread* current() { return t_current; }
 
 void status_dump() {
     stacks::dump();
+    lv2::lwmutex_probe_report("status dump");
     std::lock_guard lk(g_lock);
     for (auto& [id, t] : g_threads) {
         if (t->exited) continue;

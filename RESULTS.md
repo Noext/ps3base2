@@ -1291,3 +1291,84 @@ destroy against RPCS3 sys_lwmutex_.cpp + lv2/sys_lwmutex.cpp; fix; unit test; th
 report the ESRCH/EPERM count (target zero) and the +0x60 field value.
 
 Status: work started. Measurements are appended below as they are taken.
+## Measurement 1 -- the four _sys_lwmutex_* syscalls, with the guest structure read raw
+
+Probe: `runtime/src/lv2/lwmutex.cpp`, gated on `PS3BASE_LWMUX_PROBE`. It records
+the 24 bytes of the sys_lwmutex_t a call names, the minted id, the guest cia/lr, and
+on every failure the value passed as the id **plus the caller's callee-saved
+r28..r31** -- the firmware wrapper keeps the structure pointer in those across the
+`sc`, so the number in r3 and the structure it belongs to are both visible.
+
+Run:
+
+    nohup setsid env DISPLAY=:950 PS3BASE_DISC_DIR=/root/Dev/rdr-port/vfs/dev_bdvd \
+      PS3BASE_LOG=info PS3BASE_LWMUX_PROBE=1 timeout 120 \
+      /root/Dev/wt-L1/build-50/ps3base --no-launcher > /tmp/L1-r2.log 2>&1 &
+
+Result: 1154 `_sys_lwmutex_create` calls, 800 failing locks, **0 EPERM**; the run
+reaches the same stop as main at 25.9 s (`_sys_process_exit(0x8001000c)`).
+
+The FIRST failing lock, verbatim:
+
+    I   0.727083 lwprobe: lock ea=0x00000000 (not 32 mapped bytes) count=1
+        rc=0xffffffff80010005 cia=0x300054ec lr=0x00530b54 tid=0x1000000
+        r28=0x00000000 r29=0x01000000 r30=0x0165afc8 r31=0x0165afc8
+
+### What the id argument actually is
+
+    $ grep 'lwprobe: lock ' /tmp/L1-r2.log | sed 's/.*ea=\(0x[0-9a-f]*\).*/\1/' | sort | uniq -c
+        401 0x00000000
+
+Every sampled failing lock passes **id 0x00000000** to the syscall -- not the
+structure address 0x0165afc8. The structure address is in r30/r31 (the wrapper's
+saved pointer), which is exactly where the lifted firmware wrapper keeps it:
+
+    300054e0  lwz r3, 0x10(r30)      <- the id argument = lwmutex->sleep_queue
+    300054e8  li r11, 0x61           <- syscall 97
+    300054ec  sc
+
+so the syscall received sleep_queue, and sleep_queue was 0 at that moment:
+
+    I   0.727406 lwprobe:   caller r30 ea=0x0165afc8 lock_var=0000000000000001
+        attribute=00000000 recursive=00000000 sleep_queue=00000000 pad=00000000
+    I   0.727416 lwprobe:   caller r31 ea=0x0165afc8 lock_var=0000000000000001
+        attribute=00000000 recursive=00000000 sleep_queue=00000000 pad=00000000
+
+All 800 come from one thread (0x1000000), one cia (0x300054ec), one lr (0x00530b54),
+in 23 ms (0.727083 -> 0.750463). One burst on one structure.
+
+### control+16 IS written -- by the guest wrapper, not by the syscall
+
+The syscall at 0x30004f74 is `_sys_lwmutex_create`. Its caller is the firmware's
+own lifted `sys_lwmutex_create` wrapper, and that wrapper writes +16 itself:
+
+    30004f74  sc                     <- _sys_lwmutex_create(&out_id, protocol, control, ...)
+    30004f78  cmpwi cr7, r3, 0
+    30004f84  stw r3, 4(r31)          <- lock_var.waiter
+    30004fa0  stw r9, 8(r31)          <- attribute
+    30004fa4  stw r3, 0xc(r31)        <- recursive_count
+    30004fa8  stw r10, 0x10(r31)      <- lwmutex->sleep_queue = *out_id
+
+Measured on the real run, blockwatch armed on the structure:
+
+    I   0.844085 blockwatch: WRITE +0x010 (0x0165afd8) w4 prev 0x00000000 -> 0x95022100
+        by rsv::store_range | guest lr 0x005323d4 rdr+0x5221d4 | thread main_thread
+
+and the create that produced that id:
+
+    I   0.790028 lwprobe: create-control ea=0x0165afc8 lock_var=0000000000000000
+        attribute=00000000 recursive=00000000 sleep_queue=00000000 pad=00000000
+        id=0x95022100 protocol=0x1 control=0x0165afc8 has_name=-2147483647
+        name=0x6372697473656300 lr=0x30004f74 tid=0x1000000
+
+### The ordering, which is the actual finding
+
+    0.727083  800 x _sys_lwmutex_lock on 0x0165afc8, sleep_queue still 0  -> 800 ESRCH
+    0.790028  _sys_lwmutex_create(control=0x0165afc8)                     -> id 0x95022100
+    0.844085  wrapper stores 0x95022100 into control+16
+
+The lock burst happens BEFORE the create, on a statically zero-initialised
+sys_lwmutex_t. The brief's mechanism -- "our create never writes control+16, so the
+guest passes the structure address as the id" -- does not hold: the id passed is 0,
+not 0x0165afc8, and +16 is written, by the guest wrapper, at 0.844.
+

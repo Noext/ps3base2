@@ -25,4 +25,9 @@ struct LwMutex : Object {
     void release(int64_t result);
 };
 
+/* The _sys_lwmutex_* failure totals (ESRCH per syscall, and EPERM), printed at a
+ * status dump and at exit. Always counted; only formatted when the probe or a
+ * report asks. Defined in lwmutex.cpp. */
+void lwmutex_probe_report(const char* where);
+
 }
