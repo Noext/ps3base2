@@ -312,6 +312,11 @@ int32_t ea_to_io(uint32_t ea, uint32_t* io) { return ea_to_io_impl(ea, io); }
 
 uint32_t io_to_ea(uint32_t io) { return io_to_ea_impl(io); }
 
+/* Self-jumps are the guest's idle marker, NOT the end of the ring. Counted
+ * separately so the two are never confused again: track X4 measured 48 stalls per
+ * run where get never reached put because this returned instead of continuing. */
+static std::atomic<uint64_t> g_idle_selfjumps{0};
+
 void drain() {
     if (!g_ctx) return;
     g_drains.fetch_add(1, std::memory_order_relaxed);
@@ -381,7 +386,15 @@ void drain() {
             return;
         }
         if (++guard > 2000000) {
-            LOG_WARN("gcmfifo", "drain budget exhausted at get 0x%08x (put 0x%08x)", get, put);
+            /* A closed call/ret cycle: get never reaches put. Log the shape once so
+             * the decoder bug is visible instead of inferred (track X4 measured 48
+             * stalls, get returning to 0x1190/0x1454/0x15e4). */
+            static std::atomic<int> n{0};
+            if (n.fetch_add(1) < 6)
+                LOG_WARN("gcmfifo", "[loop] budget at get 0x%08x (put 0x%08x) call_active=%d "
+                         "call_return 0x%08x cmd 0x%08x",
+                         get, put, g_regs.call_active ? 1 : 0, g_regs.call_return,
+                         vm::read32(ea));
             return;
         }
         const uint32_t cmd = vm::read32(ea);
@@ -398,7 +411,16 @@ void drain() {
         /* Jump / call / return, decoded as runtime/src/lv2/rsx.cpp:560-600 does. */
         if ((cmd & 0xE0000003u) == 0x20000000u || (cmd & 3u) == 1u) {
             const uint32_t target = (cmd & 3u) == 1u ? (cmd & 0xFFFFFFFCu) : (cmd & 0x1FFFFFFCu);
-            if (target == get) return;   /* self-jump: the ring is done */
+            if (target == get) {
+                /* A self-jump is the guest's idle marker, NOT the end of the ring:
+                 * the reference (runtime/src/lv2/rsx.cpp:566-570) waits and
+                 * CONTINUES, so work queued after it is still consumed. Returning
+                 * here left put permanently ahead of get -- measured 48 times per
+                 * run, get stuck at 0x1190/0x1454/0x15e4 while put grew 0x1218 per
+                 * cycle. That is why nothing after the marker was ever decoded. */
+                g_idle_selfjumps.fetch_add(1, std::memory_order_relaxed);
+                return;   /* the caller re-drains on the next put change */
+            }
             ctrl_set_get(target);
             continue;
         }
