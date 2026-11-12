@@ -640,7 +640,7 @@ int main(int argc, char** argv) {
          * with the native reference: the guest creating the friend-list thread.
          * Native creates it when the menu opens; a boot that never reaches the
          * menu never creates it. Measured: native 1, wasm 41 calls. */
-        if (i == 100) {
+        if (i == 100 || i == 300 || i == 900) {
             /* A single marker is weak evidence. The menu screen is corroborated
              * by the other interface threads the native reference creates when
              * its menu opens: the save-list readers and the option loader. Require
