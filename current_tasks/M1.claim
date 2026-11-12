@@ -1,5 +1,0 @@
-M1 -- the 0x920054 branch, down to the leaf.
-Question: where does bit 0x40 of the descriptor word 0x10ca come from; every call
-site of f_0091f364 and f_0091fd18 and the descriptor each passes; whether the
-same literal produces count=1 on the console.
-Branch explore/m1, worktree /root/Dev/wt-M1.
