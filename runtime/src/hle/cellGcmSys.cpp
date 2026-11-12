@@ -1,6 +1,7 @@
 #include "common.h"
 
 #include "runtime/rsx_iomap.h"
+#include "gpu/gcm_fifo.h"
 
 /* cellGcmSys: the RSX command interface.
  *
@@ -80,6 +81,10 @@ HLE_FUNC(cellGcmSys, cellGcmGetConfiguration) {
     ret(ctx, 0);
 }
 
+/* RPCS3 reserves 4 KB at the start of the default command buffer and 4 bytes at
+ * the end for the jump back (cellGcmSys.cpp:479-486). */
+constexpr uint32_t kGcmRingReserve = 0x1000;
+
 /* Counted so "the stub ran" is a measurement, not an assumption. */
 std::atomic<uint32_t> g_gcm_stub_cb_addr{0};
 std::atomic<uint32_t> g_gcm_stub_inits{0};
@@ -102,14 +107,76 @@ HLE_FUNC(cellGcmSys, _cellGcmInitBody) {
                  context, cmd_size, io_size, io_addr,
                  (context && vm::range_mapped(context, 16)) ? 1 : 0);
     if (context && vm::range_mapped(context, 16)) {
+        /* The ring the title builds packets in, and the RSX blocks it addresses
+         * through cellGcmGetControlRegister / cellGcmGetLabelAddress.
+         *
+         * refs/rpcs3/rpcs3/Emu/Cell/Modules/cellGcmSys.cpp:_cellGcmInitBody does
+         * three things this stub must reproduce, or the guest's own libgcm has
+         * nothing to talk to:
+         *   gcmMapEaIoAddress(ioAddress, 0, ioSize)  -- so io 0 is the ring
+         *   a context block whose +0x40 is CellGcmControl and whose reports
+         *     window holds the labels (cellGcmGetLabelAddress = base + 0x10*index)
+         *   begin/end/current/callback in the CellGcmContextData the caller holds
+         * The runtime's own sys_rsx_context_allocate uses the same 3 MB layout
+         * (lv2/rsx.cpp: g_rsx.dma_control = area, driver_info = +1 MB, reports =
+         * +2 MB); after this round the HLE path must agree with it. */
         const uint32_t buf = io_addr ? io_addr : context + 0x40;
-        /* Do not demand that the WHOLE window be mapped: the io buffer is allocated
-         * by the guest and a partial tail must not turn this into a silent failure.
-         * Only the header matters here -- the stub never writes into the buffer. */
         if (buf) {
-            vm::write32(context + 0, buf);
-            vm::write32(context + 4, buf + (cmd_size ? cmd_size : 0x1000));
-            vm::write32(context + 8, buf);
+            /* io table: ring EA -> io 0, so the put/get offsets the guest writes
+             * translate back to the buffer it built. Failure is reported, not
+             * hidden: without this mapping the reader cannot read the ring. */
+            const int32_t map_rc = gcm_map_ea_io(buf, 0, io_size ? io_size : 0x100000);
+            if (map_rc != 0)
+                LOG_WARN("gcm", "_cellGcmInitBody: ring io map refused (ea=0x%x size=0x%x rc=0x%x)",
+                         buf, io_size, static_cast<uint32_t>(map_rc));
+            /* The RSX area must be REAL committed memory. A fallback to the
+             * guest's own page looked reasonable and was measured wrong: the
+             * region allocator refused (0x300000 in RsxContext), the fallback
+             * produced 0xd00000 -- an address the pagemap does not cover, so
+             * every label write was silently dropped by the bounds check while
+             * reads returned zeros. Allocate in main memory, which is the region
+             * the runtime always has, and say so if even that fails. */
+            uint32_t area = vm::alloc(vm::Region::RsxContext, 0x300000, 0x100000);
+            const char* area_region = "rsx";
+            if (!area) {
+                area = vm::alloc(vm::Region::Main, 0x300000, 0x100000);
+                area_region = "main";
+            }
+            if (!area || !vm::range_mapped(area, 0x300000)) {
+                LOG_ERROR("gcm", "_cellGcmInitBody: no RSX context area (0x%08x, mapped=%d) -- labels cannot be written",
+                          area, area ? (vm::range_mapped(area, 0x300000) ? 1 : 0) : 0);
+                ret(ctx, 0);
+                return;
+            }
+            LOG_INFO("gcm", "RSX context area at 0x%08x (%s, 3 MB)", area, area_region);
+            gpu::gcm::init(area, buf, cmd_size ? cmd_size : 0x1000);
+            LOG_INFO("gcm", "_cellGcmInitBody: control=0x%08x labels=0x%08x ring=0x%08x/0x%x io_map=0x%x",
+                     gpu::gcm::control_address(), gpu::gcm::label_address(), buf, cmd_size,
+                     static_cast<uint32_t>(map_rc));
+            /* THE INDIRECTION, which is what the null indirect call was.
+             *
+             * The argument is a vm::pptr<CellGcmContextData>: the guest hands us
+             * the address of a STRUCTURE HOLDING A POINTER, and reads back the
+             * pointer. refs/rpcs3/cellGcmSys.cpp:487 does exactly that:
+             *
+             *     vm::write<CellGcmContextData>(gcm_cfg.gcm_info.context_addr, ...);
+             *     context->set(gcm_cfg.gcm_info.context_addr);
+             *
+             * Writing begin/end/current/callback AT the argument address instead
+             * made ld32(0xd72800) return the ring base (our begin field), and the
+             * guest then passed that ring buffer as if it were the context: its
+             * ld32(buffer+12) read a packet word (zero), and call_indirect(0)
+             * followed. Measured: "call target 0x00000000 is UNMAPPED
+             * (lr=0x005d2c08 r3=0x40100000 r31=0x40100000)".
+             *
+             * So: the context data lives in the RSX area, the guest pointer points
+             * at it, and the ring is described the way RPCS3 does (4 KB reserved at
+             * the start, 4 bytes at the end for the jump back). */
+            const uint32_t cdata = area;
+            vm::write32(cdata + 0, buf + kGcmRingReserve);
+            vm::write32(cdata + 4, buf + (cmd_size ? cmd_size : 0x1000) - 4);
+            vm::write32(cdata + 8, buf + kGcmRingReserve);
+            vm::write32(context + 0, cdata);
             /* +12 is the FIFO flush callback: the crash path reads
              * ld32(callback + 0) as an indirect target. Nothing in the title ever
              * writes it, so the stub must -- this IS the "stub that counts RSX
@@ -119,7 +186,11 @@ HLE_FUNC(cellGcmSys, _cellGcmInitBody) {
              * at its far end, so it is necessarily mapped. */
             /* Place it at the START of the FIFO, not its end: buf+cmd_size is one
              * past the allocation and range_mapped refuses it. */
-            const uint32_t cb = buf;
+            /* The callback block goes at the END of the RSX context area, NOT in
+             * the ring: the ring's first words are the guest's own packets
+             * (measured: placing it at buf put 0x00010300 in front of the first
+             * packet, and the reader then walked 55 zero words). */
+            const uint32_t cb = area + 0x2FFFF0u;
             ++g_gcm_stub_cb_addr;
             if (vm::range_mapped(cb, 8)) {
                 /* 0x00010300 is a lifted function whose body is a bare return
@@ -128,8 +199,9 @@ HLE_FUNC(cellGcmSys, _cellGcmInitBody) {
                  * does nothing, and keeps the FIFO path alive so the boot can go
                  * on. The command counter lives here rather than in guest code. */
                 vm::write32(cb + 0, 0x00010300u);
-                vm::write32(cb + 4, context);
-                vm::write32(context + 12, cb);
+                vm::write32(cb + 4, cdata);
+                vm::write32(cdata + 12, cb);
+                LOG_INFO("gcm", "callback block at 0x%08x (handler 0x00010300)", cb);
             }
             ++g_gcm_stub_inits;
             ret(ctx, 0);
@@ -140,6 +212,99 @@ HLE_FUNC(cellGcmSys, _cellGcmInitBody) {
      * what produced the null dereference above. */
     LOG_WARN("gcm", "cellGcmInitBody stub: context=0x%x cmd=0x%x io=0x%x/0x%x not usable",
              context, cmd_size, io_size, io_addr);
+    ret(ctx, 0);
+}
+
+
+/* --- the label / control / offset interface ------------------------------
+ *
+ * These three are the whole reason this module exists. With the display path
+ * stubbed, the title's libgcm still builds real NV47 packets and kicks the ring
+ * through cellGcmGetControlRegister + cellGcmAddressToOffset; it then waits for
+ * the back-end label it asked for. On hardware the command processor writes that
+ * label. Here the reader in gpu/gcm_fifo.cpp does, and GetLabelAddress is the
+ * natural place to run it: the wait loop calls it once per 30 us spin, so a
+ * release that has been queued is applied on the next turn.
+ *
+ * refs/rpcs3/rpcs3/Emu/Cell/Modules/cellGcmSys.cpp:159
+ *     cellGcmGetLabelAddress(index) = fw.label_addr + 0x10 * index
+ */
+HLE_FUNC(cellGcmSys, cellGcmGetLabelAddress) {
+    const uint32_t index = a32(ctx, 0) & 0xFFu;
+    gpu::gcm::drain();
+    const uint32_t addr = gpu::gcm::label_address(index);
+    {
+        static std::atomic<int> n{0};
+        if (n.fetch_add(1) < 4)
+            LOG_INFO("gcm", "cellGcmGetLabelAddress(%u) -> 0x%08x", index, addr);
+    }
+    ret(ctx, addr);
+}
+
+/* refs/.../cellGcmSys.cpp:280. The guest stores the ring's io offset here to
+ * kick the command processor, so this must be the block the reader polls. */
+HLE_FUNC(cellGcmSys, cellGcmGetControlRegister) {
+    ret(ctx, gpu::gcm::control_address());
+}
+
+HLE_FUNC(cellGcmSys, cellGcmGetDefaultCommandWordSize) {
+    ret(ctx, 0x400);
+}
+
+HLE_FUNC(cellGcmSys, cellGcmGetDefaultSegmentWordSize) {
+    ret(ctx, 0x100);
+}
+
+/* refs/.../cellGcmSys.cpp:998: an EA the ring builder can address becomes the io
+ * offset the control register takes. Local memory first, then the io table --
+ * the same order, and a refusal rather than a zero when neither answers.
+ */
+HLE_FUNC(cellGcmSys, cellGcmAddressToOffset) {
+    const uint32_t ea = a32(ctx, 0);
+    const uint32_t out = a32(ctx, 1);
+    uint32_t io = 0;
+    int32_t rc = gpu::gcm::ea_to_io(ea, &io);
+    if (rc != 0) {
+        static std::atomic<int> n{0};
+        if (n.fetch_add(1) < 8)
+            LOG_WARN("gcm", "cellGcmAddressToOffset(0x%08x) is not in the io table", ea);
+        return ret(ctx, static_cast<int32_t>(0x802100ffu));
+    }
+    if (out && vm::range_mapped(out, 4)) vm::write32(out, io);
+    {
+        static std::atomic<int> n{0};
+        if (n.fetch_add(1) < 12)
+            LOG_INFO("gcm", "cellGcmAddressToOffset(0x%08x) -> 0x%08x (out=0x%08x)", ea, io, out);
+    }
+    ret(ctx, 0);
+}
+
+HLE_FUNC(cellGcmSys, cellGcmIoOffsetToAddress) {
+    const uint32_t io = a32(ctx, 0);
+    const uint32_t out = a32(ctx, 1);
+    const uint32_t ea = gpu::gcm::io_to_ea(io);
+    if (!ea) return ret(ctx, static_cast<int32_t>(0x802100ffu));
+    if (out && vm::range_mapped(out, 4)) vm::write32(out, ea);
+    ret(ctx, 0);
+}
+
+/* A flip is requested through the ring (0xE920/0xE924) or through the driver's
+ * context attribute; without a display there is nothing to present, but the
+ * request must still be consumed so the guest's frame accounting advances. */
+HLE_FUNC(cellGcmSys, cellGcmSetFlipMode) {
+    gpu::gcm::drain();
+    ret(ctx, 0);
+}
+
+HLE_FUNC(cellGcmSys, cellGcmSetDisplayBuffer) {
+    ret(ctx, 0);
+}
+
+HLE_FUNC(cellGcmSys, cellGcmSetFlipHandler) {
+    ret(ctx, 0);
+}
+
+HLE_FUNC(cellGcmSys, cellGcmSetDefaultFifoSize) {
     ret(ctx, 0);
 }
 
