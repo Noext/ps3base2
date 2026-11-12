@@ -517,6 +517,10 @@ int main(int argc, char** argv) {
             hooks::capture("external request");
             if (FILE* f = std::fopen("blackbox.done", "w")) std::fclose(f);
         }
+        /* The funnel counters, every 30 s and before anything that can end the
+         * run: a title that aborts never reaches the end of main(), and the whole
+         * point of the counter is to be readable in a run that dies. */
+        if (tick % 30 == 0 && tick) LOG_INFO("main", "%s", pgw::stats().c_str());
         if (status && tick % 3 == 2) {
             spu::status_dump();
             guest::status_dump();
