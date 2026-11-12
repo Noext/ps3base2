@@ -72,3 +72,6 @@ __pycache__/
 # Sony's; this tree only ever carries the modules already decrypted into fw/.
 /fw-src/
 
+
+# Generated at run time by the title, never a source file.
+/vfs/dev_hdd1/
