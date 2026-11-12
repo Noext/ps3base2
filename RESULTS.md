@@ -250,3 +250,39 @@ done. Funnel (97 sites -> 3 entry points), read watch, non-fatal page guard, and
 the invalidation measurement are all in; 36/36 ctest after the rebase onto
 da6866a; the funnel measured live on RDR at 3 344 host writes / 25.9 MB by t=30 s.
 
+Confirmed on the checked-out ELF (note: it is a BIG-ENDIAN ELF64, so the
+little-endian read of e_phoff yields the nonsense 0x4000000000000000 --
+that is why the first parse failed).
+
+$ readelf -lW bin/rdr/EBOOT.elf
+
+Elf file type is EXEC (Executable file)
+Entry point 0x1332080
+There are 8 program headers, starting at offset 64
+
+Program Headers:
+  Type           Offset   VirtAddr           PhysAddr           FileSiz  MemSiz   Flg Align
+  LOAD           0x000000 0x0000000000010000 0x0000000000010000 0x1316860 0x1316860 R E 0x10000
+  LOAD           0x1320000 0x0000000001330000 0x0000000001330000 0x1bc014 0x48ff98 RW  0x10000
+  LOAD           0x14dc014 0x0000000000000000 0x0000000000000000 0x000000 0x000000 R   0x10000
+  LOAD           0x14dc014 0x0000000000000000 0x0000000000000000 0x000000 0x000000 RW  0x10000
+  LOAD           0x14dc014 0x0000000000000000 0x0000000000000000 0x000000 0x000000 RW  0x10000
+  TLS            0x1387654 0x0000000001397654 0x0000000001397654 0x000054 0x000444 R   0x10
+  LOOS+0x1       0x1316800 0x0000000001326800 0x0000000001326800 0x000020 0x000020     0x8
+  LOOS+0x2       0x1316820 0x0000000001326820 0x0000000001326820 0x000040 0x000040     0x4
+
+$ python3 (parse >=Q program headers)
+GUARD 0x0177caa8 -> PT_LOAD[1] seg_offset=0x44caa8 filesz=0x1bc014 memsz=0x48ff98 memsz_end=0x17bff98 infile=False
+BEYOND FILESZ: file holds NOTHING for this address; loader zero-fills.
+Segment file range 0x1320000..0x14dc014, requested 0x176caa8..0x176cab8
+  0x0177caa0 LOAD[1] seg+0x44caa0 infile=False bytes=00000000(BSS)
+  0x0177caa4 LOAD[1] seg+0x44caa4 infile=False bytes=00000000(BSS)
+  0x0177caa8 LOAD[1] seg+0x44caa8 infile=False bytes=00000000(BSS)
+  0x0177caac LOAD[1] seg+0x44caac infile=False bytes=00000000(BSS)
+  0x0177cab0 LOAD[1] seg+0x44cab0 infile=False bytes=00000000(BSS)
+  0x0177cc60 LOAD[1] seg+0x44cc60 infile=False bytes=00000000(BSS)
+
+CONCLUSION M1: the initial value of 0x0177caa8 is 0 by loader definition. The
+file cannot supply 1. So a 1 observed at 2.308 s is either a guest/HLE write
+after start or a watcher defect. M2 decides which.
+
