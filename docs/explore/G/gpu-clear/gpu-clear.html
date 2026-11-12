@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Piste G &mdash; clear WebGPU pilote par le flux NV4097 du jeu</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0b0b0b; color: #eaeaea;
+               font: 13px/1.55 ui-monospace, Menlo, monospace; overflow: hidden; }
+  canvas { position: absolute; inset: 0; width: 100vw; height: 100vh; display: block; }
+  #hud { position: absolute; left: 20px; top: 20px; padding: 14px 18px; border-radius: 6px;
+         background: #000e; border: 1px solid #666; white-space: pre; pointer-events: none; }
+  #hud b { color: #7f7; }
+  #hud i { color: #9cf; font-style: normal; }
+</style>
+</head>
+<body>
+<canvas id="canvas" width="1280" height="720"></canvas>
+<div id="hud">booting&hellip;</div>
+<script>
+/* Piste G -- presentation half.
+ *
+ * The guest (Minecraft's own PPU/SPU code, wasm) runs in another process. Its
+ * control flow writes NV4097 packets into the CellGcmContextData the HLE
+ * _cellGcmInitBody handed it, and the runtime's decoder in gpu/webgpu_bridge.cpp
+ * walks that buffer packet by packet. What the decoder saw most recently is
+ * published in ./state.json:
+ *
+ *   lastMethod / lastArg -- the last method the walker decoded and its argument
+ *   releases / acquires  -- how many SEMAPHORE_RELEASE (0x1D70) and ACQUIRE (0x68)
+ *                           packets the walker acted on
+ *   methods / packets    -- walker counters
+ *   t                    -- the guest's own clock
+ *
+ * Every render pass below is issued because this state changed, and the colour is
+ * a function of the guest's own decoded argument. Nothing here is on a timer: if
+ * the guest stops writing packets the decoded value stops changing, no render pass
+ * is submitted, and the HUD freezes at the last guest value.
+ */
+const canvas = document.getElementById('canvas');
+const hud = document.getElementById('hud');
+
+let device = null, ctx = null, frames = 0;
+let lastKey = '', lastValue = 0, valueChanges = 0;
+let latest = null;   /* the last state published by the guest's decoder */
+let offscreen = null; /* same-size copy target, so the pass can be read back */
+
+async function initWebGPU() {
+  if (!('gpu' in navigator)) throw new Error("'gpu' in navigator is false");
+  let adapter = null;
+  for (let i = 0; i < 100 && !adapter; i++) {
+    adapter = await navigator.gpu.requestAdapter();
+    if (!adapter) await new Promise((r) => setTimeout(r, 100));
+  }
+  if (!adapter) throw new Error('no WebGPU adapter after 10 s');
+  device = await adapter.requestDevice();
+  ctx = canvas.getContext('webgpu');
+  const format = navigator.gpu.getPreferredCanvasFormat ? navigator.gpu.getPreferredCanvasFormat() : 'bgra8unorm';
+  /* COPY_SRC so the render pass output can be read back and saved as a PNG: in
+   * this headless GPU mode page.screenshot() returns the canvas as black (measured:
+   * a plain 2D canvas fills blue and still screenshots black), so the only faithful
+   * capture of the render pass is its own pixels. */
+  ctx.configure({ device, format, alphaMode: 'opaque', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC });
+  const info = adapter.info || {};
+  window.__adapter = { vendor: info.vendor, architecture: info.architecture, format };
+  return window.__adapter;
+}
+
+/* One render pass, one clear. The colour comes from the guest's decoded argument:
+ *   green 0.72  when the guest's last decoded argument is non-zero,
+ *   blue        carries its low three bits, so two guest arguments differ visibly,
+ *   red  0.02   keeps a zero-valued guest frame distinguishable from "no frame". */
+function clearFromGuest(st, why) {
+  const v = st.lastArg >>> 0;
+  const g = v ? 0.72 : 0.0;
+  const b = v ? ((v & 7) / 7) * 0.30 : 0.0;
+  const encoder = device.createCommandEncoder();
+  const pass = encoder.beginRenderPass({
+    colorAttachments: [{
+      view: ctx.getCurrentTexture().createView(),
+      clearValue: { r: 0.02, g: g, b: b, a: 1 },
+      loadOp: 'clear',
+      storeOp: 'store',
+    }],
+  });
+  pass.end();
+  device.queue.submit([encoder.finish()]);
+  frames++;
+  lastValue = v;
+  hud.innerHTML =
+    '<b>WebGPU render pass \u2014 loadOp=clear</b>\n' +
+    'clearValue      r=0.020  g=' + g.toFixed(3) + '  b=' + b.toFixed(3) + '  a=1.000\n' +
+    'guest label[255] <i>0x' + v.toString(16) + '</i>  @ guest EA 0x' + ((st.labelBase + 0xff0) >>> 0).toString(16) + '\n' +
+    'label changes   ' + st.labelSeq + '   (decoder saw the guest write it)\n' +
+    'reason          ' + why + '\n' +
+    'guest frames    ' + frames + '   presented ' + presented + '   guest t=' + st.t + 's\n' +
+    'walker          methods ' + st.methods + '   label change #' + st.labelSeq + '\n' +
+    'guest clock     ' + (st.lastLine || '').replace('ps3base-wasm: ', '').slice(0, 44);
+}
+
+async function poll() {
+  try {
+    const res = await fetch('./state.json?x=' + Date.now(), { cache: 'no-store' });
+    const st = await res.json();
+    if (!st.ok) { hud.textContent = 'waiting for the guest bridge\u2026'; return; }
+    latest = st;
+    /* The key is the guest's own decoded packet identity: a change of method, of its
+     * argument, or of the release counter is a new command from the stream. */
+    const key = st.label255 + ':' + st.labelSeq;
+    if (key !== lastKey) {
+      lastKey = key;
+      valueChanges++;
+      clearFromGuest(st, 'guest SEMAPHORE_RELEASE packet wrote label[255] = 0x' + (st.label255 >>> 0).toString(16) +
+        ' (change #' + st.labelSeq + ' in the guest stream)');
+      window.__firstFrameAt = window.__firstFrameAt || performance.now();
+    } else if (!frames) {
+      hud.textContent = 'waiting for a guest command\npackets ' + st.packets + '   methods ' + st.methods +
+        '\nreleases ' + st.releases + '   guest t=' + st.t + 's';
+    }
+  } catch (e) {
+    hud.textContent = 'state fetch failed: ' + e.message;
+  }
+}
+
+/* Presentation loop. The COLOUR is not produced here: it is read from the latest
+ * state the guest's decoder published, so the pixels are the guest's clear value.
+ * The loop exists only because a canvas must be presented on every animation frame
+ * for the compositor to show it; it never invents a command and does not advance
+ * any counter when the guest value has not changed. */
+/* The canvas texture cannot be read after the frame is presented (measured: a
+ * copyTextureToBuffer issued from a later task returns all zeros), so the SAME
+ * clearValue is rendered twice per frame: once to the canvas for presentation, once
+ * to an offscreen texture that the readback copies. Both passes are produced by the
+ * same expression, so the readback is the pixels this page actually cleared to. */
+/* The colour is a pure function of ONE number the guest wrote: label[255], the RSX
+ * label slot at guest EA 0x01000ff0 that the guest's SEMAPHORE_RELEASE packets
+ * (NV4097 method 0x1D70) set. Measured: it alternates 1 and 2 (3336 writes in 55 s),
+ * so the blue channel alternates too, and a capture at a different moment shows a
+ * different pixel -- which a constant would not. */
+function guestClearValue() {
+  const v = (latest.label255 >>> 0);
+  const seq = (latest.labelSeq >>> 0);
+  return { v, seq, r: 0.02, g: v ? 0.72 : 0.0, b: (seq & 7) / 8, a: 1 };
+}
+
+function ensureOffscreen() {
+  if (offscreen && offscreen.width === canvas.width && offscreen.height === canvas.height) return;
+  if (offscreen) offscreen.destroy();
+  offscreen = device.createTexture({
+    size: [canvas.width, canvas.height],
+    format: window.__adapter.format,
+    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+  });
+}
+
+function renderClear(targetView, cv) {
+  const encoder = device.createCommandEncoder();
+  const pass = encoder.beginRenderPass({
+    colorAttachments: [{ view: targetView, clearValue: { r: cv.r, g: cv.g, b: cv.b, a: cv.a }, loadOp: 'clear', storeOp: 'store' }],
+  });
+  pass.end();
+  device.queue.submit([encoder.finish()]);
+}
+
+function presentLoop() {
+  if (device && latest && latest.ok && latest.labelBase) {
+    const cv = guestClearValue();
+    ensureOffscreen();
+    renderClear(ctx.getCurrentTexture().createView(), cv);   /* what the compositor shows */
+    renderClear(offscreen.createView(), cv);                 /* what the readback copies */
+    presented++;
+  }
+  requestAnimationFrame(presentLoop);
+}
+let presented = 0;
+
+initWebGPU().then((info) => {
+  console.log('WebGPU adapter ' + JSON.stringify(info));
+  requestAnimationFrame(presentLoop);
+  hud.textContent = 'WebGPU device up (' + info.vendor + ' ' + info.architecture + ')\nwaiting for the guest stream';
+  setInterval(poll, 100);
+  poll();
+}).catch((e) => { hud.textContent = 'WebGPU init failed: ' + e.message; });
+
+/* Read the canvas texture back and hand the pixels to the capture harness. This is
+ * the render pass output itself, not a compositor screenshot. */
+window.__readback = async () => {
+  if (!device || !ctx) return null;
+  ensureOffscreen();
+  const w = canvas.width, h = canvas.height;
+  const bpr = Math.ceil((w * 4) / 256) * 256;
+  const tex = offscreen;
+  const buf = device.createBuffer({ size: bpr * h, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  const enc = device.createCommandEncoder();
+  enc.copyTextureToBuffer({ texture: tex }, { buffer: buf, bytesPerRow: bpr }, [w, h]);
+  device.queue.submit([enc.finish()]);
+  await buf.mapAsync(GPUMapMode.READ);
+  const src = new Uint8Array(buf.getMappedRange());
+  const dst = new Uint8Array(w * h * 4);
+  for (let y = 0; y < h; y++) dst.set(src.subarray(y * bpr, y * bpr + w * 4), y * w * 4);
+  buf.unmap();
+  buf.destroy();
+  let bin = '';
+  const CH = 0x8000;
+  for (let i = 0; i < dst.length; i += CH) bin += String.fromCharCode.apply(null, dst.subarray(i, i + CH));
+  const cv = guestClearValue();
+  return { w, h, format: window.__adapter && window.__adapter.format, b64: btoa(bin),
+           clearValue: { r: cv.r, g: cv.g, b: cv.b, a: cv.a }, guestValue: cv.v, labelSeq: cv.seq };
+};
+
+window.__g = () => ({ frames, presented, lastValue, valueChanges, lastKey,
+                     adapter: window.__adapter || null, firstFrameAt: window.__firstFrameAt || null });
+</script>
+</body>
+</html>

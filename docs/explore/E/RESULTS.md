@@ -2,8 +2,303 @@
 
 But : trouver LE PREMIER point ou le natif et le wasm divergent.
 
-Etat : comparee, livrable principal trouve et mesure. Chaque mesure porte la commande exacte
-et la sortie brute.
+Etat : refait sur la base `1e975ac` (celle qui franchit la boucle de label). Le premier point
+de divergence est trouve, mesure, et le mecanisme qui l'explique est etabli jusqu'au bout de la
+chaine. Chaque mesure porte la commande exacte et la sortie brute.
+
+## PREMIER POINT DE DIVERGENCE
+
+**Index 10122 du flux fusionne import+syscall du thread principal** (index 9851 si on ne compte
+que les imports). Les deux builds sont identiques sur ces 10 122 evenements, arguments compris.
+
+    NATIVE  10122  sysPrxForUser::_sys_memset          (0x3300c0c0, 0x0, 0x84) -> 0x3300c0c0  lr=0x33000650
+    WASM    10122  cellGcmSys::_cellGcmInitBody        (0xd72800, 0xfa000, 0x100000) -> 0x0      lr=0x005d27f8
+
+**Nom du point : `_cellGcmInitBody`.** Meme nom des deux cotes, meme `lr` (0x005d27f8, le meme
+site d'appel dans le jeu), memes arguments. Ce qui differe est **ou le corps s'execute** :
+
+* natif : le corps **LLE** de libgcm_sys (0x3300bc20), d'ou un `_sys_memset` a
+  `lr=0x33000650` — donc du code situe DANS l'image `libgcm_sys`, invisible cote wasm ;
+* wasm : notre **HLE** `runtime/src/hle/cellGcmSys.cpp:87`, qui imprime
+  `[gcmstub] context=0xd72800 ...` (absent du log natif).
+
+Pourquoi : `runtime/src/ppu_runtime.cpp:193-202` force tout `cellGcmSys` sur le HLE quand
+`PS3BASE_HLE_OVER_LLE` est defini, et `tools/build_wasm.sh:56` le definit. Le binaire natif ne
+l'a pas (aucune occurrence dans `/root/Dev/ps3base2/build/CMakeCache.txt`).
+
+### La divergence n'est PAS le retour de cet import : elle est ce qu'il laisse derriere
+
+Les deux cotes appellent le meme import suivant 32 evenements plus loin (resynchronisation
+mesuree). Le wasm ne « part pas ailleurs » : il execute le meme enchainement, mais avec un corps
+HLE la ou le natif execute le corps firmware. Consequence mesuree, sur les compteurs d'imports :
+
+    import                                                   native       wasm
+    cellGcmSys::_cellGcmSetFlipCommand                         7344          1
+    cellGcmSys::cellGcmGetControlRegister                    196729          7
+    cellGcmSys::cellGcmAddressToOffset                       223962        102
+    cellGcmSys::cellGcmGetLabelAddress                        19842          4
+    events dont le lr est dans le texte libgcm_sys            7397         16
+    threads PPU crees                                            11          2
+
+## La cause racine unique : `cellGcmSetFlipHandler` jette son argument
+
+Mesure directe, sur le meme appel des deux cotes (trace, import `cellGcmSetFlipHandler`) :
+
+    NATIVE cellGcmSetFlipHandler  a0=0x00bbe658 a1=0x00be0000 ret=0x50200000 lr=0x002da7b0
+    WASM   cellGcmSetFlipHandler  a0=0x00bbe658 a1=0x00be0000 ret=0x00000000 lr=0x002da7b0
+
+Le jeu enregistre un handler de flip a **0x00bbe658**. Notre stub
+(`runtime/src/hle/cellGcmSys.cpp:303`) repondait `CELL_OK` et **ne stockait rien**. Un handler
+enregistre mais jamais appele, c'est la presentation qui n'existe pas.
+
+### Ce que le thread principal attend, mesure a l'endroit exact du spin
+
+Instrumentation ajoutee dans `ppu_runtime.cpp` (syscall 141, `lr==0x002dc33c`) :
+
+    [framewait] r31=0x00be0000 ea=0x00be070c byte=0 eq=1 arg=0x12c
+
+`f_002dc1e4` (mc_028, `out/ppu/mc_028.cpp:21484`) charge l'octet a 0x00be070c, met CR0 depuis
+cette valeur et **ne sort que si EQ est arme, c'est-a-dire si l'octet vaut ZERO** ; sinon il
+`sys_timer_usleep(300)` et reteste. Le byte vaut 0 et `eq=1` : il sort donc normalement a chaque
+tour, et `f_002dc29c` reboucle immediatement. Ce n'est pas un blocage sur un drapeau : c'est une
+**boucle de trame qui tourne sans jamais rien presenter**, parce que le seul evenement capable de
+la faire avancer (le handler de flip) n'est jamais appele.
+
+Preuve chiffree, longueur des series consecutives de `usleep@0x2dc33c` :
+
+    natif : 3985 series, mediane 22, max 409  (le thread fait du travail entre deux attentes)
+    wasm  : 1 seule serie de 267220          (il ne fait plus que cela)
+
+## Ce que le natif fait entre deux attentes, et que le wasm ne fait pas
+
+Le thread `_gcm_intr_t` du natif (7 345 evenements, de t=7,88 s a t=149,89 s) est un
+`sys_event_queue_receive(130)` a `lr=0x33008584` dans 7 343 cas — c'est le thread d'interruption
+RSX de libgcm_sys. Le wasm ne le cree pas : `sys_ppu_thread_create` n=3 contre n=14.
+
+    sys_130 sys_event_queue_receive   natif tids={1:18, 9:1, 11:7344}   wasm 0 appel
+    sys_147 sys_ppu_thread_create     natif 14 (tids 1 et 3)            wasm 3
+
+Et `_cellGcmSetFlipCommand` natif n=7 344 (tous depuis le thread 1, `lr=0x005d1ce8`) contre 1
+cote wasm. Les 7 344 flips natifs sont precisement ce qui produit les ecritures de `label[255]`
+que le lecteur FIFO du wasm ne peut pas produire : il n'a qu'un seul flip a consommer.
+
+Autre divergence de la meme famille, mesuree sur `cellGcmSetDisplayBuffer` :
+
+    NATIVE cellGcmSetDisplayBuffer  a0=0x0 a1=0x500000   /  a0=0x1 a1=0x8c0000
+    WASM   cellGcmSetDisplayBuffer  a0=0x0 a1=0x0        /  a0=0x1 a1=0x0
+
+Le stub ne fournit pas l'argument de sortie que le corps firmware fournit : le natif ecrit
+0x500000 puis 0x8c0000, le wasm laisse 0. C'est le meme defaut de forme — un stub qui repond
+CELL_OK sans fournir ce que le firmware fournirait.
+
+## Ce que la mesure dit de la suite
+
+1. **Le premier point de divergence est `_cellGcmInitBody` execute en HLE au lieu du LLE**, a
+   l'index 10122 du flux fusionne import+syscall (9851 en imports seuls). Il n'y a aucun ecart
+   avant, arguments compris : meme nom, meme lr, memes arguments des deux cotes.
+2. **La chaine causale est complete et mesuree** (Mesure H) : le corps LLE est ce qui cree le
+   thread d'interruption RSX (`sys_ppu_thread_create` a `lr=0x33000c1c`, present 1 fois cote
+   natif, absent cote wasm). Sans lui, `sys_130` reste a 0 contre 7 363, `_cellGcmSetFlipCommand`
+   a 1 contre 7 344, et le handler enregistre a `0x00bbe658` n'est jamais appele.
+3. Le point d'arret n'est plus `label[255]` (la boucle de label est franchie depuis `1e975ac`) :
+   c'est `pc=0x002dc20c`, une boucle de trame qui tourne a vide — 267 220 attentes consecutives
+   a `lr=0x002dc33c` contre 3985 series de mediane 22 cote natif.
+4. Deux stubs sont en cause, tous deux de la meme forme (repondre CELL_OK sans fournir ce que
+   le firmware fournit) : `cellGcmSetFlipHandler` (`cellGcmSys.cpp:303`) jette 0x00bbe658, et
+   `cellGcmSetDisplayBuffer` (`:299`) laisse son argument de sortie a 0 la ou le natif ecrit
+   0x500000 puis 0x8c0000. Le correctif a la bonne forme est donc, dans l'ordre : laisser le
+   corps LLE s'executer (ou reproduire exactement ce qu'il cree, thread RSX compris), puis
+   seulement se rabattre sur le HLE pour ce que le LLE ne peut pas faire sans GPU.
+
+---
+
+# Mesures
+
+## Mesure A — la trace wasm sur la base qui franchit la boucle de label
+
+La base a bouge en cours de piste (`d290fda` -> `1e975ac` : le lecteur FIFO). Les deux traces ont
+donc ete REFaites sur le meme arbre. Le build est celui de ce worktree, objets recompiles pour les
+fichiers instrumentes seulement :
+
+    # objets: trace.cpp, host.cpp, wasm_entry.cpp, ppu_runtime.cpp recompiles, le reste repris
+    cd /tmp/out-E && emcc <memes flags que tools/build_wasm.sh, dont -mllvm -wasm-use-legacy-eh=false> \
+      -lnodefs.js -nostdlib++ -sPTHREAD_POOL_SIZE=4 -sALLOW_MEMORY_GROWTH=1 \
+      -sINITIAL_MEMORY=268435456 -sMAXIMUM_MEMORY=3221225472 -sERROR_ON_UNDEFINED_SYMBOLS=0 \
+      --preload-file /tmp/disk@/ --pre-js /root/Dev/explore-E/tools/trace_pre.js \
+      -o game.js obj/*.o libc++-mt-wasmexcept.a libc++abi-mt-wasmexcept.a
+
+Note mesuree : `-lnodefs.js` est NECESSAIRE. Sans lui la pre-js echoue avec
+`ReferenceError: NODEFS is not defined`, le fichier de trace n'est jamais cree et `trace.py` leve
+`FileNotFoundError`. La trace du build precedent avait ete perdue exactement comme ca.
+
+Sortie brute de la trace :
+
+    records 337939, 1.098s - 99.171s
+      thread   2
+      sys      273121
+      import   64816
+    threads:
+      PPU main_thread                          337937
+      PPU MinecraftSpursHdlr0                        2
+
+## Mesure B — le premier point de divergence, par l'outil
+
+Outil etendu pour cette piste : `tools/divergence.py` (census par NOM, syscalls RSX par NUMERO,
+premier ecart sur le flux fusionne, resynchronisation, puis etat de fin). Commande exacte :
+
+    cd /root/Dev/explore-E/tools && python3 divergence.py \
+      --native /tmp/E-native-trace.bin --wasm /tmp/wasm-trace-dir/wasm-trace.bin
+
+Sortie brute (sections 3 a 5) :
+
+    === 3. first divergence on the merged main-thread stream (name, a0-a2, lr) ===
+    merged events: native 1318342, wasm 337936
+    FIRST DIVERGENCE at merged index 10122 (native 1318342, wasm 337936)
+    10121  both   imp cellGcmSys::cellGcmInitDefaultFifoMode     (0x1, 0x0, 0xffffffff) lr=0x002da754
+    10122  NATIVE imp sysPrxForUser::_sys_memset                 (0x3300c0c0, 0x0, 0x84) lr=0x33000650
+    10122  WASM   imp cellGcmSys::_cellGcmInitBody               (0xd72800, 0xfa000, 0x100000) lr=0x005d27f8
+    import-only index of that point: native 9851, wasm 9851
+
+    === 4. resynchronisation and the NEXT divergence after it ===
+    resync: wasm 10122 <-> native 10154
+      gap: native skipped 32 events, wasm skipped 0
+      identical for 1 merged events after the resync point
+      NEXT DIVERGENCE: native 10155, wasm 10123
+      NAT 10154  imp cellGcmSys::_cellGcmInitBody      (0xd72800, 0xfa000, 0x100000) lr=0x005d27f8
+      NAT 10155  imp cellGcmSys::cellGcmSetDebugOutputLevel (0x2, 0x10a, 0x1) lr=0x002da778
+      WSM 10122  imp cellGcmSys::_cellGcmInitBody      (0xd72800, 0xfa000, 0x100000) lr=0x005d27f8
+      WSM 10123  imp cellGcmSys::cellGcmSetDebugOutputLevel (0x2, 0xfa000, 0x100000) lr=0x002da778
+
+    === 5. what the main thread does at the END of each trace ===
+    native: last 4000 merged events (of 1318342)
+       imp cellGcmSys::cellGcmAddressToOffset         1046
+       imp cellGcmSys::cellGcmGetControlRegister      1010
+       imp sysPrxForUser::sys_time_get_system_time    900
+       sys sys_145                                    240
+       imp cellGcmSys::cellGcmGetLabelAddress           93
+    wasm  : last 4000 merged events (of 337936)
+       sys sys_141                                    4000
+
+Lecture : apres `_cellGcmInitBody`, le deuxieme ecart n'est pas une instruction differente mais
+**la MEME instruction avec un autre argument** — `cellGcmSetDebugOutputLevel(0x2, 0x10a, 0x1)`
+cote natif, `(0x2, 0xfa000, 0x100000)` cote wasm. Ce sont les registres r4/r5 laisses par le corps
+precedent : le corps HLE ne les laisse pas comme le corps LLE. C'est la signature d'un corps
+different, pas d'un enchainement different.
+
+## Mesure C — la longueur des series d'attente de la boucle de trame
+
+    cd /root/Dev/explore-E/tools && python3 divergence.py --native /tmp/E-native-trace.bin       --wasm /tmp/wasm-trace-dir/wasm-trace.bin
+
+    === 6. how long each side waits, uninterrupted, in the frame loop ===
+    native: 3985 runs of consecutive usleep@0x2dc33c
+       max=409 median=22 sum=88898
+       most common lengths: [(20, 158), (21, 157), (24, 155), (23, 154), (22, 154)]
+    wasm  : 1 runs of consecutive usleep@0x2dc33c
+       max=267220 median=267220 sum=267220
+       most common lengths: [(267220, 1)]
+
+## Mesure D — le handler de flip, arguments des deux cotes
+
+    NATIVE cellGcmSetFlipHandler  a0=0x00bbe658 a1=0x00be0000 ret=0x50200000 lr=0x002da7b0
+    WASM   cellGcmSetFlipHandler  a0=0x00bbe658 a1=0x00be0000 ret=0x00000000 lr=0x002da7b0
+    NATIVE cellGcmSetDisplayBuffer  a0=0x0 a1=0x500000   /  a0=0x1 a1=0x8c0000
+    WASM   cellGcmSetDisplayBuffer  a0=0x0 a1=0x0        /  a0=0x1 a1=0x0
+
+`a1=0x00be0000` est la structure du jeu ; `a0=0x00bbe658` est le handler. Le wasm recoit
+exactement les memes arguments et n'en conserve aucun — le stub est
+`HLE_FUNC(cellGcmSys, cellGcmSetFlipHandler) { ret(ctx, 0); }` (`cellGcmSys.cpp:303`).
+
+## Mesure E — l'attente de la boucle de trame, lue a l'endroit exact du spin
+
+Instrumentation ajoutee a `runtime/src/ppu_runtime.cpp` (branche tracee du dispatch, puis dans
+`syscall`), sortie brute :
+
+    [fliphandler] cellGcmSetFlipHandler(0x00bbe658) mapped=1
+    [framewait] r31=0x00be0000 ea=0x00be070c byte=0 eq=1 arg=0x12c
+
+`f_002dc1e4` (`out/ppu/mc_028.cpp:21484`) :
+
+    21491  ctx.gpr[3] = ld8(base, r31 + 1804);
+    21492  cr_set(ctx, 0, int32 gpr[3], 0);
+    21493  if (bc_cond_at(ctx, 0x2dc200, 4, 2)) goto L_2dc21c;   // sort si EQ
+    21495      gpr[11] = 141; gpr[3] = 300; syscall(...);       // usleep(300)
+    21500      if (bc_cond_at(ctx, 0x2dc218, 12, 2)) goto L_2dc204;
+
+Donc : sortie quand l'octet vaut 0, attente quand il est non nul. Il vaut 0 et `eq=1` : la
+fonction rend la main a chaque tour, et `f_002dc29c` (la boucle de trame) la rappelle aussitot.
+Le thread ne bloque sur rien : **il n'a rien d'autre a faire, parce qu'aucun flip n'est jamais
+presente**.
+
+## Mesure F — le thread d'interruption RSX que le wasm ne cree pas
+
+    == natif : threads 11
+       sys_130 sys_event_queue_receive   n=7363    tids={1:18, 9:1, 11:7344}
+       sys_147 sys_ppu_thread_create     n=14      tids={1:13, 3:1}
+    == wasm  : threads 2
+       sys_130 sys_event_queue_receive   n=0
+       sys_147 sys_ppu_thread_create     n=3       tids={1:3}
+
+Le thread 11 s'appelle `_gcm_intr_t` : 7 345 evenements, 7 344 `sys_event_queue_receive` a
+`lr=0x33008584` (dans libgcm_sys), de t=7,88 s a t=149,89 s. C'est lui qui traite les
+interruptions RSX et declenche les flips. Le wasm ne le cree jamais, et `_cellGcmSetFlipCommand`
+y passe de 7 344 a 1.
+
+## Mesure H — le thread que le CORPS LLE cree, et que le HLE ne cree pas
+
+Le lien direct entre le premier point de divergence et le symptome. Les appels
+`sys_ppu_thread_create` des deux cotes, avec leur site d'appel :
+
+    natif : 14 appels
+       lr=0x3000450c r3=0x10000334   (liblv2)
+       lr=0x30004d7c r3=0x10000644   (liblv2)  x11
+       lr=0x33000c1c r3=0x0 r4=0x10a  <-- DANS libgcm_sys, une seule fois
+    wasm  : 3 appels
+       lr=0x3000450c r3=0x10000334
+       lr=0x30004d7c r3=0x10000644   x2
+       (aucun appel a lr=0x33000c1c)
+
+`0x33000c1c` est dans `f_330009a8` de `libgcm_sys` : c'est le **corps firmware de
+`_cellGcmInitBody`** qui cree son thread d'interruption RSX. Ce thread est `_gcm_intr_t`, celui
+qui fait les 7 344 `sys_event_queue_receive` a `lr=0x33008584` (Mesure F).
+
+Autrement dit la chaine est complete et entierement mesuree :
+
+1. index 10122 : `_cellGcmInitBody` part sur le HLE au lieu du LLE (Mesure B) ;
+2. donc `f_330009a8` ne s'execute pas, donc **le thread RSX n'est jamais cree**
+   (`sys_ppu_thread_create` 3 contre 14, aucun a `lr=0x33000c1c`) ;
+3. donc personne ne consomme les evenements RSX (`sys_130` 0 contre 7 363) ;
+4. donc aucun flip n'est presente (`_cellGcmSetFlipCommand` 1 contre 7 344) ;
+5. donc le handler enregistre a `0x00bbe658` n'est jamais appele (Mesure D) ;
+6. donc la boucle de trame tourne a vide : 267 220 attentes consecutives (Mesure C).
+
+## Mesure G — l'execution du code de libgcm_sys, compte par `lr`
+
+    native: events whose lr is inside libgcm_sys text [0x33000000,0x3300b730): 7397 of 2036571
+    wasm  : events whose lr is inside libgcm_sys text [0x33000000,0x3300b730):   16 of  337939
+
+    natif, principaux sites: lr=0x33008584 sys_130 n=7343 | lr=0x3300880c lwmutex_lock n=8
+                             lr=0x33002b58 sys_674 n=5 | lr=0x330049d0 sys_672 n=2
+    wasm , principaux sites: lr=0x3300880c lwmutex_lock n=5 | lr=0x33002b58 sys_674 n=5
+                             lr=0x33002f00 sys_674 n=1
+
+Les 16 evenements wasm sont ceux du corps LLE de `_cellGcmInitBody` qui, lui, n'est PAS force sur
+le HLE (seul le nom `_cellGcmInitBody` n'a pas de HLE prioritaire... il en a un ; ce sont les
+imports `cellGcmSys` internes du corps qui remontent). Le point reste : le code de libgcm_sys est
+quasi mort cote wasm.
+
+
+# Historique — mesures faites sur la base `d290fda` (AVANT le lecteur FIFO)
+
+Ce bloc est conserve tel quel parce qu'il documente comment la premiere reponse a ete trouvee.
+Deux de ses conclusions sont PERIMEES depuis la base `1e975ac` :
+
+* **Mesure 5** annoncait l'index **9850** ; en flux fusionne import+syscall c'est **10122**,
+  et en imports seuls **9851** (l'ancien comptage omettait le `sys_95` intercale). Le nom du
+  point, `_cellGcmInitBody`, est inchange et confirme par la Mesure B ci-dessus.
+* **Mesure 6** decrivait l'arret sur `label[255]` a `0x002da5b4` avec `cellGcmGetLabelAddress`
+  rendant `0x1fe0`. La boucle de label est FRANCHIE : le point d'arret est `pc=0x002dc20c`, et
+  `cellGcmGetLabelAddress` rend `0x01000ff0`, une adresse mappee. Le sujet est desormais le
+  handler de flip (Mesure D).
 
 ## Antecedents (grep refs/ et docs/webassembly/ avant toute hypothese)
 
@@ -105,7 +400,7 @@ Le natif cree 11 threads, le wasm 2. Sortie brute de la trace wasm (`trace.py in
 Le wasm n'a **aucun** `_gcm_intr_thread` (le natif en a un, cree a t=0,402, qui execute 7 344 des
 7 397 evenements dont le `lr` est dans le texte de libgcm_sys).
 
-## Mesure 5 — LIVRABLE : le premier point de divergence est `_cellGcmInitBody`, a l'index 9850
+## Mesure 5 — `_cellGcmInitBody` identifie (index 9850 ici ; 10122 en flux fusionne, cf. Mesure B)
 
 Outil ecrit ici : `tools/difftrace.py` (nouveau). Il compare, thread par thread, les imports dans
 l'ordre, apres trois normalisations declarees :
@@ -329,7 +624,7 @@ decoule tout le reste — pas de `sys_rsx_memory_allocate`, pas de region video 
 de `fw.label_addr`, `cellGcmGetLabelAddress(255) = 0x1fe0` non mappe, et la boucle de
 `f_002da36c` sur label[255] qui n'a plus de producteur.
 
-## Ce que la mesure dit de la suite
+## Ce que la mesure disait de la suite (base `d290fda`, conserve pour l historique)
 
 1. Le premier ecart n'est ni le GPU, ni le FIFO, ni le SPU : c'est **le corps de `_cellGcmInitBody`**,
    a l'index 9850 des imports du thread principal.
