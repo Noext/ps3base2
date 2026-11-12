@@ -853,3 +853,18 @@ I  22.680584 ppu: process exit -2147418100 ... liblv2+0xc7e8 spurs-abort-tail (_
 Unchanged from the pre-rebase run: 601 flips, 0 crash events, the same SPURS
 abort at 22.7 s. The two lifted modules are in the table, RDR does not ask for
 them, and nothing else moved.
+## 11. The deliverable table
+
+| library | RDR imports it? | current service | action |
+|---|---|---|---|
+| **libresc** (`cellResc`) | **no** -- 0 of 447 imports; 0 of the 16 `cellSysmoduleLoadModule` ids; never requested at run time | **not at all**: no lifted image, no PRX in the RDR tree, and **0 HLE handlers** | **lifted** into the recipe (147 functions, 26 exports, export check PASS). Not enabled in `out-rdr`: the title never calls it, so it would only add image-table entries. Available the day a title that does call it appears. |
+| **libspurs_jq** (`cellSpursJq`) | **no** -- 0 imports, id 0x50 never passed to `cellSysmoduleLoadModule` | **not at all**: no HLE handler, not in the RDR image list (it *is* in `recomp/lle_modules-proven.txt` for the other titles) | **lifted** into the recipe (86 functions, 68 exports, PASS). Its own dependency graph closes: 21 imports, 21 LLE, 0 none. Not enabled for RDR, same reason. |
+| **libfiber** (`cellFiber`) | **yes** -- 10 imports | **LLE**, fully: 10/10 resolve to `libfiber` at 0x36000000; RDR loads `libfiber.sprx` at run time | **nothing to do**. Verified: 47/47 exports correct, 0 unresolved. |
+| **libfs** (`sys_fs`) | **yes** -- 21 imports | **LLE**, fully: 21/21 resolve to `libfs` at 0x34000000; loaded at run time | **nothing to do**. Verified: 93/93 exports correct. |
+| **libsync2** (`cellSync2`) | **no** -- 0 imports, id 0x55 never passed | **HLE only**: 14 handlers in `runtime/src/hle/cellSync2.cpp`; **no PRX exists in firmware 4.91 at all** | **cannot be lifted** -- there is no `cellSync2` module in any of the 33 PRX files. The HLE handlers stay as the only service. Not imported, so this costs nothing today. |
+| **libsail** (`cellSail`) | **no** -- 0 imports, id 0x1d never passed | **not at all**: no lifted image, no HLE handler | **lifted but inert** (600 functions, 141 exports, PASS). It is not enabled because **49 of its own 90 imports do not resolve**: 5 of its dependency PRX (`libpamf`, `libvpost`, `libmp4`, `libsailavi`, `libapostsrcmini`) are not in firmware 4.91. Enabling it would add a module whose first media call goes nowhere. |
+
+Four of the six are never imported by this title. Of the two that are, both are
+already fully served LLE. **The inventory needs no fix for RDR, and that is the
+finding**: the SPURS abort at 22.7 s is not a missing library, it is the
+`libsre` path the runtime already handles.
