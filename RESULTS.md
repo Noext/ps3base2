@@ -108,3 +108,59 @@ invention: RPCS3 never sends this event (its SPU access-violation path is a TODO
 `Utilities/Thread.cpp:2202-2205`), so there is no reference payload to copy, and
 the real layout is only discoverable from libsre's decoder. The next measurement
 recovers it.
+### M4 -- the exception payload layout, recovered by measurement
+
+RPCS3 has no payload to copy: its SPU access-violation path is a TODO that
+pauses the emulator instead of sending the event
+(`rpcs3/Utilities/Thread.cpp:2202-2205`). The layout therefore had to be read out
+of the consumer. libsre's exception dump prints one line per cause, so the table
+below is the decoder's own vocabulary (`strings -a out-rdr/gen/reloc/libsre.elf`):
+
+```
+  cause: DMA alignment error
+  cause: DMA command error
+  cause: SPU error
+  cause: MFC FIR
+  cause: MFC segment  MFC_DAR: 0x%llx
+  cause: MFC storage  MFC_DAR: 0x%llx
+  cause: Stop break
+  cause: Halt
+  cause: Unknown signal  SPU_Status: 0x%llx
+  cause: MAT  MFC_DAR: 0x%llx
+  cause: Unknown exception
+```
+
+Payload varied through a temporary probe (`GOWA_SPU_EXCPT_PROBE=d1,d2,d3`),
+one run per hypothesis, each read back from the guest's own printout:
+
+| data1 | data2 | data3 | guest printed |
+|---|---|---|---|
+| 0x00000AAA | 0x0000000B | 0x0000000C | `SPU thread: 0x00000aaa  NPC: 0x00000  cause: Unknown exception` |
+| 0x200 | 0x00000001 | 0x0 | `SPU thread: 0x00000200  NPC: 0x00000  cause: DMA alignment error` |
+| 0x200 | 0x0642800000005 | 0xDEADBEEF | `SPU thread: 0x00000200  NPC: 0x06428  cause: Unknown exception` |
+| 0x200 | 0x0642800000020 | 0x0 | `SPU thread: 0x00000200  NPC: 0x06428  cause: MFC storage  MFC_DAR: 0x0` |
+
+Three facts follow, each with a run behind it:
+
+- **data1 is the SPU thread id** -- printed verbatim as `0x%08x`.
+- **data2's high word is NPC**, printed as `0x%05x`; the low word is the cause.
+- **The cause is a BITMASK, not an index.** Value 1 prints "DMA alignment
+  error" (bit 0) and value 0x20 prints "MFC storage" (bit 5); values 5 and 0xB
+  select no single table line and fall through to "Unknown exception". The
+  table is one entry per bit, which is why an index reading of 5 or 11 did not
+  work.
+- **data3 is MFC_DAR**, printed by the two causes that have a DAR
+  (`0x%llx`).
+
+**An unmapped effective address is bit 5, "MFC storage"** -- the address is
+valid enough to decode but names no storage. "MFC segment" (bit 4) is the
+address-translation miss; a guest address that is simply not mapped is the
+storage case, which is what the console reports for it.
+
+```
+$ grep -n 'SPU thread:.*NPC' /tmp/U2-probeD.log
+3073:I 112.142084 [2433121] tty: [0] 	SPU thread: 0x00000200  NPC: 0x06428  cause: MFC storage  MFC_DAR: 0x0
+```
+
+The NPC is 0x06428, the same pc this runtime logs for the refused transfer: the
+guest's report and the runtime's report now agree on the instruction.
