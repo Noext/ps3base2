@@ -200,3 +200,41 @@ invocation because regress.sh runs the Vulkan presenter (window present), which
 is the other path. This change is not sufficient for RDR PASS on its own.
 
 
+
+## Summary
+
+The cause, verified rather than re-derived: rsv::reserve() in runtime/src/ppu_ops.cpp:80
+took `blk = ea & ~7` and copied 8 bytes, so a reservation was one doubleword, and
+`store_conditional()` refused any stwcx. whose target was not in that same
+doubleword (line 120). Measured with tests/reservation_line.cpp against main
+HEAD 22d2a0c: 3 of 6 checks fail -- a bypass store to another block of the
+reserved line does NOT cancel the reservation, stwcx. to another word of the
+reserved line fails when it should succeed, and ldarx behaves the same way.
+
+The fix: the reservation is the 128-byte line, the snapshot is the full line,
+lwarx/ldarx read out of it at `ea & 127`, store_conditional() accepts a target
+anywhere inside the reserved line, and commit_if is called with the full line as
+both expected and data. commit_if already compared the expected bytes against the
+line's current contents, so with a full-line expected value it now sees writes
+that never bumped the version -- the 81 direct vm::ptr writes (loader, HLE,
+RSX uploader, and dcbz's memset). That is RPCS3's own test:
+`old_data != data || rtime != (res & -128)`.
+
+Measured effect, headless path held fixed on both sides:
+
+    baseline (main)   541 flips, abort 23.5 s, worst frame 335.8 ms, 6 frames >50 ms
+    with the fix     1921 flips, abort 87.0 s, worst frame  38.7 ms, 0 frames >50 ms
+                     crash events 0 -> 0
+
+The flip gain is duration, not frame rate (24.7 -> 22.3 flips/s, unchanged within
+noise): what the fix buys is that the title runs 3.7x longer before libsre aborts
+SPURS. The SPURS abort is a separate defect and is still there. Under
+tools/regress.sh (Vulkan presenter) RDR reads the Social Club notice off the
+captured frame at 13 s but still aborts at 25 s, so this change alone does not
+meet the RDR PASS bar and the results say so.
+
+Tests: tests/reservation_line.cpp, 7 checks, all pass on the fix and 3 fail on
+main. Whole suite 35/35 ctest pass on the rebased branch. Diff touches 5 source
+files and deletes nothing.
+
+
