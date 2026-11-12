@@ -214,6 +214,16 @@ int64_t context_attribute(uint32_t package, uint64_t a3, uint64_t a4, uint64_t a
         vm::write32(g_rsx.dma_control + 0x40, static_cast<uint32_t>(a4));
         return CELL_OK;
     case 0x102: {
+        {
+            /* V-H: direct count of the HLE path that arms a flip (criterion 3 of
+             * the H check). Without it a zero flip count cannot distinguish
+             * "0x102 never called" from "0x102 called but produces nothing". */
+            static std::atomic<uint64_t> p102{0};
+            const uint64_t n102 = p102.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (n102 <= 5 || (n102 % 120) == 0)
+                LOG_INFO("p102", "context_attribute 0x102 call %llu (arg3 0x%llx arg4 0x%llx)",
+                         (unsigned long long)n102, (unsigned long long)a3, (unsigned long long)a4);
+        }
 #if defined(PS3BASE_FLIP_PROBE) && PS3BASE_FLIP_PROBE
         /* Are the flips OUR counter or the game's activity? Count the vblank
          * packets (package 0x102) that drive gpu::flip. If the two numbers match,

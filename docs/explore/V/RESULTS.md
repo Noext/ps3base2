@@ -1,488 +1,276 @@
-# PISTE V — Verificateur
+# PISTE V/H — VERIFICATEUR : critere mecanique, mesuré sur /root/Dev/h-V @ 375f0e5
 
-Base : /root/Dev/wasm-base @ d290fda. Worktree : /root/Dev/explore-V (branche explore/V).
-Arbres partages lies (bin out out-mc third_party fw ref). Out dir : /tmp/out-V.
+Worktree : `/root/Dev/h-V` (branche `explore/hV`), base `375f0e5`, HEAD verifie ci-dessous.
+Out dir UNIQUE : `/tmp/out-V`. Cache d'objets : 201 objets issus de `/tmp/out-V` (d290fda).
+Oracle natif : binaire bati DEPUIS les sources de `git HEAD` de `/root/Dev/ps3base2`
+(`da6866a`), relie a `/tmp/ps3base-H` puis installe dans `build/ps3base`.
 
-Livrable : scripts/regress-wasm.sh (verdict wasm, < 10 min a cache chaud),
-scripts/regress-native-V.sh (le regress natif, serialise),
-scripts/replay-fix.sh (rejoue un correctif sur un module issu de d290fda),
-et le tableau "piste | annonce | rejoue | resultat" en section 5.
+Regle compteurs respectee : chaque compteur est lu par VALEUR
+(`grep -oE 'nom=[0-9]+' | tail -1`), jamais par `grep -c` sur un mot.
 
 ---
 
 ## 0. Antecedents (grep -Rn dans refs/ et docs/, AVANT toute hypothese)
 
-```
-$ grep -Rn 'cellGcmGetLabelAddress' /root/Dev/ps3base2/refs/rpcs3/rpcs3/Emu/Cell/Modules/cellGcmSys.cpp
-/root/Dev/ps3base2/refs/rpcs3/rpcs3/Emu/Cell/Modules/cellGcmSys.cpp:159:u32 cellGcmGetLabelAddress(u8 index)
-/root/Dev/ps3base2/refs/rpcs3/rpcs3/Emu/Cell/Modules/cellGcmSys.cpp:161:	cellGcmSys.trace("cellGcmGetLabelAddress(index=%d)", index);
-/root/Dev/ps3base2/refs/rpcs3/rpcs3/Emu/Cell/Modules/cellGcmSys.cpp:1554:	REG_FUNC(cellGcmSys, cellGcmGetLabelAddress);
-
-$ sed -n '159,163p' .../Cell/Modules/cellGcmSys.cpp
-u32 cellGcmGetLabelAddress(u8 index)
-{
-	cellGcmSys.trace(...);
-	return _cellGcmGetContext()->fw.label_addr + 0x10 * index;
-}
-
-$ grep -Rn 'label_addr' /root/Dev/ps3base2/refs/rpcs3/rpcs3/Emu/Cell/lv2/sys_rsx.cpp
-.../sys_rsx.cpp:554:	ctx->fw.label_addr = vm::cast(*lpar_reports);
-.../sys_rsx.cpp:1168:	vm::_ptr<atomic_t<u128>>(ctx->fw.label_addr + 0x10)->store(u128{});
-
-$ sed -n '14,34p' .../Emu/RSX/NV47/HW/nv47_sync.hpp
-template <bool FlushDMA, bool FlushPipe>
-static void write_gcm_label(context* ctx, u32 type, u32 address, u32 data)
-{
-    atomic_fence_seq_cst();
-    const bool is_flip_sema = (address == (ctx->fw.label_addr + 0x10) || address == (RSX(ctx)->device_addr + 0x30));
-    if (!is_flip_sema)
-    {
-        ...
-        if (vm::_ref<RsxSemaphore>(address) == data)
-        {
-            // It's a no-op to write the same value ...
-            return;
-        }
-```
-
 | Finding | Source (path:ligne) | S'applique ici ? |
 |---|---|---|
-| le label est label_addr + 0x10*index : une adresse MAPPEE, pas un offset | refs/rpcs3/.../cellGcmSys.cpp:159-163 | oui — c'est le point que la base ne fait pas (base : rend l'offset brut 0x1fe0) |
-| label_addr vient de *lpar_reports (zone reports de context_allocate) | refs/rpcs3/.../sys_rsx.cpp:554 | oui — informe les correctifs des pistes B et wasm-main |
-| le seul magasin de 16 octets est le semaphore de FLIP, et il ecrit 16 ZEROS | refs/rpcs3/.../sys_rsx.cpp:1168 | oui — la consigne "release = 16 octets, valeur puis zeros" est refutee (cf. piste B) |
-| une release ecrit 4 octets (RsxSemaphore = be_t<u32>) et ne fait rien si la valeur est deja egale | refs/rpcs3/.../nv47_sync.hpp:14-34 | oui — la base ecrit aveuglement |
-| rien dans RPCS3 ne reveille un label sans GPU : c'est le RSX thread qui ecrit | refs/rpcs3/.../nv47_sync.hpp (release) | oui — c'est pourquoi un stub sans GPU ne reveille jamais label[255] |
-| le natif atteint le menu ; le wasm n'y arrive pas | docs/explore/I/RESULTS.md §4-§7 | oui — le natif est l'oracle, et il faut DISPLAY=:0 |
-| le marqueur 'ui >= 2' de wasm_entry.cpp est faux (thread_options_load existe 42 s avant le menu) | docs/explore/I/RESULTS.md §10, message orchestrateur | oui — le verificateur le teste (section 3.4) |
+| le dump natif `rsxb` est pris AVANT la classification du paquet, avec `get/ea/raw x4/count/method/noninc/put` | `/root/Dev/ps3base2/runtime/src/lv2/rsx.cpp:619` | **oui** — c'est le format exact que le critere 1 compare, et le point d'insertion cote wasm |
+| le wasm a un instrument `[hdr200]` au meme endroit mais avec un AUTRE format (`raw=0x.. reg= count= args=..`) | `runtime/src/gpu/gcm_fifo.cpp:499` | **oui** — un format different ne se compare pas champ par champ ; j'ajoute `hdr40` au format natif |
+| `GCM_FLIP_COMMAND = 0xFEAC>>2` est le flip ; `GCM_FLIP_HEAD = 0xE920>>2` n'en est pas un | `refs/rpcs3/rpcs3/Emu/RSX/gcm_enums.h:826-829` | **oui** — critere 3 : c'est `0xFEAC` que `g_flips` compte |
+| le natif cree `_gcm_intr_thread` a t=0,588 (prio 1, stack 0x4000, entree 0x3300be54) | `native-3000.log:3` | **oui** — critere 2 : presence exigee cote wasm |
+| le natif ne passe PAS par notre HLE `_cellGcmInitBody` : 0 ligne `gcmstub`/`imp119` dans le run natif | mesure ci-dessous §2.4 | **oui** — c'est la divergence de contexte annoncee par Z3 |
+| `PS3BASE_HLE_OVER_LLE` detourne tous les imports `cellGcmSys` vers le HLE | `runtime/src/ppu_runtime.cpp:193-206` | **oui** — c'est pourquoi le wasm a un `gcmstub` et le natif non |
+| le test `tests/rsx_fifo_synth.sh` n'est PAS dans l'arbre a 375f0e5 (il n'existe que sur `explore/zZ4`) | `git log --all --diff-filter=A -- tests/rsx_fifo_synth.sh` -> `8df4d6b` | **oui** — critere 4 : je l'importe tel quel dans le worktree pour le mesurer |
 
 ---
 
-## 1. Reference : ce que la base fait, mesure
-
-Aucun script de verification wasm n'existait (scripts/ vide au depart ; tools/regress.sh ne connait
-que le natif). Le premier travail a donc ete d'etablir la reference chiffree.
-
-Sortie brute du run de reference retenu (/tmp/V-regress-final.log, 10:23:26) :
+## 1. Protocole et artefacts
 
 ```
-$ cd /root/Dev/explore-V && OUT=/tmp/out-V scripts/regress-wasm.sh
+$ git -C /root/Dev/wasm-base worktree add /root/Dev/h-V -b explore/hV 375f0e5
+Preparing worktree (new branch 'explore/hV')
+HEAD is now at 375f0e5 G0: the native loads 7 images not 9 ...
 
-regress-wasm: root /root/Dev/explore-V
-regress-wasm: mode relink, run budget 160s, objects /tmp/out-V
-
-GREEN test hook_guard: HOOK-MECHANISM-OK
-GREEN test command_ring: command_ring: 0 failures
-GREEN test audio_ring: audio_ring: 0 failures
-GREEN test spurs: spurs: 12 checks, 0 failures
-
-GREEN build: relink of 200 objects in 33s
-GREEN build: game.wasm 45405029 bytes
-      /tmp/out-V/game.wasm: 49718 functions, largest 737751 bytes (no name section), total code 44812961 bytes
-
-GREEN run: exit 124 (alive at the 160s budget), 825 log lines
-      last sample: t=140s pc=0x002da5b4
-GREEN run: pc 0x002da5b4, the usleep arm of f_002da36c's wait loop
-GREEN run: main_thread blocked in 141 (usleep) with lr 0x2da598
-      usleep 141 calls: first second 5729, peak cumulative 954755
-GREEN run: usleep 141 is the traffic (peak 954755 calls in one report window)
-      note: MAIN MENU REACHED absent (expected on d290fda)
-
-regress-wasm: GREEN
-exit=0
+$ cd /root/Dev/h-V && git rev-parse HEAD
+375f0e5...
 ```
 
-Point mesure, en clair : module lie (45 405 029 octets), titre vivant jusqu'au budget (exit 124),
-pc bloque a 0x002da5b4 dans f_002da36c, main_thread endormi en syscall 141 avec lr 0x2da598,
-~950 000 usleep cumules. C'est exactement l'etat decrit dans la consigne.
+Instrumentation ajoutee (logs seulement, aucun changement de comportement) :
 
-### 1.1 Deux mesures de la base qui ont du etre corrigees dans le script
+1. `runtime/src/gpu/gcm_fifo.cpp`, dans `drain()`, AU MEME POINT que le natif (avant
+   jump/call/return), tag `hdr40`, 40 premiers en-tetes au format natif exact.
+2. `runtime/src/lv2/rsx.cpp`, en tete de `case 0x102:` de `context_attribute`, compteur
+   `p102` (5 premiers puis 1 sur 120). Sans lui, un zero de flips ne distingue pas
+   « 0x102 jamais appele » de « 0x102 appele mais sans effet ».
 
-Ces deux corrections sont des MESURES, pas des gouts :
-
-**(a) le compteur d'usleep n'est pas cumulatif jusqu'au bout.** Le runtime remet a zero son
-histogramme d'une seconde apres le late dump, ce qui fait chuter la valeur d'un coup :
-
-```
-$ grep -ao 'usleep141=[0-9]*' /tmp/regress-wasm-last.log | cut -d= -f2 \
-    | awk 'NR>1 && $1<prev {print NR": reset "prev" -> "$1} {prev=$1}'
-5: reset 22216 -> 5665
-152: reset 852656 -> 5731
-```
-
-Lire la derniere ligne donnerait 5731 et un faux ROUGE. Le script prend le MAXIMUM de la serie
-(852 656 pour ce run, 954 755 pour le run final).
-
-**(b) le compte de la premiere seconde est sensible a la charge.** Mesure a 5 547 (consigne),
-5 268, 5 380, 5 729, et **4 818** sous une charge de 58 sur 32 coeurs — ce dernier cas faisait
-passer au ROUGE un run sain. Le dernier run de controle (10:41, /tmp/V-regress-committed.log) a
-meme mesure **7** : un relink de 75 s sous charge a decale le premier rapport d'une seconde, donc
-"la premiere seconde" n'est pas forcement une seconde de jeu. Le critere retenu est le pic
-cumulatif (plancher 100 000), a un ordre de grandeur du regime "sonde active" (672 233 a 954 755
-selon la charge), et jamais le debut de run.
+Build : relink des 201 objets caches + 2 TU recompiles (`gcm_fifo.cpp`, `rsx.cpp`),
+meme recipe que `tools/build_wasm.sh` (CFLAGS et LDFLAGS copies a l'identique).
 
 ---
 
-## 2. Le script livre
+## 2. Les cinq criteres, mesures
 
-    /root/Dev/explore-V/scripts/regress-wasm.sh
+### Critere 1 — les 40 premiers en-tetes FIFO wasm identiques au natif : **FAUX**
 
-Trois etages, chacun juge mecaniquement (code de sortie et compteur, jamais un grep de mot) :
-
-| etage | critere | mesure de reference |
-|---|---|---|
-| 1 tests | spurs (12 checks), audio_ring, command_ring, hook_guard : exit 0 | 4/4 verts, ~5 s |
-| 2 build | les 200 objets se relient ; game.wasm 45 405 029 octets +/-5% | relink 33-96 s selon charge |
-| 3 run | exit 124 ; pc 0x002da5b4 ; "blocked in 141 ... lr 0x2da598" ; pic usleep >= 100 000 | 160 s |
-
-Duree totale mesuree : **74,67 s** a cache chaud sur un run a budget court
-(`/usr/bin/time` : `WALL 74.67 s`, tests + relink + 25 s de run). A budget nominal 160 s le mur
-est d'environ 3 min 40, sous la barre des dix minutes.
-
-Options : --fast (pas de relink), --build (rebuild complet ~40 min, hors budget), --list. Le
-script cherche lui-meme un cache d'objets ($OUT/obj, sinon le plus recent /tmp/out-*/obj avec
->= 100 objets) pour qu'un verificateur d'une autre piste n'ait pas a connaitre son emplacement.
-
-### 2.1 Contre-epreuve : le script doit savoir dire ROUGE
-
-Un verificateur qui ne sort jamais 1 ne verifie rien. Run negatif a budget de 3 s :
+Sortie brute du comparateur (champ ea, raw x4, count, method) :
 
 ```
-$ OUT=/tmp/out-V RUN_SECONDS=3 scripts/regress-wasm.sh --fast
-GREEN test hook_guard: HOOK-MECHANISM-OK
-GREEN test command_ring: command_ring: 0 failures
-GREEN test audio_ring: audio_ring: 0 failures
-GREEN test spurs: spurs: 12 checks, 0 failures
-GREEN build: relink of 200 objects in 34s
-GREEN build: game.wasm 45405029 bytes
-GREEN run: exit 124 (alive at the 3s budget), 210 log lines
-      last sample: t=1s pc=0x002da5b4
-GREEN run: pc 0x002da5b4, the usleep arm of f_002da36c's wait loop
-RED   run: no 'blocked in 141 ... lr 0x2da598' line
-      usleep 141 calls: first second 5397, peak cumulative 5397
-RED   run: only 5397 usleep 141 calls at peak (floor 100000)
-      note: MAIN MENU REACHED absent (expected on d290fda)
-regress-wasm: RED
-exit=1
+native read 40 wasm read 40
+identical: 0 /40
+ idx0 nat ('0x40101000', '00040060', '56616661', '00040064', '00000030', '1', '0x0060')
+       was ('0x40101000', '00041d6c', '00000ff0', '00041d70', '00010000', '1', '0x1d6c')
+ idx1 nat ('0x40101008', '00040064', '00000030', '00040068', '00000001', '1', '0x0064')
+       was ('0x40101008', '00041d70', '00010000', '00040064', '00000ff0', '1', '0x1d70')
+ idx2 nat ('0x40101010', '00040068', '00000001', '00040060', '66616661', '1', '0x0068')
+       was ('0x40101010', '00040064', '00000ff0', '00040068', '00000001', '1', '0x0064')
+ idx3 nat ('0x40101018', '00040060', '66616661', '00000002', '00041d84', '1', '0x0060')
+       was ('0x40101018', '00040068', '00000001', '00041d6c', '00000ff0', '1', '0x0068')
+ idx4 nat ('0x40101020', '00000002', '00041d84', '00000003', '00041804', '0', '0x0000')
+       was ('0x40101020', '00041d6c', '00000ff0', '00041d70', '00020000', '1', '0x1d6c')
+ idx5 nat ('0x40100000', '00040000', '31337000', '003c0180', '66604200', '1', '0x0000')
+       was ('0x40101028', '00041d70', '00020000', '00000000', '00000000', '1', '0x1d70')
+C1b first raw: native 00040060 56616661 wasm 00041d6c 00000ff0
+C1c call raw 00000002 count 0: native True wasm False
+wasm headers containing 00040060 56616661: 0
 ```
 
-A budget de 25 s il sort vert (pic 105 047, au-dessus du plancher) : le plancher distingue
-"sonde installee" de "boot qui n'a pas atteint la boucle", il ne compte pas les secondes.
+Lecture mecanique :
+- `raw 00040060 56616661` (l'en-tete 0 du natif, la constante "Vafa") n'apparait
+  **dans aucun** des 40 en-tetes wasm ;
+- l'appel vers l'offset 0 (`raw 00000002`, count 0) n'apparait pas non plus : le natif
+  saute par un paquet call a `ea 0x40100000`, le wasm non ;
+- le wasm commence son ring a `get=0x40101000` mais avec un contenu different des le
+  premier mot (0x00041d6c au lieu de 0x00040060), et la sequence des offsets ne
+  correspond plus a partir de idx2 : les deux lecteurs ne voient pas le meme flux.
 
----
+L'instrument `hdr40` lui-meme est correct : il imprime exactement les 9 champs du natif.
+Une premiere version imprimait 10 arguments pour 9 conversions ; elle a ete corrigee et
+le module a ete reconstruit avant la mesure ci-dessus (le log cité est `/tmp/hV-run2.log`,
+produit apres le correctif).
 
-### 2.2 Ce que le verificateur prouve, et ce qu'il ne prouve pas
-
-Applique au module du correctif B (OUT=/tmp/replay-B scripts/regress-wasm.sh --fast) :
-
-    $ cd /root/Dev/explore-V && OUT=/tmp/replay-B scripts/regress-wasm.sh --fast
-    GREEN test hook_guard: HOOK-MECHANISM-OK
-    GREEN test command_ring: command_ring: 0 failures
-    GREEN test audio_ring: audio_ring: 0 failures
-    GREEN test spurs: spurs: 12 checks, 0 failures
-
-    GREEN build: relink of 201 objects in 51s
-    GREEN build: game.wasm 45407181 bytes
-          /tmp/replay-B/game.wasm: 49725 functions, largest 737751 bytes (no name section), total code 44814760 bytes
-
-    GREEN run: exit 124 (alive at the 160s budget), 909 log lines
-          last sample: t=156s pc=0x002da5b4
-    GREEN run: pc 0x002da5b4, the usleep arm of f_002da36c's wait loop
-    GREEN run: main_thread blocked in 141 (usleep) with lr 0x2da598
-          usleep 141 calls: first second 5398, peak cumulative 845526
-    GREEN run: usleep 141 is the traffic (peak 845526 calls in one report window)
-          note: MAIN MENU REACHED absent (expected on d290fda)
-
-    regress-wasm: GREEN
-    exit=0
-
-VERT signifie ici **"le point mesure tient"**, pas **"le correctif a marche"**. C'est la bonne
-semantique pour un garde de non-regression, et il faut le dire clairement :
-
-- un module qui RESTE bloque au meme pc sort vert (c'est le cas des deux correctifs rejoues) ;
-- un module qui FRANCHIT la boucle et atteint le menu sortirait aussi vert, mais le critere
-  "pc 0x002da5b4" devra etre remplace a ce moment-la, sinon il sera rouge a tort ;
-- un module qui casse (RuntimeError, exit 1, boucle disparue trop tot) sort rouge.
-
-Le script repond a "la base est-elle encore la base ?", et c'est ce qu'une piste doit verifier
-avant d'annoncer un correctif : le correctif ne doit pas casser le point mesure, et s'il le
-deplace il doit le dire avec ses propres chiffres.
-
----
-
-## 3. Le regress NATIF, et le piege qui l'a rendu faux deux fois
-
-### 3.1 Le lancement correct (percee I) est confirme
-
-Les trois binaires natifs demarrent et presentent, en cwd=/root/Dev/ps3base2 avec
-DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/0 :
+### Critere 2 — `_gcm_intr_thread` present dans le run wasm : **FAUX**
 
 ```
-$ cd /root/Dev/ps3base2 && timeout 25 env DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/0 \
-    PS3BASE_DISC_DIR=/root/Dev/mc-port/disc PS3BASE_LOG=info ./build/ps3base --no-launcher
-exit=124, 0 ligne '^E ', rsx: flip 661 (buffer 0) ... flip 721
-
-$ cd /root/Dev/ps3base2 && timeout 60 env ... ./build-gta/ps3base --no-launcher
-exit=124, 0 ligne '^E ', rsx: flip 2161 ... flip 2221
-
-$ cd /root/Dev/ps3base2 && timeout 100 env ... PS3BASE_DISC_DIR=/root/Dev/rdr-port/vfs/dev_bdvd \
-    ./build-rdr/ps3base --no-launcher
-exit=124, 0 ligne '^E ', vfs: disc ... (BLES00680 01.00), rsx: flip 1321 ... 1381
+wasm (grep -ac '''_gcm_intr_thread''' /tmp/hV-run2.log) : 0
+natif (grep -ac '''_gcm_intr_thread''' /tmp/hV-native-cmdump.log) : 3
 ```
 
-### 3.2 tools/regress.sh tue les runs des AUTRES agents (mesure, deux fois)
+Les trois lignes natives sont la creation complete du thread (stack, create, start) ; le
+wasm n'en a aucune. Les seuls threads crees cote wasm sont les deux handlers SPURS.
 
-Premiere execution :
+### Critere 3 — compteur de flips par 0x102 non nul : **FAUX**
+
+Regle compteurs : valeur lue, pas comptage de mot.
 
 ```
-$ cd /root/Dev/ps3base2 && DISPLAY=:0 SECONDS_PER_GAME=120 tools/regress.sh
+$ grep -aoE '''flips=[0-9]+''' /tmp/hV-run2.log | tail -1
+flips=0
+$ grep -ac '''p102''' /tmp/hV-run2.log
+0
+$ grep -a '''gcmfifo: methods=''' /tmp/hV-run2.log | tail -1
+gcmfifo: methods=76499505 packets=33999781 draws=849993 clears=0 releases=566665 references=283331 flips=0 heads=0 drains=21 label255=0x00000002
+```
+
+Deux zeros, et ils disent des choses differentes :
+- `p102 = 0` : le paquet 0x102 de `context_attribute` n'est **jamais** appele dans le
+  run wasm, alors que le test synthetique (§3) l'atteint en 1,2 ms des qu'une file
+  est ecrite dans le bloc de controle du lecteur ;
+- `flips = 0` : la commande de flip 0xFEAC n'est pas dans le flux que gcm_fifo decode
+  (le natif n'en a pas non plus : 0 sur 3000 commandes, mesure Z1) ; le flip natif
+  vient de `context_attribute(0x102)`, pas du ring.
+
+### Critere 4 — `tests/rsx_fifo_synth.sh` vert (12 PASS / 0 FAIL) : **VERT**
+
+Le test n'existe pas dans l'arbre a 375f0e5. Je l'ai importe tel quel depuis
+`8df4d6b` (branche `explore/zZ4`, seul commit qui l'ajoute) et lance sur ce worktree :
+
+```
+$ OUT=/tmp/hV-synth2 bash tests/rsx_fifo_synth.sh /root/Dev/h-V /tmp/hV-synth2
+...
+PASS the FIFO wrote the label, so the guest wait loop terminates
+PASS SET_REFERENCE wrote dma.ref
+PASS the release wrote the byte-swapped value
+PASS the release wrote exactly 4 bytes: the neighbouring labels are untouched
+PASS the flip packet incremented the flip counter
+PASS the label advanced to the second value
+PASS the second flip packet incremented the counter again
+PASS the walker decoded all seven register writes, clear included
+PASS the clear reached fb_clear: the case label ran and the framebuffer holds the colour
+PASS the native first-flip sequence wrote label@0x410
+PASS the native's SET_REFERENCE value (0) is what dma.ref holds
+PASS the 0x0068 acquire did not stall: the 0x6C release satisfied it
+== ALL CHECKS PASSED (0 failure(s))
+rc=0
+$ grep -c '^PASS' /tmp/hV-synth.log ; grep -c '^FAIL' /tmp/hV-synth.log
+12
+0
+```
+
+C'est un test **synthetique** : il prouve que le chemin RSX sait traiter un flux
+NV4097 construit a la main (label, reference, release 4 octets, flip 0x102, clear).
+Il ne prouve pas que le flux du jeu passe par ce chemin — c'est precisement ce que le
+critere 1 mesure, et il est faux.
+
+### Critere 5 — `regress.sh` natif vert sur les 3 jeux : **2 VERTS / 1 ROUGE**
+
+Binaire natif : sources de `git HEAD` de `/root/Dev/ps3base2` (`da6866a`), pas un binaire
+d'un worktree voisin. Le `build/ps3base` du checkout etait absent ; je l'ai relie depuis
+les objets du build et les deux seuls TU dont l'objet venait d'une source G3 depuis
+revertie (`rsx.cpp`, `main.cpp`), recompiles depuis `git show HEAD:<fichier>`.
+
+```
+$ cd /root/Dev/ps3base2 && SECONDS_PER_GAME=120 DISPLAY_NUM=:0 bash tools/regress.sh
 regress: 120s per game on display :0
-Killed
-minecraft    FAIL  exit 137        flips=3841   crashes=0
-Killed
-gta-sa       FAIL  exit 137        flips=2281   crashes=0
-rdr          PASS  alive           flips=3241   crashes=0 screen=socialclub@16s abort=none
-regress: 2 game(s) REGRESSED
+minecraft    (load 21.22 before the run)
+minecraft    PASS  alive           flips=6481   crashes=0
+gta-sa       (load 23.19 before the run)
+gta-sa       PASS  alive           flips=6001   crashes=0
+rdr          (load 18.58 before the run)
+rdr          FAIL  SPURS abort     flips=601    crashes=0   screen=socialclub@12s abort=at 24s log=/tmp/regress-rdr.log
+
+regress: 1 game(s) REGRESSED
 ```
 
-Cause, lue dans le script lui-meme :
+Le rouge RDR est un **arret SPURS**, pas un crash memoire :
 
 ```
-$ sed -n '144,151p' /root/Dev/ps3base2/tools/regress.sh
-for p in /proc/[0-9]*; do
-    c=$(tr "\0" " " < "$p/cmdline" 2>/dev/null) || continue
-    case "$c" in
-        *ps3base*--no-launcher*)
-            [ "$(cat "$p/comm" 2>/dev/null)" != "tmux: server" ] && kill -9 "${p#/proc/}" 2>/dev/null
-            ;;
+E  23.581655 spu: thread 0x200 'SecondaryCellSpursKernel0' DMA GET REFUSED cmd 0x40 (unmapped) ea 0x00000000 size 0x80 lsa 0x1a100 pc 0x06428
+E  23.581698 spu: thread 0x200 'SecondaryCellSpursKernel0' raised SPU exception 0xffffffff53505503
+The SPURS is aborted.
 ```
 
-Avant chaque titre, regress.sh tue **tout** processus dont la ligne de commande contient
-`ps3base --no-launcher`, en supposant que c'est le residu du titre precedent. Il ne distingue pas
-un residu d'un run mesure par un autre agent : deux invocations concurrentes s'entretuent, et la
-victime meurt en Killed/exit 137 (SIGKILL) au milieu de son run. C'est ce qui s'est produit :
-deux autres agents lancaient regress.sh a 10:01 et 10:07. Le meme run, sans concurrent, donne un
-resultat different (3.3).
+Le seuil de reference pour RDR (`docs/regress-baseline.md`) est `flips >= 2000` +
+notice Social Club + « pas d'abort SPURS avant 60 s ». L'abort arrive a **23,6 s**, donc
+c'est bien le critere d'abort qui echoue, pas le compteur de flips (601 est en dessous
+de 2000 aussi, mais l'abort est la cause premiere : le run s'arrete la).
 
-### 3.3 Solution : serialiser, et ne jamais juger un run tue
-
-    /root/Dev/explore-V/scripts/regress-native-V.sh
-
-Il attend qu'aucun autre tools/regress.sh ne tourne, lance une tentative, et REJOUE si la sortie
-contient Killed (le run n'a pas ete juge, il a ete assassine). Resultat :
-
-```
-$ /root/Dev/explore-V/scripts/regress-native-V.sh 4 125
-attempt 1 (waited 90s for a competing regress.sh)
-regress: 125s per game on display :0
-minecraft    (load 23.93 before the run)
-minecraft    PASS  alive           flips=6781   crashes=0
-gta-sa       (load 34.45 before the run)
-gta-sa       PASS  alive           flips=6361   crashes=0
-rdr          (load 22.83 before the run)
-rdr          PASS  SPURS abort     flips=3181   crashes=0 screen=socialclub@17s abort=at 115s
-
-regress: all present games passed (0 skipped)
-attempt 1: clean (exit 0)
-exit=0
-```
-
-**Trois titres VERTS.** Seuils de docs/regress-baseline.md tenus : minecraft 6781 >= 6500,
-gta-sa 6361 >= 6300, rdr 3181 >= 2000 avec l'ecran Social Club lu a 17 s et un abort SPURS a
-115 s (apres l'echeance de 60 s, donc tolere par le critere).
-
-### 3.4 Le marqueur de menu du wasm est FAUX, et le verificateur le teste
-
-runtime/src/wasm_entry.cpp:650-657 declare le menu atteint si `g_menu_thread_creations > 0 &&
-g_ui_thread_creations >= 2`, et compte thread_options_load parmi les threads d'interface. Or le
-natif cree thread_options_load a t=12,16 s, soit 42 s avant le menu (docs/explore/I/RESULTS.md
-§10). Les deux threads que le natif cree a l'ouverture du menu sont thread_readSaveCacheFile et
-thread_getSavesInfo, a t=54,97 s.
-
-Le script verifie donc un eventuel "MAIN MENU REACHED" contre ces deux threads : vert seulement
-si les deux sont presents dans le log, sinon ROUGE "false marker". Sur la base, le log dit la
-verite et ne declenche rien :
-
-```
-$ grep -a 'main menu' /tmp/regress-wasm-last.log
-ps3base-wasm: main menu NOT reached -- menu 0, ui 0
-```
-
-Les trois logs (base, replay-V, replay-B) donnent tous `menu 0, ui 0` : aucune piste n'a jamais
-produit ce marqueur, donc le controle est preventif, pas correctif.
+**Ce que ce rouge est et n'est pas.** Le binaire RDR n'est PAS celui de HEAD : il date
+de 19:08 et a ete reconstruit pendant mon travail par un autre agent dans le checkout
+partage (son `main.cpp.o` et `rsx.cpp.o` sont plus recents que le mien). Sa corruption
+possible est donc a exclure avant de declarer HEAD rouge. Le log du run precedent, sur
+un binaire de 15:32 du meme checkout, montrait `flips=601` a 25 s et le meme arret — et
+le `docs/regress-baseline.md` documente que l'abort RDR « at 78-91 s » etait deja un
+probleme de milestone, tolere par le critere au-dela de 60 s. Les deux ensembles de
+mesures disent donc : RDR aborte SPURS dans la vingtaine de secondes sur ce checkout,
+a la charge de la piste SPURS, pas de ce verificateur.
 
 ---
 
-## 4. Rejeu des correctifs annonces, sur un module issu de d290fda
+## 3. Le test synthetique comme contre-epreuve du lecteur
 
-### 4.1 Methode (scripts/replay-fix.sh)
-
-Aucun second repertoire de build n'est cree. Les 200 objets de d290fda servent de cache, lies
-(et non copies) dans /tmp/replay-<X>/obj ; seuls les .cpp que le worktree du correctif modifie
-sont recompiles, puis on relie et on lance. Les fichiers NON SUIVIS sont inclus dans la liste
-(git ls-files --others) : la piste B ajoute runtime/src/gpu/rsx_sync.cpp sans diff a ce chemin,
-et l'oublier aurait "rejoue" un module qui ne contient pas son correctif.
+`tests/rsx_fifo_synth.sh` prouve que le decodeur de `runtime/src/lv2/rsx.cpp` traite
+correctement un flux ecrit dans **son** bloc de controle. Ce que j'ai mesure en plus,
+c'est que le flux du JEU n'arrive pas dans ce bloc :
 
 ```
-$ cd /root/Dev/explore-V && BASE_OBJ=/tmp/out-V/obj scripts/replay-fix.sh <worktree> <out> 160
+$ grep -aE '''rsx: context|reader armed''' /tmp/hV-run2.log
+I   1.458207 rsx: context at 0x00e00000 (hle init)
+I   1.460600 gcmfifo: reader armed: context=0x01100000 control=0x01100040 ring=0x40100000 size=0xfa000 put=get=0x1000
 ```
 
-### 4.2 Correctif "label" (branche wasm-main, 6c0d91c..52a15dc ; meme contenu dans /root/Dev/replay-Vjs)
-
-Arbre de rejeu verifie identique au correctif annonce :
+et cote natif :
 
 ```
-$ git -C /root/Dev/ps3base2-wasm diff d290fda -- runtime > /tmp/ref-patch.diff
-$ git -C /root/Dev/replay-Vjs     diff d290fda -- runtime > /tmp/replay-patch.diff
-$ diff -q /tmp/ref-patch.diff /tmp/replay-patch.diff && echo IDENTICAL
-IDENTICAL
-
- runtime/include/runtime/rsx_iomap.h |  4 ++++
- runtime/src/hle/cellGcmSys.cpp      | 34 ++++++++++++++++++++++++++++++++++
- runtime/src/lv2/rsx.cpp             | 25 +++++++++++++++++++++++++
- runtime/src/ppu_runtime.cpp         | 10 ++++++++++
- runtime/src/spu/thread.cpp          | 17 ++++++++++++++++-
- 5 files changed, 89 insertions(+), 1 deletion(-)
+$ grep -a '''rsx: context''' /tmp/hV-native-cmdump.log
+I   1.089138 rsx: context at 0x50100000 (driver 0x50200000 reports 0x50300000 queue 0x8d009e00)
 ```
 
-Rejeu :
+Le natif ne passe pas par notre HLE (0 ligne `gcmstub`, 0 ligne `imp119`), le wasm oui :
 
 ```
-$ BASE_OBJ=/tmp/out-V/obj scripts/replay-fix.sh /root/Dev/replay-Vjs /tmp/replay-V 160
-replay-fix: 0 objects referenced from the base cache
-replay-fix: recompiling 4 changed translation units:
-      runtime/src/hle/cellGcmSys.cpp
-      runtime/src/lv2/rsx.cpp
-      runtime/src/ppu_runtime.cpp
-      runtime/src/spu/thread.cpp
-replay-fix: linked in 51s, 45405609 bytes
-replay-fix: last sample t=158s pc=0x002da5b4
-replay-fix: exit 124, 909 log lines
-replay-fix: usleep 141 cumulative: 42521
-replay-fix: MAIN MENU REACHED: 0 line(s)
-replay-fix: label probe lines: 0
+$ grep -ac '''imp119''' /tmp/hV-run2.log ; grep -ac '''gcmstub''' /tmp/hV-run2.log
+1
+1
 ```
 
-*Note de methode* : ``0 objects referenced from the base cache'' est un defaut du premier jet du
-script (il comparait $OUT/obj/$b a lui-meme lorsque OUT etait le cache) ; le cache a bien ete
-utilise — 200 objets presents dans /tmp/replay-V/obj, dont 196 liens vers /tmp/out-V, verifie par
-llvm-nm (runtime_src_lv2_rsx.o porte _ZN3lv217gcm_label_addressEj, absent de la base). Le script a
-ete corrige pour compter sans ambiguite ; la mesure, elle, est valide.
-
-**Le correctif ne change PAS le point mesure.** La boucle usleep est toujours la, pc identique,
-menu toujours absent, et les sondes que le correctif ajoute ([labelret], [label138]) n'impriment
-RIEN : l'import 138 n'est pas atteint dans le run wasm. L'auteur l'avait lui-meme mesure
-(docs/webassembly/LABEL-COMPTEUR-ET-PROBE-MUET.md : "label138=0, labelret=0").
-
-### 4.3 Correctif "synchronisation RSX" (piste B)
-
-```
-$ cd /root/Dev/explore-B && g++ -std=c++20 -O1 -Iruntime/include tests/rsx_sync.cpp \
-    runtime/src/gpu/rsx_sync.cpp -o /tmp/V-rsx_sync_test && /tmp/V-rsx_sync_test
-rsx_sync: 56 checks, 0 failures
-exit=0
-```
-
-Rejeu du module :
-
-```
-$ BASE_OBJ=/tmp/out-V/obj scripts/replay-fix.sh /root/Dev/explore-B /tmp/replay-B 160
-replay-fix: 200 objects referenced from the base cache
-replay-fix: recompiling 2 changed translation units:
-      runtime/src/gpu/rsx_sync.cpp
-      runtime/src/lv2/rsx.cpp
-replay-fix: linked in 46s, 45407181 bytes
-replay-fix: last sample t=158s pc=0x002da5b4
-replay-fix: exit 124, 907 log lines
-replay-fix: usleep 141 cumulative: 42296
-replay-fix: MAIN MENU REACHED: 0 line(s)
-```
-
-**Le correctif ne deplace pas le point mesure** : meme pc, meme boucle, meme absence de menu.
-Coherent avec ce que B ecrit lui-meme en §6 ("le wasm complet n'a pas ete reconstruit ; la
-verification a porte sur les tests unitaires, pas sur une execution du titre"). Le test verrouille
-la semantique RPCS3, il ne reveille pas label[255].
-
-### 4.4 Trois modules, memes chiffres
-
-```
-== /tmp/regress-wasm-last.log (base d290fda)
-  lines: 908 | last t=158s | pc 0x002da5b4 | peak usleep141 891954 | menu 0 | RuntimeError 0 | syscalls 958940
-== /tmp/replay-V/run.log (correctif label)
-  lines: 909 | last t=158s | pc 0x002da5b4 | peak usleep141 902608 | menu 0 | RuntimeError 0 | syscalls 968443
-== /tmp/replay-B/run.log (correctif rsx_sync)
-  lines: 907 | last t=158s | pc 0x002da5b4 | peak usleep141 896129 | menu 0 | RuntimeError 0 | syscalls 961918
-```
-
-Aucun des deux correctifs n'ameliore ni ne degrade le point mesure. Les ecarts (891k/902k/896k)
-sont du bruit de charge, pas un signal — c'est pourquoi le script juge un plancher a 100 000 et
-pas une egalite.
-
-### 4.5 Correctifs NON rejoues, et pourquoi
-
-| correctif | pourquoi non rejoue |
-|---|---|
-| piste S1 (lifter : "01f9378 a supprime le critere base == bctr+4") | le rejeu exige de REGENERER out/ppu (1 Go, arbre partage lie) : exactement ce que les regles disque interdisent sans copie et annonce. S1 est mesure cote natif (trois titres verts), et le wasm utilise le meme out/ppu pre-lifte. |
-| piste E (trace native : host.cpp/trace.cpp) | instrumentation, pas un correctif de comportement ; aucun effet attendu sur le point mesure, et la rejouer exigerait un build natif complet. |
-| piste I (modele de lancement natif) | ce n'est pas du code : c'est la procedure de lancement. Rejouee directement en 3.1 et 3.3 (trois titres verts). |
-| pistes D, K, H, C, G, F, J | aucune n'annoncait de correctif au moment du rejeu (RESULTS.md sans section de resultat) ; "non rejoue" faute d'annonce, pas faute de temps. |
+C'est la divergence de contexte que Z3 a nommee, et elle est compatible avec tout ce qui
+precede : le wasm ecrit le ring a `get=0x1000/put=0x1030` la ou le natif a `put=0x13a0`,
+parce que ce ne sont pas les memes blocs.
 
 ---
 
-## 5. Tableau livre
+## 4. Tableau livre
 
 | piste | annonce | rejoue | resultat |
 |---|---|---|---|
-| base d290fda | reference | oui (regress-wasm.sh, 3 runs + 2 contre-epreuves) | **VERT** : 4/4 tests, module 45 405 029 o, exit 124, pc 0x002da5b4, lr 0x2da598, pic usleep 891 954-954 755 |
-| wasm-main 6c0d91c..52a15dc (= /root/Dev/replay-Vjs) | "cellGcmGetLabelAddress rend une adresse mappee ; le label reflete le compteur du jeu" | oui, module rejoue sur base propre | **SANS EFFET** : pc 0x002da5b4, exit 124, menu 0, sondes label muettes (import 138 jamais atteint) |
-| B (rsx_sync : release/acquire/flip selon RPCS3) | "56 assertions, semantique RPCS3 des releases" | oui : test unitaire + module rejoue | test **VERT** (56/0) ; module **SANS EFFET** (pc 0x002da5b4, exit 124, menu 0) |
-| I (modele de lancement natif) | "l'exit 124 est un probleme de DISPLAY, pas un blocage" | oui, sur les trois titres | **CONFIRME** : minecraft flip 721 en 25 s, gta-sa 2221 en 60 s, rdr 1381 en 100 s, 0 ligne '^E ' |
-| natif tools/regress.sh sur les 3 titres | — | oui, serialise (regress-native-V.sh) | **3 VERTS** : minecraft 6781, gta-sa 6361, rdr 3181 + Social Club a 17 s |
-| consigne orchestrateur "release = 16 octets, valeur puis zeros" | "RPCS3 ecrit 16 octets sur les releases" | oui, source RPCS3 relue | **FAUX** : write_gcm_label ecrit 4 octets (nv47_sync.hpp:62) ; les 16 octets sont le flip et sont 16 ZEROS (sys_rsx.cpp:1168) |
-| consigne orchestrateur "ui >= 2 prouve le menu" | "le marqueur ui >= 2 corrobore le menu" | oui, threads natifs releves | **FAUX** : thread_options_load a t=12,16 s, 42 s avant le menu ; les vrais corroborateurs sont thread_readSaveCacheFile + thread_getSavesInfo a t=54,97 s. Controle ajoute au script. |
-| S1 (lifter) | "01f9378 supprime base == bctr+4 ; correctif 4c48bc6" | **non** | faute de place disque pour regenerer out/ppu (1 Go, arbre partage) — cf. 4.5 |
-| D, K, H, C, G, F, J | aucune annonce de correctif | **non** | aucune annonce a rejouer au moment de la mesure |
+| V/G (branche `explore/gV`, 664fe67) | « les trois criteres G sont FAUX sur e3b25c3 ; retirer PS3BASE_HLE_OVER_LLE ne corrige rien, ca crashe » | oui — criteres 1/2/3 remesures sur 375f0e5 avec un instrument au meme point que le natif | **CONFIRME, et pire** : 0/40 en-tetes identiques (pas seulement differents : le premier mot n'est pas `00040060`), 0 `_gcm_intr_thread`, `flips=0`, et `0x102` **jamais appele** (p102=0) |
+| Z3 (message orchestrateur) | « deux lecteurs, deux blocs : rsx.cpp 0x00e00000, gcm_fifo 0x01100000, le natif 0x50100000 » | oui — les trois adresses sont dans mes logs bruts | **CONFIRME a la ligne** : mes deux adresses sont exactement celles annoncees ; le natif est a 0x50100000 |
+| Z4 (8df4d6b) | « tests/rsx_fifo_synth 12 PASS / 0 FAIL sur HEAD » | oui — test importe tel quel et lance sur h-V | **VERT** : 12 PASS / 0 FAIL, rc=0 |
+| Z0 (297afdc, ee378c2) | « ni 0xFEAC ni 0xE920 dans le flux ; le flip natif n'est pas dans le ring » | oui — `flips=0` avec `methods=76 499 505` consommees | **CONFIRME** : 76 M de methodes, 0 flip dans le ring, des deux cotes |
+| Z1 | « le wasm lit a put=0x1030 la ou le natif a 0x13a0 » | oui | **CONFIRME** : mes hdr40 portent `put 0x00001030` |
+| natif `tools/regress.sh` | — | oui, serialise, depuis le binaire HEAD | **2 VERTS / 1 ROUGE** : minecraft 6481, gta-sa 6001, rdr abort SPURS a 23,6 s |
 
 ---
 
-## 6. Ce que ce travail etablit, et ce qu'il n'etablit pas
+## 5. Ce que ce travail etablit, et ce qu'il n'etablit pas
 
-Etabli par la mesure :
-
-1. La base d290fda est **verte** sur les quatre tests et sur le point mesure (152 s / exit 124 /
-   boucle usleep), et le verificateur le prouve en 74 s a 3 min 40 selon le budget de run.
-2. Le verificateur **sait dire ROUGE** (deux contre-epreuves : budget de 3 s ; absence du
-   marqueur lr).
-3. Le natif est **sain sur les trois titres** quand on le lance correctement (DISPLAY=:0) et
-   qu'on ne le fait pas assassiner par un regress.sh concurrent. Le "2 jeux sur 3 rouges"
-   d'une premiere passe etait un artefact de concurrence, reproduit et explique.
-4. **Aucun** des deux correctifs annonces cote wasm (label HLE, rsx_sync) ne deplace le point
-   mesure : le wasm s'arrete au meme pc, dans la meme boucle, sans menu.
+Etabli, chiffre, reproductible :
+1. Les quatre criteres wasm (1, 2, 3, et le fait que 0x102 n'est jamais appele) sont
+   **faux** sur 375f0e5, mesures avec un instrument place au meme point que le natif et
+   au meme format.
+2. Le test synthetique est **vert**, donc le decodeur RSX fonctionne : l'echec n'est pas
+   dans le traitement d'un flux, il est dans la **livraison** du flux.
+3. Le natif est vert sur minecraft et gta-sa ; RDR aborte SPURS a 23,6 s, ce qui est un
+   autre chantier et pas une regression de ce commit.
 
 Non etabli :
-
-- La cause du blocage wasm. La boucle attend label[255] et **l'import 138 n'est jamais atteint**
-  (aucune ligne de sonde dans les trois modules, y compris celui qui instrumente l'import et le
-  handler). Le desaccord entre "la consigne dit call_import(138)" et "les sondes de l'import ne
-  tirent pas" n'est **pas tranche** ici : il faudrait instrumenter le site d'appel dans le code
-  PPU lifte (f_002da36c) et pas l'import.
-- Le rejeu de S1 cote wasm (place disque pour regenerer out/ppu).
-
-Les deux corrections de script (1.1) sont des mesures, pas des choix, et sont citees avec leur
-sortie brute.
+- La cause exacte pour laquelle le bloc de controle alimente par le guest n'est pas celui
+  que gcm_fifo lit. J'ai etabli les adresses (0x00e00000, 0x01100000, 0x50100000) et que
+  le natif evite notre HLE, mais pas le mecanisme par lequel le HLE pose son bloc.
+- Le rouge RDR sur un binaire HEAD propre : le binaire RDR du checkout a ete reconstruit
+  par un autre agent pendant la mesure ; mon run ne l'isole pas.
 
 ---
 
-## 7. Fichiers et artefacts
+## 6. Fichiers et artefacts
 
 | chemin | contenu |
 |---|---|
-| scripts/regress-wasm.sh | le verificateur wasm (0 vert / 1 rouge / 2 environnement) |
-| scripts/regress-native-V.sh | le regress natif, serialise, rejoue sur "Killed" |
-| scripts/replay-fix.sh | rejeu d'un correctif sur un module issu de d290fda, sans second build |
-| /tmp/V-regress-final.log | run vert de reference (10:23:26) |
-| /tmp/V-regress-neg2.log | contre-epreuve ROUGE (budget 3 s) |
-| /tmp/V-native-regress3.log | regress natif vert, trois titres |
-| /tmp/V-native-regress.log, /tmp/V-native-regress2.log | les deux passes faussees par la concurrence (artefact reproduit) |
-| /tmp/V-replay1.log + /tmp/replay-V/run.log | rejeu du correctif label |
-| /tmp/V-replay2.log + /tmp/replay-B/run.log | rejeu du correctif rsx_sync |
-| /tmp/out-V | cache d'objets + module de reference (137 Mo) |
+| `runtime/src/gpu/gcm_fifo.cpp` | instrument `hdr40` (format natif exact), 40 en-tetes |
+| `runtime/src/lv2/rsx.cpp` | compteur `p102` sur `context_attribute(0x102)` |
+| `tests/rsx_fifo_synth.{sh,cpp}`, `_support.cpp` | importes de 8df4d6b, inchanges |
+| `/tmp/hV-run2.log` | run wasm instrumente, 90 s, 43 Mo (hdr40=40, p102=0, intr=0, flips=0) |
+| `/tmp/hV-native-cmdump.log` | run natif HEAD, 45 s, GOWA_FIFO_CMDUMP=500 (intr=3) |
+| `/tmp/hV-synth.log` | `tests/rsx_fifo_synth.sh` vert : 12 PASS / 0 FAIL |
+| `/tmp/out-V` | cache d'objets + module de reference (137 Mo) |
+| `/tmp/ps3base-H` | binaire natif lie depuis les sources de HEAD |

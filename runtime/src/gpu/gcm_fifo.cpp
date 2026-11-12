@@ -488,6 +488,22 @@ void drain() {
         const uint32_t method0 = cmd & 0xFFFCu;
         const bool noninc = (cmd & 0xE0030003u) == 0x40000000u;
         {
+            /* V-H: the 40 first raw headers, NATIVE format (rsxb words, count,
+             * method, noninc, put) so the two logs are comparable field by field
+             * without a byte-swap step. Printed BEFORE classification, at the same
+             * point as /root/Dev/ps3base2/runtime/src/lv2/rsx.cpp:619. */
+            static std::atomic<int> hn40{0};
+            const int k40 = hn40.fetch_add(1, std::memory_order_relaxed);
+            if (k40 < 40) {
+                /* Exactly the native field list and argument count:
+                 *   ea, raw <cmd> <+4> <+8> <+12>, count, method, noninc, put. */
+                LOG_INFO("hdr40", "rsxb: ea 0x%08x raw %08x %08x %08x %08x count %u method 0x%04x noninc %d put 0x%08x",
+                         ea, cmd,
+                         vm::read32(ea + 4), vm::read32(ea + 8), vm::read32(ea + 12),
+                         count, method0, noninc ? 1 : 0, put);
+            }
+        }
+        {
             /* Z-DUMP: the first 200 headers exactly as the loop will consume them. */
             static std::atomic<int> hn{0};
             const int k = hn.fetch_add(1, std::memory_order_relaxed);
