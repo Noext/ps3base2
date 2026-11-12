@@ -846,7 +846,17 @@ int32_t rsx_setup_for_hle() {
     }
     if (g_rsx.ctx_base) return CELL_OK;   /* already set up */
     if (!g_rsx.local_size) return CELL_EINVAL;
+    /* The context MUST be the same block the guest writes put/get into, and the
+     * native puts it at video+0x100000 = 0x50100000 (measured: "rsx: context at
+     * 0x50100000"). Region::RsxContext is refused in the real allocation order
+     * (track G5), and falling back to Main gave 0x00e00000 -- a DIFFERENT block
+     * from the one gcm_fifo reads, so two command processors diverged and neither
+     * followed the guest. Carve it from the local-memory window instead. */
     uint32_t area = vm::alloc(vm::Region::RsxContext, 0x300000, 0x100000);
+    if (!area) {
+        const uint32_t local = LOCAL_BASE + 0x100000u;
+        if (vm::map(local, 0x300000)) area = local;
+    }
     if (!area) area = vm::alloc(vm::Region::Main, 0x300000, 0x100000);
     if (!area) return CELL_ENOMEM;
     g_rsx.ctx_base = area;

@@ -1,5 +1,6 @@
 #include "common.h"
 
+#include "runtime/regions.h"
 #include "runtime/rsx_iomap.h"
 #include "gpu/gcm_fifo.h"
 
@@ -144,8 +145,25 @@ HLE_FUNC(cellGcmSys, _cellGcmInitBody) {
              * every label write was silently dropped by the bounds check while
              * reads returned zeros. Allocate in main memory, which is the region
              * the runtime always has, and say so if even that fails. */
+            /* The native gets its context at 0x50100000: the VIDEO region plus
+             * 0x100000 (measured, native-3000.log: "rsx: context at 0x50100000
+             * (driver 0x50200000 reports 0x50300000)"). Our Region::RsxContext is
+             * REFUSED in the real allocation order -- three 256 MB slots (User64K,
+             * libsysutil's prx.cpp:98, User1M) fill the 0x10000000-0x50000000 window
+             * (measured by track G5) -- so the fallback put it in MAIN at 0x00e00000.
+             * That is why two command processors diverged: the guest writes put/get
+             * into the block IT was given, not into ours. Carve the context out of
+             * the local-memory window instead, which is what the firmware does. */
             uint32_t area = vm::alloc(vm::Region::RsxContext, 0x300000, 0x100000);
             const char* area_region = "rsx";
+            if (!area) {
+                const uint32_t video = vm::region_bases().video;
+                const uint32_t local = video + 0x100000u;   /* native: 0x50100000 */
+                if (video && vm::map(local, 0x300000)) {
+                    area = local;
+                    area_region = "video+0x100000";
+                }
+            }
             if (!area) {
                 area = vm::alloc(vm::Region::Main, 0x300000, 0x100000);
                 area_region = "main";
