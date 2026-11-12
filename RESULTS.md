@@ -31,3 +31,56 @@ worktree so the shared tree is not disturbed:
     7606 direct regions covering 26191 blocks
 
 and the build was configured with -DGOWA_SPU_GENERATED_DIR=/root/Dev/wt-W2/out-W2/spu.
+## Measurement 1 -- the sys_mmapper call table during RDR boot (main HEAD 40a0597 + call logging)
+
+Run:
+
+    cd /root/Dev/wt-W2 && ln -sfn /root/Dev/ps3base2/out-rdr out-rdr
+    Xvfb :931 -screen 0 1280x720x24 &
+    nohup setsid env DISPLAY=:931 XDG_RUNTIME_DIR=/run/user/0 \
+      PS3BASE_DISC_DIR=/root/Dev/rdr-port/vfs/dev_bdvd PS3BASE_LOG=info \
+      timeout 130 /root/Dev/wt-W2/build-31/ps3base --no-launcher > /tmp/W2.log 2>&1 < /dev/null &
+
+Every sys_mmapper entry logs its five raw argument registers and its return
+value on channel 'mmapper'. The complete set of calls the title makes in 130 s:
+
+    I   0.809811 mmapper: sys_mmapper_allocate_address r3=0x10000000 r4=0xf0 r5=0x10000000 r6=0xd004fa94 r7=0x0 -> 0x0
+    I   0.809819 mmapper: allocate_address 0x10000000 -> 0x40000000
+    I   0.809827 mmapper: sys_mmapper_allocate_address r3=0x10000000 r4=0xf0 r5=0x10000000 r6=0xd004fa94 r7=0x0 -> 0x0
+    I   0.809834 mmapper: allocate_address 0x10000000 -> 0x50000000
+    I   0.809843 mmapper: sys_mmapper_allocate_address r3=0x10000000 r4=0xf0 r5=0x10000000 r6=0xd004fa94 r7=0x0 -> 0x0
+    I   0.809857 mmapper: allocate_address 0x10000000 -> 0x60000000
+
+    $ grep -o 'sys_mmapper_[a-z_]*' /tmp/W2.log | sort | uniq -c
+          3 sys_mmapper_allocate_address
+
+That is the whole table: **three calls to sys_mmapper_allocate_address and
+nothing else**, all from PPU thread 0x1000004 (log tid 2765229), all with
+size 0x10000000, flags 0xf0, alignment 0x10000000, out pointer 0xd004fa94,
+all returning CELL_OK with a 256 MiB area.
+
+The surrounding lines name the caller's intent:
+
+    I   0.809709 tty: [0] [STARTUP] Restricting 211968k heap to 69632k+3072k+112640k=185344k.
+    I   0.809898 tty: [0] [STARTUP] Allocating 181M
+    I   0.809911 vm: region 2 placed at 0x70000000
+
+so the three areas are the title's three heap regions and the 181M heap is a
+sys_vm_memory_map (syscall 300), not an mmapper call.
+
+The sysPrxForUser wrappers that would reach the other five entries DO exist as
+imports in the lifted table (`/root/Dev/ps3base2/out-rdr/ppu/table.cpp:77336-77429`:
+sys_mmapper_free_memory 0x409AD939, sys_mmapper_unmap_memory 0x4643BA6E,
+sys_mmapper_allocate_memory_from_container 0x70258515,
+sys_mmapper_allocate_memory 0xB257540B, sys_mmapper_map_memory 0xDC578057),
+and none of them is reached before the title stops. `PS3BASE_RESOLVE_LOG=1`
+reports zero unresolved imports, so this is not a missing-symbol artefact: the
+title genuinely does not get to the shared-memory path in the first 130 s.
+
+### What the audit therefore has to be about
+
+The measured table is thin, so the deviations that matter are not the ones RDR
+exercises today -- they are the ones it will exercise when the SPURS abort is
+fixed and the title gets past startup. The audit below reads each of the eight
+implemented handlers against refs/rpcs3/rpcs3/Emu/Cell/lv2/sys_mmapper.cpp and
+records every place the two disagree.
