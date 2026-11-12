@@ -120,3 +120,89 @@ The "+0x3000c790" tail is a format bug (the entry was printed with a "+0x%x"
 prefix instead of as f_%08x); fixed in the next build, which also prints the
 export symbol name.
 
+
+### M5 -- what the abort path DOES (the lifted function, and the four calls it makes)
+
+The lifted function at 0x3000c790 is liblv2's `_sys_panic`
+(sysPrxForUser, NID 0x4232B0DB, OPD 0x30014200 -> code 0x3000c790; found by
+scanning liblv2's data segment for {code, toc} pairs, 330 of them):
+
+    $ python3 /tmp/T4-opd.py
+    OPD count 330
+    opd 30014200 -> code 3000c790
+    opd 30014208 -> code 3000c824
+    opd 30014210 -> code 3000c8ec
+    opd 30014350 -> code 3000fad0
+    opd 30014358 -> code 3000fb64
+
+and the export table names it:
+
+    $ grep -n '0x30014200' /root/Dev/ps3base2/out-rdr/ppu/table.cpp
+    77337:    {"sysPrxForUser", 0x4232B0DBu, "_sys_panic", 1, 0x30014200},
+
+Guest disassembly (capstone, from liblv2.elf at 0x3000c790):
+
+    3000c790  stdu     r1, -0xa0(r1)          ; prologue, 0xa0-byte frame
+    3000c794  mflr     r0
+    3000c798  std      r28, 0x80(r1)
+    3000c79c  std      r4, 0xd8(r1)           ; spill the varargs register save area
+    3000c7a0  mr       r28, r3                ; r28 = code (the panic code)
+    3000c7a4  std      r29, 0x88(r1)
+    3000c7a8  std      r0, 0xb0(r1)
+    3000c7ac  std      r5, 0xe0(r1)           ; ... r5..r10 spilled to 0xd8..0x108
+    3000c7b0  std      r6, 0xe8(r1)
+    3000c7b4  std      r7, 0xf0(r1)
+    3000c7b8  std      r8, 0xf8(r1)
+    3000c7bc  std      r9, 0x100(r1)
+    3000c7c0  std      r10, 0x108(r1)
+    3000c7c4  li       r4, 0
+    3000c7c8  li       r3, 8                  ; syscall 8 = sys_tty_write? no: r3 is arg 0
+    3000c7cc  li       r11, 0x3dc             ; syscall 988
+    3000c7d0  sc                              ; <-- sys_dbg_register_ppu_exception_handler
+    3000c7d4  addi     r29, r1, 0xd8          ; r29 = &register save area
+    3000c7d8  clrldi   r3, r28, 0x20          ; arg0 = panic code
+    3000c7dc  mr       r4, r29                ; arg1 = &save area
+    3000c7e0  stw      r29, 0x70(r1)
+    3000c7e4  bl       0x3000fad0             ; <-- the call whose return is 0x3000c7e8
+    3000c7e8  nop                             ; <-- the reported "not lifted" address
+    3000c7ec  lwz      r9, -0x7e7c(r2)        ; r2 = TOC; load the panic-lock
+    3000c7f0  ld       r0, 0(r9)
+    3000c7f4  clrlwi   r0, r0, 0x1f           ; bit 0
+    3000c7f8  cmpwi    cr7, r0, 0
+    3000c7fc  beq      cr7, 0x3000c808
+    3000c800  trap                            ; already panicking: die immediately
+    3000c804  b        0x3000c804             ; <-- infinite self-branch (hang), not a return
+    3000c808  lis      r3, -0x7fff            ; r3 = 0x80010000
+    3000c80c  li       r4, 0
+    3000c810  ori      r3, r3, 0xc            ; r3 = 0x8001000c = CELL_EABORT
+    3000c814  li       r5, 0
+    3000c818  li       r11, 0x16              ; syscall 22 = _sys_process_exit
+    3000c81c  sc                              ; <-- _sys_process_exit(0x8001000c)
+    3000c820  b        0x3000c804             ; unreachable; the exit throws
+
+So the abort path is:
+
+  1. `_sys_panic(code, va_list)` spills the varargs save area and registers an
+     exception handler with syscall 988 (which this runtime stubs to CELL_OK --
+     correct, RPCS3's sys_lv2dbg.cpp:104 only logs).
+  2. It calls 0x3000fad0 with (code, &save_area), which is liblv2's internal
+     fprintf-to-tty: 0x3000fad0 -> 0x3000eccc (a handle lookup), then
+     0x3000edc0 (the formatted write) with r3 = the tty FILE*, r4 = code,
+     r5 = &save_area, r6 = 0. That call is what produces every "tty: [0] ..."
+     line of the dump.
+  3. On return it reads a global panic flag at TOC-0x7e7c. Set: `trap` and hang.
+     Clear: it builds CELL_EABORT = 0x8001000c and calls _sys_process_exit(22).
+  4. The self-branch at 0x3000c804 is why the run never returns from either arm:
+     the process leaves through the syscall, and the runtime reports it as a
+     ProcessExit.
+
+The report's "0x8001000c is CELL_SPURS_TASK_ERROR_FATAL" is a coincidence of
+values, not the same constant: RPCS3 defines CELL_SPURS_TASK_ERROR_FATAL as
+0x80410914 (refs/rpcs3/rpcs3/Emu/Cell/Modules/cellSpurs.h:64), and 0x8001000C
+is CELL_EABORT ("The operation is aborted", ErrorCodes.h:115). liblv2's
+_sys_panic is what puts that value into r3; the SPURS code path reaches
+_sys_panic, and _sys_panic exits with EABORT.
+
+The lifted form is already correct -- it is in the tree at HEAD, table entry and
+all. What was missing was only the NAME, which is what this task fixed.
+
