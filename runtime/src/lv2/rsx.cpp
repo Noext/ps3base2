@@ -41,6 +41,12 @@ void profile_thread(void* native, const char* name);
 
 namespace rdcapture { void maybe_capture(uint64_t flips); }
 
+namespace hle {
+/* Defined in runtime/src/hle/cellGcmSys.cpp, inside namespace hle. Declaring it at lv2
+ * scope mangles as _ZN3lv216gcm_flip_handlerEv and never resolves (track X4, nm). */
+uint32_t gcm_flip_handler();
+}  // namespace hle
+
 namespace lv2 {
 
 struct RsxState {
@@ -105,13 +111,6 @@ bool rsx_io_page_taken(uint32_t io) {
 }
 
 
-
-/* Declared at namespace scope OUTSIDE the anonymous namespace below. Inside it the
- * reference mangles as _ZN3lv212_GLOBAL__N_1... while cellGcmSys defines
- * _ZN3hle16gcm_flip_handlerEv, so the call became an undefined symbol that
- * -sERROR_ON_UNDEFINED_SYMBOLS=0 turned into an aborting trampoline: the first flip
- * would have killed the module. Found by track X1. */
-extern uint32_t gcm_flip_handler();
 
 namespace {
 #if defined(PS3BASE_RSX_METHOD_TRACE) && PS3BASE_RSX_METHOD_TRACE
@@ -181,7 +180,7 @@ void flip_done(uint32_t buffer) {
     /* Call the handler the title registered with cellGcmSetFlipHandler. Without this,
      * track E measured 267,220 consecutive empty waits (wasm) against 3,985 series of
      * median 22 (native): the guest waits for its own flip callback and never gets it. */
-    if (const uint32_t h = gcm_flip_handler()) rsx_flip_callback(h);
+    if (const uint32_t h = hle::gcm_flip_handler()) rsx_flip_callback(h);
     uint32_t h = head_addr(1);
     vm::write32(h + 8, vm::read32(h + 8) | 0x80000000u);
     vm::write64(h, ppu::timebase());
