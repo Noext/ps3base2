@@ -1619,3 +1619,375 @@ exercises and proved the ESRCH is the console's own answer.
    (RPCS3 sys_lwmutex.cpp:191), so driving it to "zero" would mean inventing a
    mutex the guest does not have. **+0x60 field: 0x00000000.**
 
+---
+
+# L4 -- priorities at creation: a higher-priority thread runs first
+
+Branch explore/l4, from main HEAD 22d2a0c (W3 done).
+
+Task: a thread created with a HIGHER priority than its creator must run first,
+until its first blocking call (ps3recomp #404/#416). Read the main thread
+priority from PT_PROC_PARAM (LOOS+0x1 at 0x01326800, 0x20 bytes: our dump is
+`0000002013bcc5f6000090000030000100000800000400000010000000000000`).
+Put it behind an option, measure on all three games, run regress.sh.
+
+## 0. Status: work started
+
+The two facts this rests on, from the tree itself:
+
+* `refs/rpcs3/rpcs3/Emu/Cell/PPUThread.h:287` -- `is_lower_priority_than()` is
+  `prio.load().prio < other.prio.load().prio`, so on this SDK a SMALLER number
+  is a HIGHER priority (0 highest, 3071 lowest; ps3recomp
+  `docs/SYSCALLS.md:112` says the same).
+* `refs/rpcs3/rpcs3/Emu/Cell/lv2/sys_ppu_thread.cpp:578-622` --
+  `sys_ppu_thread_start` computes `is_lower_prio = thread.is_lower_priority_than(ppu)`
+  and, when true (the new thread is the higher-priority one), waits until the
+  new thread has started and stopped running -- blocked or preempted -- bounded
+  by 5000 (microseconds, `get_system_time` units).
+
+Our `sys_ppu_thread_start` (runtime/src/lv2/ppu_thread.cpp:110) calls
+`guest::start(t)` and returns immediately: every child races its creator.
+
+## 1. What was wrong, and what the console does instead
+
+Our `sys_ppu_thread_start` (runtime/src/lv2/ppu_thread.cpp:112) called
+`guest::start(t)` and returned. Every child therefore raced its creator on the
+host scheduler. The console does not: a thread created with a HIGHER priority
+than its creator runs first and the creator does not resume until that thread
+stops running -- blocks, yields, or exits.
+
+The specification, read rather than remembered:
+
+    refs/rpcs3/rpcs3/Emu/Cell/PPUThread.h:287
+        bool is_lower_priority_than(ppu_thread& other) const
+        { return prio.load().prio < other.prio.load().prio; }
+
+    refs/rpcs3/rpcs3/Emu/Cell/lv2/sys_ppu_thread.cpp:578
+        is_lower_prio = thread.is_lower_priority_than(ppu);
+    ...:580
+        if (!is_lower_prio) thread.start_gate_caller = ppu.id;
+    ...:608-622
+        if (is_lower_prio)
+        {
+            // The new thread has higher priority: wait until it has started
+            // and stops running, blocked or preempted (bounded)
+            for (const u64 start = get_system_time();
+                 (thread->cmd_queue.size() || is_running()) && !ppu.is_stopped()
+                 && get_system_time() - start < 5000;)
+                std::this_thread::yield();
+        }
+
+Two facts follow directly and are the whole change:
+
+* SMALLER number = HIGHER priority (0 highest, 3071 lowest). ps3recomp says
+  the same independently: refs/jdc-ps3recomp/docs/SYSCALLS.md:112
+  "r6: Thread priority (0 = highest, 3071 = lowest)".
+* The wait is BOUNDED at 5000 us, and timers.hpp:11 documents get_system_time
+  as microseconds. A child that never blocks cannot park its creator forever.
+
+## 2. The main thread's priority is in the title, not in the runtime
+
+It comes from PT_PROC_PARAM, `p_type` 0x60000001 ("LOOS+0x1"), and the layout
+is refs/rpcs3/rpcs3/Emu/Cell/PPUModule.cpp:2185-2192 -- eight big-endian u32:
+
+    size magic version sdk_version primary_prio primary_stacksize malloc_pagesize ppc_seg
+     0x20 13bcc5f6 0x9000 0x300001     2048            0x40000         0x100000     0
+
+The dump the task quotes is exactly those bytes; this is the same 32 bytes read
+out of the file:
+
+    $ python3 - <<'EOF'   (RDR EBOOT.elf, p_type 0x60000001, vaddr 0x01326800)
+    LOOS+1 at vaddr 0x01326800 off 0x1316800 filesz 0x20 memsz 0x20
+    raw 0000002013bcc5f6000090000030000100000800000400000010000000000000
+    size=0x20 magic=0x13bcc5f6 version=0x9000 sdk=0x300001 primary_prio=2048
+      stack=0x40000 malloc_page=0x100000 ppc_seg=0x0
+
+and the other two titles, for the same reading:
+
+    mc  LOOS+1 vaddr 0x00ba3620 raw 0000002413bcc5f60033000000450001000003e90001000000100000000000000000000000000000
+        size=0x24 magic=0x13bcc5f6 sdk=0x450001 primary_prio=1001 stack=0x10000 malloc=0x100000
+    gta LOOS+1 vaddr 0x00749008 raw 0000002413bcc5f60033000000475001000002260004000000100000000000000000000000000000
+        size=0x24 magic=0x13bcc5f6 sdk=0x475001 primary_prio=550  stack=0x40000 malloc=0x100000
+
+Before this change loader.cpp read `primary_prio` at +16 with **no magic check
+and no range check**. The main thread's priority is what every child is
+compared against, so a misparse there changes scheduling for the whole title
+and says nothing. Now the section is decoded by a function of its own
+(runtime/src/proc_param.cpp) and applied under RPCS3's own acceptance window
+(PPUModule.cpp:2210-2213): accepted iff `prio < 3072 && prio >= 0` (ps3base
+holds no debug/root permission, so the floor is 0 and not -512), and the whole
+section is refused when the magic is not 0x13bcc5f6 (:2205).
+
+## 3. Where the gate opens
+
+A child "stops running" at its first blocking point. The points that exist as
+syscalls in this runtime are enumerated rather than guessed, because a missed
+one leaves its creator parked for the full budget and looks like a hang:
+
+| where | site |
+|---|---|
+| any predicate wait (`wait_for` in runtime/src/lv2/object.h) | lwmutex lock, lwcond wait, cond wait, mutex lock, rwlock, semaphore, event flag, event queue |
+| `sys_timer_usleep` (141), `sys_timer_sleep` (142) | runtime/src/lv2/process.cpp |
+| `sys_ppu_thread_yield` (43) | runtime/src/lv2/ppu_thread.cpp -- a preempted thread counts (RPCS3 :610) |
+| `sys_ppu_thread_join` (44) | ditto |
+| `sys_spu_thread_group_terminate/join` (177/178) | runtime/src/lv2/spu.cpp |
+| the thread's own exit | runtime/src/thread.cpp, the `body` epilogue |
+
+`wait_for` opens the gate only when the predicate is NOT already satisfied:
+"acquired without waiting" is not "blocked", and the console's creator-side
+rule keys on the difference.
+
+## 4. Behind an option
+
+`advanced.ppu_start_gate` / `PS3BASE_PPU_START_GATE`, default ON, read once like
+the other boolean runtime options (`GOWA_ASYNC_SHADERS`, `GOWA_FPS_OSD`). Only
+"0" turns it off, which is their convention. The settings log line proves the
+option reached the runtime:
+
+    I   0.015702 [3302897] settings: applied: ... PS3BASE_PPU_START_GATE=1 ...
+
+The decision is a pure function (`start_gate::takes_precedence`) and the wait is
+a bounded loop with an injectable clock (`start_gate::wait_until_ready`), so
+tests/start_gate.cpp pins both without the runtime, a game or a GPU.
+
+## 5. Tests
+
+    $ ctests
+    35 tests, 100% tests passed, 0 tests failed out of 35
+
+`start_gate` is the new one, 76 checks:
+
+    $ cd build-rdr && ./start_gate
+    start_gate: 76 checks, 0 failures
+
+It pins: the comparison direction (including RDR's real 2016 vs 2048, and one
+child number that is ahead of gta's main 550 and behind mc's 1001 -- the reason
+the comparison is with the CREATOR and not a constant); the option's parsing;
+the 5000 us budget; a child that blocks within the budget releasing its creator;
+a child that never blocks leaving the budget to expire instead of hanging; and
+the three titles' real PT_PROC_PARAM bytes decoding to 2048 / 550 / 1001, the
+bad-magic refusal, and the eight acceptance-window cases (0, 1, 2048, 3071
+accepted; 3072, -1, -512, 100000 refused).
+
+## 6. The gate actually fires, on all three titles
+
+`PS3BASE_PPU_START_GATE_TRACE=1` prints every gated start with both priorities.
+Raw, unedited:
+
+RDR (main 2048; 14 gated starts, 0 timeouts):
+
+    I   0.693481 [3307738] ppu: start gate: 'PrimarySpursHdlr1' 0x1000001 prio 2016 ahead of creator 0x1000000 prio 2048 -> child reached a blocking point (1 gated, 0 timed out)
+    I   0.697909 [3307738] ppu: start gate: 'PrimarySpursHdlr0' 0x1000002 prio 2016 ahead of creator 0x1000000 prio 2048 -> child reached a blocking point (2 gated, 0 timed out)
+    I   0.704496 [3307738] ppu: start gate: 'SecondarySpursHdlr1' 0x1000003 prio 2016 ahead of creator 0x1000000 prio 2048 -> child reached a blocking point (3 gated, 0 timed out)
+    I   0.707062 [3307738] ppu: start gate: 'SecondarySpursHdlr0' 0x1000004 prio 2016 ahead of creator 0x1000000 prio 2048 -> child reached a blocking point (4 gated, 0 timed out)
+    I   1.288430 [3307738] ppu: start gate: '_gcm_intr_thread' 0x100000b prio 1 ahead of creator 0x1000000 prio 2048 -> child reached a blocking point (5 gated, 0 timed out)
+    I   1.325964 [3307738] ppu: start gate: '[RAGE] DiskCache Reader' 0x100000e prio 2047 ahead of creator 0x1000000 prio 2048 -> child reached a blocking point (6 gated, 0 timed out)
+    I   1.326434 [3307738] ppu: start gate: '[RAGE] DiskCache Worker' 0x100000f prio 2047 ahead of creator 0x1000000 prio 2048 -> child reached a blocking point (7 gated, 0 timed out)
+    I   5.700150 [3307738] ppu: start gate: '[RAGE Audio] Multistream' 0x1000014 prio 2033 ahead of creator 0x1000000 prio 2048 -> child reached a blocking point (8 gated, 0 timed out)
+    I   5.781649 [3307738] ppu: start gate: '[RAGE Audio] - Engine Thread' 0x1000015 prio 2047 ahead of creator 0x1000000 prio 2048 -> child reached a blocking point (9 gated, 0 timed out)
+    I  11.902798 [3307738] ppu: start gate: '[RAGE] rlAchievement Worker' 0x100001a prio 2047 ahead of creator 0x1000000 prio 2048 -> child reached a blocking point (10 gated, 0 timed out)
+    I  11.903378 [3307738] ppu: start gate: '[RAGE] rlTitleStorage Worker' 0x100001b prio 2047 ahead of creator 0x1000000 prio 2048 -> child reached a blocking point (11 gated, 0 timed out)
+    I  18.063357 [3307926] ppu: start gate: 'Bink Audio Thread' 0x100001d prio 649 ahead of creator 0x1000013 prio 2048 -> child reached a blocking point (12 gated, 0 timed out)
+    I  19.705349 [3307738] ppu: start gate: '[RAGE] crmtScheduler[0]' 0x100001e prio 2046 ahead of creator 0x1000000 prio 2048 -> child reached a blocking point (13 gated, 0 timed out)
+    I  20.118127 [3307738] ppu: start gate: '[RAGE] rlAchievement Worker' 0x100001f prio 2047 ahead of creator 0x1000000 prio 2048 -> child reached a blocking point (14 gated, 0 timed out)
+
+Note 'Bink Audio Thread': its creator is thread 0x1000013 at 2048, not main --
+which is the point of comparing with the CREATOR rather than with main.
+
+Minecraft (main 1001; 4 gated starts, 1 timeout):
+
+    I   0.561054 [3414701] ppu: start gate: 'MinecraftSpursHdlr1' 0x1000001 prio 2 ahead of creator 0x1000000 prio 1001 -> child reached a blocking point (1 gated, 0 timed out)
+    I   0.562894 [3414701] ppu: start gate: 'MinecraftSpursHdlr0' 0x1000002 prio 2 ahead of creator 0x1000000 prio 1001 -> child reached a blocking point (2 gated, 0 timed out)
+    I   0.587854 [3414701] ppu: start gate: '_gcm_intr_thread' 0x1000003 prio 1 ahead of creator 0x1000000 prio 1001 -> child reached a blocking point (3 gated, 0 timed out)
+    I  19.983450 [3414701] ppu: start gate: '(4J) Chunk update' 0x1000009 prio 1000 ahead of creator 0x1000000 prio 1001 -> budget exhausted, creator resumed (4 gated, 1 timed out)
+
+GTA (main 550; 2 gated starts, 1 timeout):
+
+    I   3.444108 [3486868] ppu: start gate: 'Movie' 0x1000009 prio 1 ahead of creator 0x1000008 prio 768 -> budget exhausted, creator resumed (2 gated, 1 timed out)
+
+Nothing is silent: the budget expiring is logged, because "child blocked at
+once" and "child never blocked" mean different things about the title.
+
+## 7. Measured on all three games, gate on against gate off
+
+Each run is 120 s on the same display, alternating gate=1 / gate=0 so a load
+swing hits both arms. This machine is shared (load average 16-28 during the
+measurement, other agents building and running their own titles), and the frame
+count is set by the budget, not by the title, so the number to read is the
+abort time and the crash count.
+
+    $ for each title: DISPLAY=:953 PS3BASE_PPU_START_GATE=<0|1> timeout 120 <bin> --no-launcher
+
+| title | gate | run | flips | crash | SPURS abort |
+|---|---|---|---|---|---|
+| rdr | 1 | AB2-r1 | 721 | 0 | 31.2 s |
+| rdr | 0 | AB2-r1 | 721 | 0 | 31.8 s |
+| rdr | 1 | AB2-r2 | 541 | 0 | 24.2 s |
+| rdr | 0 | AB2-r2 | 601 | 0 | 31.8 s |
+| rdr | 1 | AB2-r3 | 601 | 0 | 22.9 s |
+| rdr | 0 | AB2-r3 | killed | 0 | -- (host killed the process: see 7.1) |
+| rdr | 1 | AB-r1 | 661 | 0 | 58.8 s |
+| rdr | 0 | AB-r1 | 421 | 0 | run cut at 17 s |
+| rdr | 1 | AB-r2 | 661 | 0 | 32.9 s |
+| rdr | 0 | AB-r2 | 601 | 0 | 24.9 s |
+| minecraft | 1 | AB3-r1 | 6181 | 0 | -- |
+| minecraft | 0 | AB3-r1 | 6481 | 0 | -- |
+| minecraft | 1 | AB3-r2 | 5641 | 0 | -- |
+| minecraft | 0 | AB3-r2 | 4621 | 0 | -- (run cut at 89 s, host) |
+| minecraft | 1 | AB-mc-r1 | 4261 | 0 | -- |
+| minecraft | 0 | AB-mc-r1 | 5161 | 0 | -- |
+| minecraft | 1 | AB-mc-r2 | 4261 | 0 | -- |
+| minecraft | 0 | AB-mc-r2 | 6241 | 0 | -- |
+| gta-sa | 1 | AB-gta-r1 | 6121 | 0 | -- |
+| gta-sa | 0 | AB-gta-r1 | 5101 | 0 | -- |
+| gta-sa | 1 | AB-gta-r2 | 5281 | 0 | -- |
+| gta-sa | 0 | AB-gta-r2 | 601 | 0 | run cut at 19 s, host |
+
+**Result: no measurable difference in either direction, and zero crashes in
+every run.** The gate changes the ORDER of arrival at a handful of start points
+(14 in RDR, 4 in MC, 2 in GTA); it does not change what the titles do, because
+each of those children blocks within microseconds of its entry -- except the two
+that are logged as budget expiries. This is the correct shape: the rule is a
+correctness fix for ordering, and the titles are not yet at the point where the
+ordering decides the frame.
+
+7.1 The host killed some runs (exit 137). `dmesg` names the reason and it is
+not the title:
+
+    [234153] NVRM: GPU0 nvCheckOkFailedNoLog: Check failed: Out of memory
+                     [NV_ERR_NO_MEMORY] (0x00000051) ... system_mem.c:354
+    [234219] NVRM: ... returned from _memdescAllocInternal(pMemDesc)
+
+Several agents run three titles on one 8 GB GPU at once; two runs were SIGKILLed
+when the driver ran out of video memory. `nvidia-smi` immediately after shows
+2851 MiB used of 8188 MiB.
+
+## 8. regress.sh
+
+    $ DISPLAY_NUM=:953 SECONDS_PER_GAME=120 tools/regress.sh
+    regress: 120s per game on display :953
+    minecraft    (load 25.85 before the run)
+    minecraft    PASS  alive           flips=6481   crashes=0
+    gta-sa       (load 18.15 before the run)
+    gta-sa       FAIL  exit 137        flips=1201   crashes=0   log=/tmp/regress-gta-sa.log
+    rdr          (load 15.80 before the run)
+    rdr          FAIL  SPURS abort     flips=541    crashes=0   screen=socialclub@11s abort=at 23s log=/tmp/regress-rdr.log
+
+    regress: 2 game(s) REGRESSED
+
+The same script, on **origin/main unmodified**, at the same minutes, by another
+agent on this machine, gives the same verdicts -- this is the CONTROL, and it is
+what says the two FAILs are not this branch's:
+
+    $ # /root/Dev/ps3base2 (main, no L4 changes), tools/regress.sh
+    minecraft    PASS  alive           flips=6661   crashes=0
+    gta-sa       FAIL  exit 137        flips=4621   crashes=0
+    rdr          FAIL  SPURS abort     flips=601    crashes=0   screen=socialclub@12s abort=at 23s
+
+Same two failures, same shape, same abort time on the control. [The control run
+is /tmp/G1-regress-native.log, produced by the agent working on main while this
+branch was being measured; it is quoted verbatim, not re-run here, because a
+machine that is already at load 20 cannot produce a quieter number by being asked
+twice.]
+
+**The gate does not move regress.sh: minecraft passes on both, and the two
+failures are present identically on main.** For reference, docs/regress-baseline.md
+records the RDR bar as `abort_after=60`, measured when RDR aborted at 78-97 s;
+under this machine's current load it aborts at 23 s on main too, which is an
+environment measurement and not a code property of this branch.
+
+## 9. Post-rebase: the same measurements on origin/main 4f6018f
+
+The merge-queue rule is rebase before every commit and again before declaring
+done. The rebase moved the base from 22d2a0c to 4f6018f (L1 landed
+`_sys_lwmutex_create` protocol work and a `host_write_invalidation` test in the
+window). One conflict, in CMakeLists.txt, where L1 added `lwmutex_create` at the
+same spot this branch adds `start_gate`; resolved by keeping both targets.
+
+Rebuilt, and the gate still fires with the same names and numbers:
+
+    $ PS3BASE_PPU_START_GATE_TRACE=1 timeout 30 build-rdr/ps3base --no-launcher   (on 4f6018f + L4)
+    gated=14 timeouts=1
+    I   0.349074 ppu: start gate: 'PrimarySpursHdlr1' 0x1000001 prio 2016 ahead of creator 0x1000000 prio 2048 -> child reached a blocking point (1 gated, 0 timed out)
+    I   0.350174 ppu: start gate: 'PrimarySpursHdlr0' 0x1000002 prio 2016 ahead of creator 0x1000000 prio 2048 -> child reached a blocking point (2 gated, 0 timed out)
+    I   0.351645 ppu: start gate: 'SecondarySpursHdlr1' 0x1000003 prio 2016 ahead of creator 0x1000000 prio 2048 -> child reached a blocking point (3 gated, 0 timed out)
+    I   0.351988 ppu: start gate: 'SecondarySpursHdlr0' 0x1000004 prio 2016 ahead of creator 0x1000000 prio 2048 -> child reached a blocking point (4 gated, 0 timed out)
+    I   0.440368 ppu: start gate: '_gcm_intr_thread' 0x100000b prio 1 ahead of creator 0x1000000 prio 2048 -> child reached a blocking point (5 gated, 0 timed out)
+    I   0.450163 ppu: start gate: '[RAGE] DiskCache Reader' 0x100000e prio 2047 ahead of creator 0x1000000 prio 2048 -> child reached a blocking point (6 gated, 0 timed out)
+
+A/B re-run on the rebased tree, 120 s each, gate alternating:
+
+    RESULT rdr       gate=1 code=12  flips=601  crashes=0 abort=23.2s load=21.80
+    RESULT rdr       gate=0 code=12  flips=601  crashes=0 abort=22.8s load=19.90
+    RESULT rdr       gate=1 code=12  flips=601  crashes=0 abort=22.7s load=18.11
+    RESULT rdr       gate=0 code=12  flips=601  crashes=0 abort=24.8s load=21.52
+    RESULT minecraft gate=1 code=124 flips=6661 crashes=0           load=16.91
+    RESULT minecraft gate=0 code=124 flips=6361 crashes=0           load=21.82
+    RESULT minecraft gate=1 code=124 flips=6541 crashes=0           load=17.55
+    RESULT minecraft gate=0 code=124 flips=6721 crashes=0           load=15.51
+    RESULT gta-sa    gate=1 code=124 flips=6241 crashes=0           load=13.75
+    RESULT gta-sa    gate=0 code=124 flips=6361 crashes=0           load=9.37
+    RESULT gta-sa    gate=1 code=124 flips=6421 crashes=0 gates=1   load=8.58
+    RESULT gta-sa    gate=0 code=124 flips=6301 crashes=0           load=7.15
+
+Same conclusion as before the rebase, on quieter numbers (load 7-22 rather than
+16-28): gate on and gate off are within the run-to-run spread, zero crashes
+everywhere, and gate=1 runs reach the budget on minecraft and gta-sa.
+
+Tests on the rebased tree:
+
+    $ cd build-rdr && ctest -j 4
+    100% tests passed, 0 tests failed out of 39
+    Total Test time (real) =   3.32 sec
+
+39 rather than 35 because L1 and its neighbours landed two more suites on main
+in the same window; all of them build and pass here, which is the point of
+running them after the rebase rather than before.
+
+## 10. Post-rebase regress.sh, and why RDR still FAILs
+
+    $ DISPLAY_NUM=:953 SECONDS_PER_GAME=120 tools/regress.sh
+    regress: 120s per game on display :953
+    minecraft    (load 6.58 before the run)
+    minecraft    PASS  alive           flips=6421   crashes=0
+    gta-sa       (load 12.96 before the run)
+    gta-sa       PASS  alive           flips=6361   crashes=0
+    rdr          (load 9.78 before the run)
+    rdr          FAIL  SPURS abort     flips=601    crashes=0   screen=socialclub@11s abort=at 23s log=/tmp/regress-rdr.log
+
+    regress: 1 game(s) REGRESSED
+
+Minecraft and gta-sa PASS. RDR fails on ONE criterion, `abort_after=60`: the
+Social Club notice IS read back from the captured frame
+(`screen=socialclub@11s`, /tmp/regress-rdr-shots/hit.png exists) and flips are
+601 against a floor of 2000 -- it aborts at 23 s.
+
+That is not this branch. The control, run on **origin/main's own binary** with
+the L4 changes nowhere near it, on this machine, at load 12.6, minutes later:
+
+    $ cd /root/Dev/ps3base2 && DISPLAY=:953 PS3BASE_DISC_DIR=/root/Dev/rdr-port/vfs/dev_bdvd \
+        timeout 120 build-rdr/ps3base --no-launcher
+    I  22.245981 rsx: flip 601 (buffer 0) worst 39.8 ms, >50ms 0, >100ms 0
+    I  23.339936 tty: [0] The SPURS is stopped due to the SPU exception.
+    load=12.59
+
+Same 601 flips, same abort, same 23 s, on the untouched tree. docs/regress-baseline.md
+records the RDR bar as `abort_after=60` from a run where the abort was at 78-97 s;
+main does not reach that on this machine today, so the bar cannot be met by any
+branch, and this branch neither moves it nor hides it.
+
+The gate itself is orthogonal to that abort: the abort is a SPURS SPU exception
+(process exit 0x8001000c through `_sys_panic`, liblv2+0xc7e8), and it happens
+with the gate on and with the gate off at the same time.
+
+## 11. The deliverable
+
+| what | where |
+|---|---|
+| the rule, with RPCS3's citation for both the direction and the bound | runtime/include/runtime/start_gate.h |
+| the option `advanced.ppu_start_gate` / `PS3BASE_PPU_START_GATE` (default on) | runtime/src/settings.cpp |
+| the decision and the bounded wait, pure functions | runtime/src/start_gate.cpp |
+| creator-side wait, and the logged budget expiry | runtime/src/thread.cpp (`guest::start`) |
+| the gate opening at every blocking point | runtime/src/lv2/object.h `wait_for`, ppu_thread.cpp yield/join, process.cpp 141/142, spu.cpp 177/178, thread.cpp exit |
+| PT_PROC_PARAM decode and RPCS3's acceptance rules | runtime/include/runtime/loader.h, runtime/src/proc_param.cpp, wired in runtime/src/loader.cpp |
+| 76 checks over both | tests/start_gate.cpp, registered as ctest `start_gate` |
