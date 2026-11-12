@@ -99,3 +99,44 @@ threads x 1e6 lock-free lwarx/stwcx increments, successes and counter both
 4,000,000.
 
 
+## Measurement 5 -- RDR against the fix, matched headless baseline
+
+Two runs, same command, same headless configuration (both logs say
+`gpu: SDL window creation failed: No available video device`, i.e. the
+buffer-present path, not the Vulkan presenter -- the two are NOT comparable
+across that boundary and the runs below are compared only within it):
+
+baseline, main HEAD 22d2a0c, before the fix:
+
+    I  21.875769 [3210514] rsx: flip 541 (buffer 0) worst 335.8 ms, >50ms 6, >100ms 3
+    I  23.493121 [3210480] tty: [0] The SPURS is aborted.
+    I  23.496001 [3210480] ppu: process exit -2147418100 from thread 0x1000004 lr=0x3000c7e8 liblv2+0xc7e8 (no lifted code)
+
+fix, same tree + the line reservation:
+
+    I  85.975564 [3287010] rsx: flip 1921 (buffer 0) worst 38.7 ms, >50ms 0, >100ms 0
+    I  87.025167 [3286990] tty: [0] The SPURS is aborted.
+    I  87.025841 [3286990] ppu: process exit -2147418100 from thread 0x1000004 lr=0x3000c7e8 liblv2+0xc7e8 (no lifted code)
+
+    flips 541 -> 1921 (3.55x)
+    abort 23.5 s -> 87.0 s (3.70x)
+    worst frame 335.8 ms -> 38.7 ms; >50 ms frames 6 -> 0; >100 ms frames 3 -> 0
+    crash events 0 -> 0
+
+The SPURS abort itself is not this fix's problem (the same
+`_sys_process_exit(0x8001000c)` / liblv2+0xc7e8 stop, and the same SPURS
+handler path); it simply arrives three and a half times later, and the flips
+are three and a half times higher, because the guest's own spin loops now stop
+losing their reservations to writes it could not see.
+
+### A note on the presenter path, because it changes the number
+
+The same binary presented through Vulkan instead of the headless buffer gives
+
+    I  23.793906 [3308404] rsx: flip 601 (buffer 0) worst 299.9 ms, >50ms 8, >100ms 4
+    I  25.421933 [3308394] tty: [0] The SPURS is aborted.
+
+so the two paths are not interchangeable and a comparison must hold it fixed.
+Both baseline and fix numbers above are from the headless path.
+
+
