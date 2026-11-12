@@ -6,3 +6,5 @@ libfs.prx
 libnet.prx
 libfiber.prx
 librtc.prx
+libresc.prx
+libspurs_jq.prx

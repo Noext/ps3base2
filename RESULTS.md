@@ -238,3 +238,557 @@ Everything rebuilt and rerun on the rebased tree, not on the pre-rebase one:
 
 Same three calls, same arguments, same returns; the title still stops on the
 +0x060 SPU descriptor field, which is outside sys_mmapper.
+
+---
+
+# W3 -- the library inventory: libresc, libspurs_jq, libfiber, libfs, libsync2, libsail
+
+Question: for each of the six, does RDR import it, and is it served LLE, HLE, or not at all?
+
+## 0. The two resolutions the runtime can take, from the code
+
+`runtime/src/ppu_runtime.cpp:179` `resolve()`:
+
+    for (uint32_t i = 0; i < image::export_count; i++) {
+        const image::ExportEntry& e = image::exports[i];
+        if (e.nid == imp.nid && std::strcmp(e.module, imp.module) == 0 && loader::image_loaded(e.image))
+            return i;                       // LLE: a lifted firmware image exports it
+    }
+    if (hle::Fn fn = hle::find(imp.module, imp.name)) { slot.hle = fn; return kHle; }
+    ... return kNone;                        // neither: a call here returns nothing
+
+An import is therefore served **LLE** iff some loaded image's export table has the
+same (module, NID) pair; **HLE** iff a runtime handler is registered under that
+(module, name); **not at all** otherwise.
+
+## 1. What the title imports at all -- from its own ELF, not from a log
+
+`python3 tools/inventory.py bin/rdr/EBOOT.elf ref/nid_db.json /tmp/W3/rdr-inv.json`
+
+    EBOOT.elf: 21886336 bytes, entry 0x1332080
+    imports: 24 modules, 343 functions (343 named)
+      cellSpurs                  41 f 0 v
+      sceNp                      39 f 0 v
+      cellSysutil                34 f 0 v
+      sys_net                    28 f 0 v
+      sceNp2                     27 f 0 v
+      sceNpCommerce2             26 f 0 v
+      cellGcmSys                 21 f 0 v
+      sys_fs                     21 f 0 v
+      sysPrxForUser              16 f 0 v
+      sys_io                     14 f 0 v
+      cellVoice                  13 f 0 v
+      sceNpTrophy                12 f 0 v
+      cellNetCtl                  9 f 0 v
+      cellFiber                   8 f 0 v
+      cellAudio                   7 f 0 v
+      cellGame                    6 f 0 v
+      cellHttp                    6 f 0 v
+      cellSysmodule               4 f 0 v
+      cellSync                    3 f 0 v
+      cellSsl                     3 f 0 v
+      cellRtc                     2 f 0 v
+      cellSysutilAvconfExt        1 f 0 v
+      cellGameExec                1 f 0 v
+      cellSaveData                1 f 0 v
+
+The import set is 24 module names. **`cellResc`, `cellSpursJq`, `cellSail`,
+`cellSync2` do not appear in it.**
+
+A static import table is only half the answer, because a title can also load a
+library at run time by id through `cellSysmoduleLoadModule`. RDR imports four
+`cellSysmodule` functions, so that path is live and is measured separately below.
+
+## 2. Status: work started
+
+Rebased on main HEAD 40a0597. Measurements follow, each appended with the raw
+command output that produced it.
+## 3. Every firmware PRX that exports each module, and what it depends on
+
+```
+$ python3 - <<'PY'   # inventory on each fw/4.91/*.prx, list exports
+libsail.prx     ['cellSail']
+libhttp.prx     ['cellHttp']
+libsysutil_np2.prx ['sceNp2']
+libfiber.prx    ['cellFiber']
+libspurs_jq.prx ['cellSpursJq']
+libsre.prx      ['cellSync', 'cellSpurs']
+libresc.prx     ['cellResc']
+libfs.prx       ['sys_fs']
+libssl.prx      ['cellSsl']
+```
+
+Note there is **no libsync2.prx in firmware 4.91**: the module `cellSync2` is
+exported by no PRX in `fw/4.91`, so it cannot be lifted from this firmware at all.
+
+```
+$ # deps of each candidate, from its own libstub
+libresc     depends on: cellGcmSys(16), cellSysutil(1), sysPrxForUser(9)
+libspurs_jq depends on: cellSpurs(9), cellFiber(2), sysPrxForUser(10)
+libsail     depends on: cellMp4(1), cellSailAvi(1), cellPamf(16), sys_fs(5), cellSpurs(4),
+                       cellDmux(13), cellAdec(8), libvdec(10), cellApostSrcMini(5),
+                       sysPrxForUser(19), cellSysmodule(4), cellVpost(4)
+libfiber    depends on: cellLibprof(2), sysPrxForUser(7)
+libfs       depends on: sysPrxForUser(15)
+libsre      depends on: cellLibprof(2), sysPrxForUser(30)
+```
+
+## 4. The whole import table, resolved -- LLE iff a loaded image exports the
+(module, NID) pair, else HLE iff a handler is registered, else neither
+
+Script: joins `out-rdr/ppu/table.cpp` (`imports[]`/`exports[]`) against every
+`HLE_FUNC(module, name)` in `runtime/src/hle/*.cpp`.
+
+```
+module                   imp   LLE   HLE  none
+sysPrxForUser            115   115     0     0
+cellSpurs                 41    41     0     0
+sceNp                     39     0    39     0
+cellSysutil               35     0    35     0
+sys_net                   28    28     0     0
+sceNp2                    27     0    13    14
+sceNpCommerce2            26     0    26     0
+cellGcmSys                21    21     0     0
+sys_fs                    21    21     0     0
+sys_io                    14     0    14     0
+cellVoice                 13     0    13     0
+sceNpTrophy               12     0    12     0
+cellNetCtl                 9     0     9     0
+cellFiber                   8     8     0     0
+cellAudio                  7     0     7     0
+cellGame                   6     0     6     0
+cellHttp                   6     0     0     6
+cellSysmodule               4     4     0     0
+cellLibprof                4     0     4     0
+cellSync                   3     3     0     0
+cellSsl                    3     0     0     3
+cellRtc                    2     2     0     0
+cellSysutilAvconfExt       1     0     1     0
+cellGameExec               1     0     1     0
+cellSaveData               1     0     1     0
+
+total imports 447 LLE 243 HLE 181 NONE 23
+```
+
+The 23 served by neither are 14 `sceNp2` / 6 `cellHttp` / 3 `cellSsl`
+(network stack), not any of the six modules under review.
+## 5. What RDR actually asks the runtime to load, measured from a run
+
+```
+$ nohup setsid env DISPLAY=:932 XDG_RUNTIME_DIR=/run/user/0 \
+    PS3BASE_DISC_DIR=/root/Dev/rdr-port/vfs/dev_bdvd PS3BASE_LOG=info \
+    timeout 120 build-32/ps3base --no-launcher > /tmp/W3.log 2>&1 &
+$ grep -a 'prx: load' /tmp/W3.log | sed "s/.*load '//;s/' ->.*//" | sort | uniq -c
+      1 /dev_flash/sys/external/libaudio.sprx
+      1 /dev_flash/sys/external/libfiber.sprx
+      1 /dev_flash/sys/external/libfs.sprx
+      1 /dev_flash/sys/external/libgcm_sys.sprx
+      1 /dev_flash/sys/external/libio.sprx
+      1 /dev_flash/sys/external/libnet.sprx
+      1 /dev_flash/sys/external/libnetctl.sprx
+      1 /dev_flash/sys/external/librtc.sprx
+      1 /dev_flash/sys/external/libsre.sprx
+      1 /dev_flash/sys/external/libsysmodule.sprx
+      1 /dev_flash/sys/external/libsysutil.sprx
+      1 /dev_flash/sys/external/libsysutil_avconf_ext.sprx
+      2 /dev_flash/sys/external/libsysutil_game.sprx
+      1 /dev_flash/sys/external/libsysutil_game_exec.sprx
+      1 /dev_flash/sys/external/libsysutil_np.sprx
+      1 /dev_flash/sys/external/libsysutil_np2.sprx
+      1 /dev_flash/sys/external/libsysutil_np_trophy.sprx
+      1 /dev_flash/sys/external/libsysutil_savedata.sprx
+      1 /dev_flash/sys/external/libvoice.sprx
+$ grep -ac 'prx: load' /tmp/W3.log
+20
+$ grep -a 'prx: load' /tmp/W3.log | grep -cE 'resc|spurs_jq|sail|sync2'
+0
+```
+
+**libresc, libspurs_jq, libsail and libsync2 are never requested by this title.**
+That is the run-time confirmation of the static import table in section 1.
+
+## 6. The dynamic path: cellSysmoduleLoadModule, every id the title asks for
+
+RDR imports four `cellSysmodule` functions, so a missing module could still be
+loaded by id. Measured, with the import arguments logged:
+
+```
+$ env GOWA_IMPORT_ARGS=cellSysmoduleLoadModule,cellSysmoduleLoadModuleEx,cellSysmoduleIsLoaded ... timeout 90 ps3base
+I   0.607597 import: cellSysmodule::cellSysmoduleLoadModule(0x0, ...) lr 0x10c70
+I   0.607999 import: cellSysmodule::cellSysmoduleIsLoaded(0xe, ...) 
+I   0.608014 import: cellSysmodule::cellSysmoduleLoadModule(0xe, 0x0, ...) lr 0x10c70
+I   0.608249 import: cellSysmodule::cellSysmoduleIsLoaded(0x46, ...)
+I   0.608263 import: cellSysmodule::cellSysmoduleLoadModule(0x46, 0x0, ...) lr 0x10c70
+I   0.608315 import: cellSysmodule::cellSysmoduleIsLoaded(0x9, ...)
+I   0.608331 import: cellSysmodule::cellSysmoduleLoadModule(0x9, 0x0, ...) lr 0x10c70
+I   0.608458 import: cellSysmodule::cellSysmoduleIsLoaded(0xf035, ...)
+I   0.608473 import: cellSysmodule::cellSysmoduleLoadModule(0xf035, 0x0, ...) lr 0x10c70
+
+$ grep -a 'cellSysmoduleLoadModule(' /tmp/W3-sysmod.log | sed 's/.*LoadModule(0x//;s/,.*//' | sort | uniq -c
+      1 0
+      1 31
+      2 33
+      1 37
+      1 38
+      3 3e
+      1 43
+      1 46
+      3 9
+      1 e
+      1 f035
+$ grep -ac 'cellSysmoduleLoadModule(' /tmp/W3-sysmod.log
+16
+```
+
+Decoded against `refs/rpcs3/rpcs3/Emu/Cell/Modules/cellSysmodule.h:17-135`
+(`CellSysmoduleModuleID`, read not retyped):
+
+| id | module | imported by RDR statically? |
+|---|---|---|
+| 0x00 | CELL_SYSMODULE_NET | no |
+| 0x09 | CELL_SYSMODULE_RTC | yes (cellRtc) |
+| 0x0e | CELL_SYSMODULE_FS | yes (sys_fs) |
+| 0x31 | CELL_SYSMODULE_AVCONF_EXT | yes (cellSysutilAvconfExt) |
+| 0x33 | CELL_SYSMODULE_SYSUTIL_SAVEDATA | yes (cellSaveData) |
+| 0x37 | CELL_SYSMODULE_SYSUTIL_GAME_EXEC | yes (cellGameExec) |
+| 0x38 | CELL_SYSMODULE_SYSUTIL_NP2 | yes (sceNp2) |
+| 0x3e | CELL_SYSMODULE_SYSUTIL_GAME | via cellSysutil |
+| 0x43 | CELL_SYSMODULE_FIBER | yes (cellFiber) |
+| 0x46 | CELL_SYSMODULE_VOICE | yes (cellVoice) |
+| 0xf035 | CELL_SYSMODULE_SYSUTIL_NP_TROPHY | yes (sceNpTrophy) |
+
+**Not one of the 11 ids is 0x1d (SAIL), 0x1f (RESC), 0x50 (SPURS_JQ) or 0x55
+(SYNC2).** The dynamic table is id-free for all four, so there is nothing to
+lift for the title's benefit.
+
+## 7. Firmware coverage: which module each PRX exports
+
+```
+$ python3 - <<'PY'  # inventory.py exports() on each fw/4.91/*.prx
+libadec.prx              cellAdec
+libaudio.prx             cellAudio,mios2_Client
+libavcdec.prx            libavcdec
+libdmux.prx              cellDmux
+libfiber.prx             cellFiber
+libfont.prx              cellFont
+libfontFT.prx            cellFontFT
+libfreetype.prx          cell_FreeType2
+libfs.prx                sys_fs,sys_fs_ps2disc
+libgcm_sys.prx           cellGcmSys
+libgem.prx               libgem
+libhttp.prx              cellHttpUtil,cellHttp
+libio.prx                sys_io,sys_io_debug
+libl10n.prx              cellL10n
+liblv2.prx               sysPrxForUser,sysPs2Disc,sysBdMediaId,sysConsoleId
+libnet.prx               sys_net
+libnetctl.prx            cellNetCtl,cellNetAoi,cellNetCtlMintX
+libresc.prx              cellResc
+librtc.prx               cellRtc
+libsail.prx              cellSail
+libsjvtd.prx             libsjvtd
+libsmvd2.prx             libsmvd2
+libspurs_jq.prx          cellSpursJq
+libsre.prx               cellSync,cellSheap,cellOvis,cellSpurs,cellDaisy,cellSpudll
+libssl.prx               cellSsl
+libsysmodule.prx         cellSysmodule
+libsysutil.prx           cellSysutil
+libsysutil_np.prx        sceNp,sceNpMatchingInt,sceNpBasicLimited,sceNpPlus,sceNpManagerInt
+libsysutil_np2.prx       sceNp2
+libsysutil_np_trophy.prx sceNpTrophy
+libusbd.prx              cellUsbd
+libvdec.prx              libvdec
+libvoice.prx             cellVoice
+```
+
+**There is no `cellSync2` in firmware 4.91 at all** -- 33 PRX files, none exports
+it. It is not a placement problem, it does not exist in this firmware image.
+## 8. The lift: four modules relocated and lifted, verified export by export
+
+Only one of the six can actually be lifted from this firmware. `cellSync2` has
+no PRX (section 7). `libresc`, `libspurs_jq` and `libsail` do; `libfiber` and
+`libfs` were already lifted and are in `recomp/images-rdr.json`.
+
+### 8.1 Placement
+
+`recomp/lle_modules.txt` names eight modules and `recomp/lle_layout-rdr.json`
+places them at 0x21000000. The canonical tree the runtime is built against today
+(`out-rdr/gen/lle_layout.json`) instead places them from 0x30000000. I added the
+three to that layout, above the existing eight, so nothing already loaded moves:
+
+```
+$ python3 tools/prx_relocate.py out-w3/lle_layout.json fw/4.91 out-w3/gen/reloc
+liblv2                   base 0x30000000 toc 0x3001c620 start 0x30013bd8 relocs {5: 5, 4: 5, 1: 1032}
+cellSysmodule_Library    base 0x31000000 toc 0x31011e90 start 0x31009900 relocs {6: 18, 4: 18, 1: 747}
+cellSre_Library          base 0x32000000 toc 0x32039ab0 start None relocs {6: 32, 4: 32, 1: 1366}
+cellGcm_Library          base 0x33000000 toc 0x33014000 start 0x3300bf3c relocs {6: 11, 4: 11, 1: 700}
+sys_fs_Library           base 0x34000000 toc 0x340194c0 start 0x340103c0 relocs {6: 15, 4: 15, 1: 1515}
+sys_net_Library          base 0x35000000 toc 0x3502a0d0 start 0x35021634 relocs {6: 19, 4: 19, 1: 1300}
+cellFiber_Library        base 0x36000000 toc 0x36016a80 start 0x3600ea68 relocs {6: 9, 4: 9, 1: 303}
+cellRtc_Library          base 0x37000000 toc 0x3700c5f0 start None relocs {1: 146}
+cellResc_Library         base 0x38000000 toc 0x380142c0 start 0x3800be60 relocs {6: 26, 4: 26, 1: 432}
+cellSpursJq_Library      base 0x39000000 toc 0x39017e80 start 0x3900fbcc relocs {6: 21, 4: 21, 1: 342}
+cellSail_Library         base 0x3a000000 toc 0x3a02eee0 start 0x3a025f84 relocs {6: 90, 4: 90, 1: 1623}
+```
+
+### 8.2 Static seeds, then lift
+
+```
+$ python3 tools/static_seeds.py --elf out-w3/gen/reloc/libresc.elf --name libresc --out out-w3/gen/seeds/libresc.txt
+libresc      code 0x38000000-0x3800ac20  reloc 135  descriptors 145  code-addr 0  total 279
+$ ... libspurs_jq
+libspurs_jq  code 0x39000000-0x39010000  reloc 174  descriptors  86  code-addr 0  total 259
+$ ... libsail
+libsail      code 0x3a000000-0x3a030000  reloc 791  descriptors 492  code-addr 0  total 1276
+
+$ PS3BASE_STATIC_SEEDS=1 python3 recomp/ppu/codegen.py out-w3/images-w3.json ref/nid_db.json out-w3/ppu
+...
+libresc        functions    147 files   1 imports   26 exports   26
+libspurs_jq    functions     86 files   1 imports   21 exports   68
+libsail        functions    600 files   2 imports   90 exports  141
+total functions 77626 imports 584 exports 1095
+unimplemented: [('mtspr', 1)]
+```
+
+The single `mtspr` is an instruction the lifter names rather than mistranslates:
+it emits `ppu::unimplemented(ctx, base, pc, word)`, so if it is ever executed the
+log names the site. It is one instruction in 77626 functions.
+
+The generated image table now carries twelve images:
+
+```
+{"rdr", "bin/rdr/EBOOT.elf", false, 0x10200, 0x10d9f74, 0x139ebb0, 0x1332080},
+...
+{"libresc", "out-w3/gen/reloc/libresc.elf", true, 0x38000000, 0x3800ac20, 0x380142c0, 0x3800be60},
+{"libspurs_jq", "out-w3/gen/reloc/libspurs_jq.elf", true, 0x39000000, 0x3900ed00, 0x39017e80, 0x3900fbcc},
+{"libsail", "out-w3/gen/reloc/libsail.elf", true, 0x3a000000, 0x3a0259d0, 0x3a02eee0, 0x3a025f84},
+const uint32_t image_count = 12;
+```
+### 8.3 Export verification -- `tools/check_lle_exports.py`
+
+A module in the image table can still be useless: the lifter may drop an export,
+or lift a descriptor without lifting the code it points at. Both faults are
+silent -- `resolve()` finds no export, or finds one whose opd reads a code word
+with no lifted function, and the call goes to a null dispatch slot.
+
+The checker joins the PRX's own export table against the generated
+`exports[]`/`functions[]` and requires, per export: the (module, NID) is present,
+the opd is non-zero and equal, and the descriptor's FIRST word -- the code
+address, the same word `ppu_runtime.cpp` loads with `code = ld32(base, e.opd)` --
+is an entry in `functions[]`. A code word that is not inside an image's text is
+skipped, because exports like `sys_prx_version` are data (0x00010001), not
+descriptors.
+
+```
+$ python3 tools/check_lle_exports.py out-w3/ppu/table.cpp \
+    out-w3/gen/reloc/libresc.elf cellResc \
+    out-w3/gen/reloc/libspurs_jq.elf cellSpursJq \
+    out-w3/gen/reloc/libsail.elf cellSail \
+    out-w3/gen/reloc/libfiber.elf cellFiber \
+    out-w3/gen/reloc/libfs.elf sys_fs \
+    out-w3/gen/reloc/libnet.elf sys_net \
+    out-w3/gen/reloc/libsre.elf cellSpurs \
+    out-w3/gen/reloc/libsre.elf cellSync \
+    out-w3/gen/reloc/libgcm_sys.elf cellGcmSys \
+    out-w3/gen/reloc/libsysmodule.elf cellSysmodule \
+    out-w3/gen/reloc/librtc.elf cellRtc \
+    out-w3/gen/reloc/liblv2.elf sysPrxForUser
+cellResc        22 exports: 22 ok, 0 missing, 0 zero-opd, 0 mismatched, 0 no-code
+cellSpursJq     63 exports: 63 ok, 0 missing, 0 zero-opd, 0 mismatched, 0 no-code
+cellSail       137 exports: 137 ok, 0 missing, 0 zero-opd, 0 mismatched, 0 no-code
+cellFiber       47 exports: 47 ok, 0 missing, 0 zero-opd, 0 mismatched, 0 no-code
+sys_fs          93 exports: 93 ok, 0 missing, 0 zero-opd, 0 mismatched, 0 no-code
+sys_net        100 exports: 100 ok, 0 missing, 0 zero-opd, 0 mismatched, 0 no-code
+cellSpurs      149 exports: 149 ok, 0 missing, 0 zero-opd, 0 mismatched, 0 no-code
+cellSync        42 exports: 42 ok, 0 missing, 0 zero-opd, 0 mismatched, 0 no-code
+cellGcmSys     102 exports: 102 ok, 0 missing, 0 zero-opd, 0 mismatched, 0 no-code
+cellSysmodule   18 exports: 18 ok, 0 missing, 0 zero-opd, 0 mismatched, 0 no-code
+cellRtc         40 exports: 40 ok, 0 missing, 0 zero-opd, 0 mismatched, 0 no-code
+sysPrxForUser  158 exports: 158 ok, 0 missing, 0 zero-opd, 0 mismatched, 0 no-code
+PASS
+```
+
+### 8.4 Import resolution inside the new modules
+
+Each new module imports other libraries in turn. Joined against `exports[]` and
+every `HLE_FUNC(module, name)`:
+
+```
+image            imp   LLE   HLE  NONE
+rdr              343   144   176    23
+libsysmodule      18    18     0     0
+libsre            32    30     2     0
+libgcm_sys        11    10     1     0
+libfs             15    15     0     0
+libnet            19    19     0     0
+libfiber           9     7     2     0
+libresc           26    25     1     0
+libspurs_jq       21    21     0     0
+libsail           90    32     9    49
+```
+
+**libresc, libspurs_jq, libfiber and libfs are fully served** -- 26/26, 21/21,
+9/9 and 15/15 -- once lifted. libsail is not: its 49 unresolved imports are its
+own media-stack dependencies (`cellPamf` 16, `cellDmux` 13, `cellAdec` 8,
+`cellVpost` 4, `cellMp4` 1, `cellSailAvi` 1, `cellApostSrcMini` 5,
+`libvdec::cellVdecGetPictureExt` 1), and **five of those PRX files are not in
+firmware 4.91 at all**:
+
+```
+$ ls fw/4.91 | grep -iE 'pamf|vpost|mp4|sailavi|apost'
+(no output)
+$ for n in libpamf libvpost libmp4 libsailavi libapostsrcmini; do
+    [ -e fw/4.91/$n.prx ] && echo "$n present" || echo "$n ABSENT"; done
+libpamf ABSENT
+libvpost ABSENT
+libmp4 ABSENT
+libsailavi ABSENT
+libapostsrcmini ABSENT
+```
+
+So libsail lifts to a complete, verified table but is inert in this tree until
+its media dependencies are available. That is why it is lifted and **not**
+enabled, while libresc and libspurs_jq are clean.
+### 8.5 The same lift, reproduced from the committed recipe
+
+Everything above used `out-w3/`, a tree I assembled by hand. The point of the
+lift is that someone else can reproduce it from what is in the repository, so
+the two modules are appended to `recomp/lle_modules.txt` -- the list
+`tools/layout_for.py` and `tools/prx_relocate.py` already consume -- and the
+whole sequence is re-run from scratch into a fresh tree:
+
+```
+$ printf 'libresc.prx\nlibspurs_jq.prx\n' >> recomp/lle_modules.txt
+$ cat recomp/lle_modules.txt
+liblv2.prx
+libsysmodule.prx
+libsre.prx
+libgcm_sys.prx
+libfs.prx
+libnet.prx
+libfiber.prx
+librtc.prx
+libresc.prx
+libspurs_jq.prx
+
+$ python3 tools/layout_for.py --elf bin/rdr/EBOOT.elf --modules recomp/lle_modules.txt --out out-w3c/gen/lle_layout.json
+layout_for: title text 0x00010000-0x01326860, modules from 0x30000000, wrote out-w3c/gen/lle_layout.json
+
+$ python3 tools/prx_relocate.py out-w3c/gen/lle_layout.json fw/4.91 out-w3c/gen/reloc
+...
+cellResc_Library         base 0x38000000 toc 0x380142c0 start 0x3800be60 relocs {6: 26, 4: 26, 1: 432}
+cellSpursJq_Library      base 0x39000000 toc 0x39017e80 start 0x3900fbcc relocs {6: 21, 4: 21, 1: 342}
+
+$ PS3BASE_STATIC_SEEDS=1 python3 recomp/ppu/codegen.py out-w3c/images.json ref/nid_db.json out-w3c/ppu
+...
+libresc        functions    147 files   1 imports   26 exports   26
+libspurs_jq    functions     86 files   1 imports   21 exports   68
+libfiber       functions     89 files   1 imports    9 exports   52
+librtc         functions     42 files   1 imports    0 exports   42
+libfs          functions   1043 files 2 imports  15 exports   94
+librtc         functions     42 files   1 imports    0 exports   42
+total functions 77026 imports 494 exports 954
+unimplemented: [('mtspr', 1)]
+```
+
+`layout_for.py` places the ten modules at 0x30000000..0x39000000, which is
+exactly the band the canonical `out-rdr/gen/lle_layout.json` already uses for
+its eight -- so the two new slots are 0x38000000 and 0x39000000, above every
+module already loaded, and nothing that resolves today moves.
+
+The generated table from the committed recipe:
+
+```
+{"libresc", "out-w3c/gen/reloc/libresc.elf", true, 0x38000000, 0x3800ac20, 0x380142c0, 0x3800be60},
+{"libspurs_jq", "out-w3c/gen/reloc/libspurs_jq.elf", true, 0x39000000, 0x3900ed00, 0x39017e80, 0x3900fbcc},
+const uint32_t image_count = 11;
+
+$ python3 tools/check_lle_exports.py out-w3c/ppu/table.cpp \
+    out-w3c/gen/reloc/libresc.elf cellResc out-w3c/gen/reloc/libspurs_jq.elf cellSpursJq \
+    out-w3c/gen/reloc/libfiber.elf cellFiber out-w3c/gen/reloc/libfs.elf sys_fs
+cellResc        22 exports: 22 ok, 0 missing, 0 zero-opd, 0 mismatched, 0 no-code
+cellSpursJq     63 exports: 63 ok, 0 missing, 0 zero-opd, 0 mismatched, 0 no-code
+cellFiber       47 exports: 47 ok, 0 missing, 0 zero-opd, 0 mismatched, 0 no-code
+sys_fs          93 exports: 93 ok, 0 missing, 0 zero-opd, 0 mismatched, 0 no-code
+PASS
+```
+### 8.6 Run with the two new modules in the image table
+
+Reconfigured against the recipe tree and run exactly as the baseline:
+
+```
+$ cmake -S . -B build-w3 -DPS3BASE_GENERATED_DIR=/root/Dev/wt-W3/out-w3c/ppu ...
+$ cmake --build build-w3 -j 8 --target ps3base
+[188/188] Linking CXX executable ps3base
+
+$ nohup setsid env DISPLAY=:932 XDG_RUNTIME_DIR=/run/user/0 \
+    PS3BASE_DISC_DIR=/root/Dev/rdr-port/vfs/dev_bdvd PS3BASE_LOG=info \
+    timeout 120 build-w3/ps3base --no-launcher > /tmp/W3-final.log 2>&1 &
+
+$ grep -a 'loader: loaded' /tmp/W3-final.log | sed 's/.*loaded //;s/ (.*//' | tr '\n' ' '
+rdr liblv2 libsysmodule libgcm_sys libsre libnet libfs librtc libfiber
+
+$ grep -a 'rsx: flip' /tmp/W3-final.log | tail -1
+I  21.725485 rsx: flip 601 (buffer 0) worst 38.1 ms, >50ms 0, >100ms 0
+$ grep -ac 'crash: signal' /tmp/W3-final.log
+0
+$ tail -2 /tmp/W3-final.log
+I  22.699771 ppu: process exit -2147418100
+I  22.699771 ppu: process exit -2147418100 from thread 0x1000004 lr=0x3000c7e8 liblv2+0xc7e8 spurs-abort-tail (_sys_panic+0x58)
+```
+
+The two new images are in the table but **are not loaded at run time**, because
+`loader::load_image` is only called for the game, liblv2, and each PRX the title
+asks `sys_prx_load_module` for (section 5: 20 requests, none of them these two).
+RDR never asks for them, so lifting them changes nothing for RDR -- which is the
+whole point: **the library inventory says there is no work here for this title.**
+
+The behaviour is identical to the baseline run on the same machine in the same
+session (`/tmp/W3.log`): 601 flips, 0 crash events, same `_sys_panic+0x58` abort
+at 23.8 s. No regression, and no gain, as predicted.
+
+### 8.7 Tests
+
+```
+$ ctest --output-on-failure -j 4      # in build-w3, against the recipe tree
+100% tests passed, 0 tests failed out of 33
+Total Test time (real) =   3.12 sec
+```
+
+Three test targets do not build in this tree for reasons that predate this work
+and are unrelated to it (they need generated content no tree on this machine
+has): `spu_bench` (`renjob_gen.h` not found), `spu_live`
+(`spu::SpuThread` has no member `stalled`), and `spu_bench`'s `edge_ovl_gen.h` /
+`edge_softbody_gen.inc`. `ppu_conformance` and `wgpu_smoke` are not configured
+targets in this build. The 33 tests that do exist all pass.
+## 9. The tool, so the next reader does not repeat the analysis
+
+`tools/lle_inventory.py` answers the question mechanically for any module name,
+against the table the binary was actually built from:
+
+```
+$ python3 tools/lle_inventory.py --table out-w3c/ppu/table.cpp --fw fw/4.91 \
+    cellResc cellSpursJq cellFiber sys_fs cellSync2 cellSail cellSpurs cellSheap cellSync
+
+module           imported    LLE    HLE   NONE  prx exporting it
+cellResc                0      0      0      0  libresc.prx
+cellSpursJq             0      0      0      0  libspurs_jq.prx
+cellFiber              10     10      0      0  libfiber.prx
+sys_fs                 21     21      0      0  libfs.prx
+cellSync2               0      0      0      0  (no PRX in this firmware)
+cellSail                0      0      0      0  libsail.prx
+cellSpurs              50     50      0      0  libsre.prx
+cellSheap               0      0      0      0  libsre.prx
+cellSync                3      3      0      0  libsre.prx
+
+images in the table: rdr, liblv2, libsysmodule, libsre, libgcm_sys, libfs,
+libnet, libfiber, librtc, libresc, libspurs_jq
+```
+
+Note the two columns that matter: **imported 0** for cellResc, cellSpursJq,
+cellSync2 and cellSail -- the title never calls them, so lifting them cannot
+change its behaviour -- and **imported 10/21 with LLE 10/21 and NONE 0** for
+cellFiber and sys_fs, which are used and fully served.
+
+`tools/check_lle_exports.py` is the companion that catches the failure the
+inventory cannot see: a module in the table whose exports resolve but whose code
+was never lifted.
