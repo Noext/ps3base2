@@ -106,6 +106,13 @@ bool rsx_io_page_taken(uint32_t io) {
 
 
 
+/* Declared at namespace scope OUTSIDE the anonymous namespace below. Inside it the
+ * reference mangles as _ZN3lv212_GLOBAL__N_1... while cellGcmSys defines
+ * _ZN3hle16gcm_flip_handlerEv, so the call became an undefined symbol that
+ * -sERROR_ON_UNDEFINED_SYMBOLS=0 turned into an aborting trampoline: the first flip
+ * would have killed the module. Found by track X1. */
+extern uint32_t gcm_flip_handler();
+
 namespace {
 #if defined(PS3BASE_RSX_METHOD_TRACE) && PS3BASE_RSX_METHOD_TRACE
 std::atomic<uint32_t> g_texunit_writes[64];
@@ -158,7 +165,6 @@ void rsx_write32(uint32_t addr, uint32_t value) {
     rsv::store_locked(addr, &be, 4);
 }
 
-extern uint32_t gcm_flip_handler();
 
 /* Call the guest handler on a scratch context so we do not disturb the caller's
  * registers. The handler takes the flip buffer id in r3, as the native path does. */
@@ -744,6 +750,12 @@ void vblank_thread() {
         uint64_t tb = ppu::timebase();
         vm::write32(h + 0x1C, static_cast<uint32_t>(tb));
         vm::write32(h + 0x3C, static_cast<uint32_t>(tb >> 32));
+        /* The title waits for a NON-ZERO byte at 0x00be070c before it opens a frame,
+         * then zeroes it itself (f_002dc1e4, out/ppu/mc_028.cpp:1065813). Nothing in
+         * the runtime wrote it, so no frame ever started. This is the title's own
+         * frame semaphore, distinct from head_addr(1)+0x30 which drives the RSX
+         * driver. Set it once per vblank. */
+        if (vm::range_mapped(0x00BE070Cu, 1)) vm::g_base[0x00BE070Cu] = 1;
         int64_t pf = g_rsx.pending_flip.exchange(-1);
         if (pf >= 0) flip_done(static_cast<uint32_t>(pf));
         send_event(1u << 1);
@@ -812,6 +824,48 @@ LV2_SYSCALL(668, sys_rsx_memory_allocate) {
 }
 
 LV2_SYSCALL(669, sys_rsx_memory_free) { return CELL_OK; }
+
+/* Called by the HLE _cellGcmInitBody, which replaces the LLE body that would
+ * otherwise reach sys_rsx_memory_allocate (668) then sys_rsx_context_allocate (670).
+ * Without this the RSX context is never created -- measured: 0 lines matching
+ * "rsx:" over 147 s of wasm run, while the native logs 19 sys_rsx_* calls -- and
+ * vblank_thread is never started, so the title's frame semaphore at 0x00be070c is
+ * never set and no frame ever begins.
+ *
+ * The native allocates local memory 0xf900000 at 0x50000000 (track E, measured). */
+int32_t rsx_setup_for_hle() {
+    if (!g_rsx.local_size) {
+        const uint32_t size = 0x0F900000u;
+        if (!vm::map(LOCAL_BASE, size)) {
+            LOG_WARN("rsx", "rsx_setup_for_hle: local memory map refused (0x%x at 0x%08x)",
+                     size, LOCAL_BASE);
+            return CELL_ENOMEM;
+        }
+        g_rsx.local_size = size;
+        LOG_INFO("rsx", "local memory 0x%llx bytes at 0x%08x (hle init)",
+                 static_cast<unsigned long long>(size), LOCAL_BASE);
+    }
+    if (g_rsx.ctx_base) return CELL_OK;   /* already set up */
+    if (!g_rsx.local_size) return CELL_EINVAL;
+    uint32_t area = vm::alloc(vm::Region::RsxContext, 0x300000, 0x100000);
+    if (!area) area = vm::alloc(vm::Region::Main, 0x300000, 0x100000);
+    if (!area) return CELL_ENOMEM;
+    g_rsx.ctx_base = area;
+    g_rsx.dma_control = area;
+    g_rsx.driver_info = area + 0x100000;
+    g_rsx.reports = area + 0x200000;
+    g_rsx.running = true;
+    LOG_INFO("rsx", "context at 0x%08x (hle init)", area);
+    /* The context exists but nothing drives it: vblank_thread and fifo_thread are
+     * started inside sys_rsx_context_allocate, which the LLE body would reach and
+     * the HLE path does not. Without the vblank the title's frame semaphore at
+     * 0x00be070c is never set and no frame ever begins -- measured: byte = 0 over
+     * 147 s, 0 lines matching "rsx:" before this change. */
+    std::thread([] { vblank_thread(); }).detach();
+    std::thread([] { fifo_thread(); }).detach();
+    LOG_INFO("rsx", "vblank and fifo threads started (hle init)");
+    return CELL_OK;
+}
 
 LV2_SYSCALL(670, sys_rsx_context_allocate) {
     if (!g_rsx.local_size) return CELL_EINVAL;

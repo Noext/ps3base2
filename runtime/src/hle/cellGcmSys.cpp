@@ -120,6 +120,14 @@ HLE_FUNC(cellGcmSys, _cellGcmInitBody) {
          * The runtime's own sys_rsx_context_allocate uses the same 3 MB layout
          * (lv2/rsx.cpp: g_rsx.dma_control = area, driver_info = +1 MB, reports =
          * +2 MB); after this round the HLE path must agree with it. */
+        /* Create the RSX context and start its threads. The LLE body this replaces
+         * reaches sys_rsx_memory_allocate(668) then sys_rsx_context_allocate(670);
+         * the HLE path must do the same or the context, its vblank thread and the
+         * title's frame semaphore never exist. */
+        {
+            const int32_t rc = rsx_setup_for_hle();
+            LOG_INFO("gcm", "_cellGcmInitBody: rsx_setup_for_hle -> 0x%x", static_cast<uint32_t>(rc));
+        }
         const uint32_t buf = io_addr ? io_addr : context + 0x40;
         if (buf) {
             /* io table: ring EA -> io 0, so the put/get offsets the guest writes

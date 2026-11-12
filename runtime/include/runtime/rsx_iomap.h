@@ -23,9 +23,22 @@ int32_t gcm_map_ea_io(uint32_t ea, uint32_t io, uint32_t size);
 
 /* True when this 1 MB io page already maps something. */
 bool rsx_io_page_taken(uint32_t io);
+
+/* RSX label table entry, or 0 when the table is not up (refs cellGcmSys.cpp:159). */
+uint32_t gcm_label_address(uint32_t index);
+
+/* Invoke the guest flip handler registered via cellGcmSetFlipHandler. */
+void rsx_flip_callback(uint32_t handler_ea);
+
+/* Create the RSX context the LLE _cellGcmInitBody would have created: local
+ * memory, the context block, and the vblank/FIFO threads. */
+int32_t rsx_setup_for_hle();
 }  // namespace lv2
 
 using lv2::gcm_map_ea_io;
 using lv2::rsx_io_page_taken;
+using lv2::gcm_label_address;
+using lv2::rsx_flip_callback;
+using lv2::rsx_setup_for_hle;
 
 #endif  /* PS3BASE_RSX_IOMAP_H */
