@@ -1,1 +1,1 @@
-{"status":"running","agent":"U2","note":"fix measured: 0 aborts, 2881 flips, exception reaches guest","updated":"2026-11-12T12:02:00Z"}
+{"status":"done","agent":"U2","task":"no more zero-fill","result":"PASS flips=3121 screen=socialclub@11s abort=at 109s crashes=0","updated":"2026-11-12T12:56:00Z"}

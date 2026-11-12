@@ -392,6 +392,87 @@ int main() {
         check(h2.last_write_value == 0xABCD, "wrch sends the preferred word of rt");
     }
 
+    /* ======================================================================
+     * A refused DMA is refused BEFORE any translation and writes nothing.
+     *   The transfer's local-store destination is not the MFC's to scribble on:
+     *   zero-filling it is what turned an unmapped GET into an executed
+     *   `stop 0` on Red Dead Redemption and aborted the SPURS group.
+     * ==================================================================== */
+    {
+        /* A transfer that runs off the end of the 32-bit effective address
+         * space is refused, not wrapped: 0xFFFFFFC0 + 0x80 ends at
+         * 0x100000040, and truncating that to 32 bits would write to
+         * 0x00000000..0x00000040. */
+        check(spu::dma_check_range(0xFFFFFFC0u, 0x80) == spu::DmaRefusal::Range,
+              "a DMA that wraps the effective address space is refused");
+        check(spu::dma_check_range(0xFFFFFF80u, 0x80) == spu::DmaRefusal::None,
+              "a DMA that exactly reaches the end of the address space is allowed");
+        /* Above the MMIO base the same rule holds: a transfer that would wrap
+         * the SPU window is refused, not wrapped into it. */
+        check(spu::dma_check_range(0xF0000000u, 0x1000) == spu::DmaRefusal::None,
+              "the SPU thread window is in range");
+        check(spu::dma_check_range(0xFFFFFFF0u, 0x20) == spu::DmaRefusal::Range,
+              "a transfer that wraps past the SPU window is refused");
+        check(spu::dma_check_range(0x00010000u, 0x4000) == spu::DmaRefusal::None,
+              "an ordinary guest DMA is allowed");
+        /* Guest address 0 is the case that actually faulted: the main region
+         * starts at 0x00010000 (runtime/src/memory.cpp:42) and RPCS3 treats
+         * exactly 0x00010000 as the special main block (vm.cpp:2174). */
+        check(spu::dma_check_range(0, 0x80) == spu::DmaRefusal::None,
+              "address 0 is in range -- it is refused for being unmapped, not for its value");
+        check(spu::dma_check_range(0, 0) == spu::DmaRefusal::None, "a zero-size DMA is not a range error");
+
+        /* The MMIO window is bounded separately and must never be reported as a
+         * guest range error: a PUT to the SPU thread window is legal. */
+        check(spu::dma_check_range(0xF0000000u, 0x1000) == spu::DmaRefusal::None,
+              "the SPU thread window is not a guest range error");
+
+        /* GET and PUT are decided from the command byte, because which side of
+         * the transfer is local store decides which side must not be written.
+         *   rpcs3/Emu/Cell/MFC.h:5-9 */
+        check(spu::dma_is_put(0x20) && spu::dma_is_put(0x21) && spu::dma_is_put(0x22),
+              "PUT, PUTB and PUTF write local store");
+        check(spu::dma_is_put(0x30) && spu::dma_is_put(0x32), "PUTR and PUTRF write local store");
+        check(spu::dma_is_put(0xA0) && spu::dma_is_put(0xA2), "SNDSIG writes local store");
+        check(!spu::dma_is_put(0x40) && !spu::dma_is_put(0x41) && !spu::dma_is_put(0x42),
+              "GET, GETB and GETF read local store");
+        /* A list command shares the class of its base command: 0x44 is a GET
+         * list, 0x24 a PUT list (rpcs3/Emu/Cell/MFC.h:11-12). run_list() passes
+         * the base command (cmd & ~0xF) to dma(), so the class is preserved and
+         * the direction is decided correctly per element. */
+        check(!spu::dma_is_put(0x44), "a GET list reads local store");
+        check(spu::dma_is_put(0x24), "a PUT list writes local store");
+        check(!spu::dma_is_put(0x44 & ~0xFu), "a GET list element is a GET");
+
+        /* The exception event is the value the guest compares against.
+         *   rpcs3/Emu/Cell/lv2/sys_spu.h:43
+         *   rpcs3/Emu/Cell/lv2/sys_event.h:55
+         *   rpcs3/Emu/Cell/Modules/cellSpurs.cpp:837
+         * A wrong source means the SPURS helper falls into its "data0" branch
+         * and never sets spurs->exception. */
+        check(spu::SPU_EXCEPTION_KEY == 0xFFFFFFFF53505503ull,
+              "the SPU exception event source is SYS_SPU_THREAD_EVENT_EXCEPTION_KEY");
+
+        /* data1 names the thread, data2 packs the cause, data3 carries the
+         * faulting address. A handler that receives none of these cannot act. */
+        /* data1 is the faulting thread id, data2 is NPC:causes, data3 is
+         * MFC_DAR. Measured in RESULTS.md M4 by varying each field and reading
+         * libsre's own exception dump back. */
+        check(spu::spu_exception_data1(0x200) == 0x200, "the exception names the faulting thread");
+        const uint64_t d2 = spu::spu_exception_data2(0x06428, spu::SPU_EXC_MFC_STORAGE);
+        check((d2 >> 32) == 0x06428, "data2's high word is NPC");
+        check((d2 & 0xFFFFFFFFu) == 0x20, "data2's low word is the cause bitmask");
+
+        /* The cause is a bitmask, one entry per bit in libsre's table. An index
+         * reading is wrong: the probes with cause=5 and cause=0xB both printed
+         * "Unknown exception", while 1 and 0x20 selected their own lines. */
+        check(spu::SPU_EXC_DMA_ALIGNMENT == 0x01 && spu::SPU_EXC_MFC_STORAGE == 0x20,
+              "the cause bits match the guest's cause table");
+        check(spu::dma_exception_cause(spu::DmaRefusal::None) == spu::SPU_EXC_MFC_STORAGE,
+              "an unmapped effective address is the MFC storage cause");
+        check(spu::spu_exception_data3(0xDEADBEEF) == 0xDEADBEEF, "the exception carries the faulting address");
+    }
+
     std::printf("spu_channel_conformance: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

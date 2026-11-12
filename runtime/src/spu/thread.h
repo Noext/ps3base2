@@ -152,6 +152,16 @@ struct SpuThread : Host {
     uint32_t mfc_queued_count() const { return lists.count(); }
     uint32_t stall_stat = 0;
     bool stall_stat_count = false;
+    /* A refused transfer is an MFC error. Hardware latches the cause in the SPU
+     * and raises the group exception; the guest's handler then decides what to
+     * do. `dma_fault_count` is the running total, `dma_fault_logged` bounds the
+     * log so a retrying guest cannot flood it. */
+    uint64_t dma_fault_count = 0;
+    uint32_t dma_fault_logged = 0;
+    /* The transfer has already been abandoned without touching memory. This
+     * reports it and hands the guest the MFC error. */
+    void note_dma_refusal(uint32_t cmd, uint32_t lsa, uint32_t ea, uint32_t size, bool put,
+                          DmaRefusal refusal, uint32_t list_element, uint32_t list_pos);
     uint32_t atomic_stat = 0;
     bool atomic_stat_count = false;
 
@@ -206,7 +216,8 @@ private:
     void collect_events();
     uint32_t dec_now();
     void process_mfc(uint32_t cmd);
-    void dma(uint32_t cmd, uint32_t lsa, uint32_t ea, uint32_t size);
+    void dma(uint32_t cmd, uint32_t lsa, uint32_t ea, uint32_t size, uint32_t list_element = 0xFFFFFFFFu,
+             uint32_t list_pos = 0);
     bool dma_direct(uint32_t cmd, uint32_t lsa, uint32_t ea, uint32_t size);
     bool run_list(uint32_t tag, uint32_t cmd, uint32_t lsa, uint32_t list, uint32_t size);
     uint8_t* translate(uint32_t ea, uint32_t size, bool write, bool& handled, uint32_t lsa);
