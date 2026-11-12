@@ -32,10 +32,7 @@ struct MfcHost final : renjob::ChanHost {
         switch (ch) {
         case 13: return t.ctx.interrupts_enabled ? 1 : 0;
         case 24:
-            if (t.tag_stat_count) {
-                t.tag_stat_count = false;
-                return t.tag_stat;
-            }
+            if (t.tag.stat_count) return t.tag.take_stat();
             break;
         case 27:
             if (t.atomic_stat_count) {
@@ -49,9 +46,9 @@ struct MfcHost final : renjob::ChanHost {
     }
     uint32_t cnt(uint32_t ch) override {
         switch (ch) {
-        case 21: return 16;
+        case 21: return t.mfc_queued_count();
         case 23: return 1;
-        case 24: return t.tag_stat_count;
+        case 24: return t.tag.stat_count;
         case 27: return t.atomic_stat_count;
         default: return t.channel_count(ch);
         }
@@ -65,12 +62,8 @@ struct MfcHost final : renjob::ChanHost {
         case 19: t.mfc_size = v > 0xFFFF ? 0xFFFF : v; return;
         case 20: t.mfc_tag = v & 0x1F; return;
         case 21: mfc(v & 0xFF); return;
-        case 22: t.tag_mask = v; return;
-        case 23:
-            t.tag_stat = t.tag_mask;
-            if (v == 1 && t.tag_mask == 0) return;
-            t.tag_stat_count = true;
-            return;
+        case 22: t.tag.write_mask(v); return;
+        case 23: t.tag.write_update(v); return;
         default: t.write_channel(ch, v); return;
         }
     }

@@ -121,6 +121,15 @@ SPU_INLINE bool op_stop(Context& c, Host& h, uint32_t w, uint32_t pc) {
     c.pc = pc + 4;
     return h.stop_and_signal(w & 0x3FFF);
 }
+/* STOPD has no signal field. RPCS3 signals the fixed 0x3fff
+ * (SPUInterpreter.cpp:579). Sharing op_stop made stopd signal whatever rt/ra
+ * held -- 0 for the common encoding -- and a stop with code 0 is not a code the
+ * kernel handles, so the thread died with "unknown stop code 0x0" instead of
+ * stopping cleanly. That is the failure seen at pc 0x1a100 in the SPURS kernel. */
+SPU_INLINE bool op_stopd(Context& c, Host& h, uint32_t, uint32_t pc) {
+    c.pc = pc + 4;
+    return h.stop_and_signal(0x3FFF);
+}
 SPU_INLINE bool op_nop(Context&, Host&, uint32_t, uint32_t) { return true; }
 SPU_INLINE bool op_rdch(Context& c, Host& h, uint32_t w, uint32_t pc) {
     uint32_t v = h.read_channel(RA(w));

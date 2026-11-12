@@ -89,8 +89,9 @@ void reset_regs(spu::SpuThread& t, const JobDesc& j) {
     t.ctx.interrupts_enabled = true;
     t.ctx.halted = false;
     t.ctx.irq_check = false;
-    t.tag_mask = t.tag_stat = t.stall_stat = t.atomic_stat = 0;
-    t.tag_stat_count = t.stall_stat_count = t.atomic_stat_count = false;
+    t.tag = spu::TagState{};
+    t.stall_stat = t.atomic_stat = 0;
+    t.stall_stat_count = t.atomic_stat_count = false;
     t.events = 0;
     t.event_mask = 0;
     t.event_count = false;

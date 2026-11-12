@@ -283,6 +283,16 @@ target_compile_options(spu_aot_variants PRIVATE ${PS3BASE_ARCH_FLAGS})
 target_link_libraries(spu_aot_variants PRIVATE pthread)
 add_test(NAME spu_aot_variants COMMAND spu_aot_variants)
 
+# SPU channel state machines and the control instructions that carry them, one
+# check per deviation from RPCS3. Links the interpreter, so the op_* handlers
+# under test are the ones the AOT blocks dispatch to.
+add_executable(spu_channel_conformance tests/spu_channel_conformance.cpp runtime/src/spu/interpreter.cpp runtime/src/log.cpp runtime/src/host.cpp)
+target_include_directories(spu_channel_conformance PRIVATE runtime/include "${CMAKE_SOURCE_DIR}/runtime/src/spu")
+target_link_libraries(spu_channel_conformance PRIVATE ps3base_ppu_ops pthread)
+target_compile_options(spu_channel_conformance PRIVATE ${PS3BASE_ARCH_FLAGS} ${PS3BASE_EH})
+add_test(NAME spu_channel_conformance COMMAND spu_channel_conformance)
+
+
 # Every Vulkan format and blend factor the renderer uses must have a WebGPU
 # decision, with the inexpressible ones classified rather than omitted.
 add_library(wgpu_map_obj OBJECT runtime/src/gpu/wgpu_map.cpp)

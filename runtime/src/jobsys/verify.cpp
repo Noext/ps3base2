@@ -242,7 +242,7 @@ struct SandboxHost final : renjob::ChanHost {
     uint32_t rd(uint32_t ch) override {
         switch (ch) {
         case 13: return t.ctx.interrupts_enabled ? 1 : 0;
-        case 24: t.tag_stat_count = false; return t.tag_stat;
+        case 24: return t.tag.take_stat();
         case 27: t.atomic_stat_count = false; return t.atomic_stat;
         case 8: return 0;
         default: abort = true; return 0;
@@ -250,9 +250,9 @@ struct SandboxHost final : renjob::ChanHost {
     }
     uint32_t cnt(uint32_t ch) override {
         switch (ch) {
-        case 21: return 16;
+        case 21: return t.mfc_queued_count();
         case 23: return 1;
-        case 24: return t.tag_stat_count;
+        case 24: return t.tag.stat_count;
         case 27: return t.atomic_stat_count;
         default: abort = true; return 0;
         }
@@ -264,12 +264,8 @@ struct SandboxHost final : renjob::ChanHost {
         case 18: t.mfc_eal = v; return;
         case 19: t.mfc_size = v > 0xFFFF ? 0xFFFF : v; return;
         case 20: t.mfc_tag = v & 0x1F; return;
-        case 22: t.tag_mask = v; return;
-        case 23:
-            t.tag_stat = t.tag_mask;
-            if (v == 1 && t.tag_mask == 0) return;
-            t.tag_stat_count = true;
-            return;
+        case 22: t.tag.write_mask(v); return;
+        case 23: t.tag.write_update(v); return;
         case 21: break;
         default: abort = true; return;
         }
