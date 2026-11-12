@@ -324,3 +324,23 @@ guest is told about, and the guest handles it.
 Rule and payload are in `runtime/include/spu/channel_state.h`, driven by
 `SpuThread::note_dma_refusal` in `runtime/src/spu/thread.cpp`, and asserted by
 12 new checks in `tests/spu_channel_conformance.cpp` (86 checks, 0 failures).
+### M8 -- confirmation after removing two unused fields
+
+The fields `dma_list_slot` and `dma_list_element` were added to the header and
+never used -- the list context is passed as `dma()` parameters instead. Removing
+them changes nothing observable, and the run below confirms that rather than
+assuming it:
+
+```
+$ cd /root/Dev/wt-U2 && DISPLAY_NUM=:921 tools/regress.sh rdr
+regress: 120s per game on display :921
+rdr          (load 7.28 before the run)
+rdr          PASS  SPURS abort     flips=3121   crashes=0 screen=socialclub@11s abort=at 109s
+
+regress: all present games passed (0 skipped)
+```
+
+PASS again: flips 3121 >= 2000, notice at 11 s, abort at 109 s > 60 s, 0 crashes.
+Between M7 and M8 the only change is the deletion of two unused members; the
+fault line, the exception payload and the flip count all move within the range
+the machine's load puts them (2401 / 3121 with OCR sampling, 3601 standalone).
