@@ -508,3 +508,47 @@ read of one word taken inside a report about another. A write-only watch plus a
 peek gives you two facts about two words at one instant; it cannot order a write
 against a read. The READ watch in the same run can, and with the self-read guard
 the ordering is unambiguous: 0 -> 1 at 2.393590, first read of 1 at 2.840156.
+
+## Confirmation after the rebase on main 22d2a0c
+
+Run F, same tree and binary as the merged branch, same command as run E:
+
+    2025 guest trap events, 0 self reads among them
+    571 events on 0x0177caa8 (559 reads, 12 writes)
+    0 CHAIN GAP
+    first 0->1 write: 4.346518 lr=0x00609a40
+    first read==1:    5.473972 lr=0x0091fdb0
+    reads==1 before write: 0
+    value changes: 4.346518 0->1, 4.619699 1->0, 4.850968 0->1, 5.085010 1->0, 5.294042 0->1
+    watch totals: 2001 guest events, 49 self reads dropped
+
+Four runs, four start offsets, the same ordering every time:
+
+    run  first 0->1 write        first read of 1       gap
+    B    3.348297 (lr 0x609a40)  3.531398*             0.183 s   (*the watcher's own read; see the defect section)
+    D    2.409792 (lr 0x609a40)  3.074423              0.665 s
+    E    2.393590 (lr 0x609a40)  2.840156              0.447 s
+    F    4.346518 (lr 0x609a40)  5.473972              1.127 s
+
+The write that carries the 1 has guest lr 0x00609a40 in every run, which is the
+return address of the call to f_0091f364. It is never a read.
+
+## Tests
+
+Full suite after the rebase, clean tree, all targets built:
+
+    $ ctest --test-dir build-40 -j 4
+    100% tests passed, 0 tests failed out of 35
+
+Including the new test this measurement added:
+
+    Test #14: write_paths ...........................   Passed    0.01 sec
+
+and the neighbouring reservation tests unchanged:
+
+    Test #13: reservation_xproc ............. Passed
+    Test #15: lock_counter .................. Passed
+    Test #16: guest_spinlock ................ Passed
+    Test #17: reservation_increment ......... Passed
+    Test #18: lwmutex_contention ............ Passed
+    Test #19: lwmutex_hle ................... Passed

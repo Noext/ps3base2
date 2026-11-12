@@ -1,9 +1,16 @@
 {
   "agent": "Y1",
-  "status": "running",
+  "status": "done",
   "task": "settle 0x0177caa8 in ONE run: initial bytes, READ+WRITE watch, every write path",
-  "answer": "A stw inside f_0091f364 (call site 0x00609a3c from f_006099e8, guest lr 0x00609a40) writes 1 at 0x0177caa8 at 2.393590 s, before any read of 1 (first read==1 at 2.840156 s). The word is zero-fill BSS in PT_LOAD[1] at segment offset 0x44caa8, beyond filesz 0x1bc014, so the file cannot supply 1; arm-time word was 0.",
-  "evidence": "run E: 1956 guest trap events, 0 self reads, 576 events on the word, 0 chain gaps, 0 reads==1 before the 0->1 write; two independent instruments (mprotect READ+WRITE trap and software block watch) agree write for write",
-  "new_tests": ["tests/write_paths.cpp (7 write paths measured, 8 checks)"],
-  "at": "2026-11-12T18:35Z"
+  "answer": "The 1 at 0x0177caa8 is written by an stw inside f_0091f364, reached by the call at 0x00609a3c from f_006099e8 (guest lr 0x00609a40), one instruction after it stores 0 to the same word. It precedes every read of 1 by 0.18-1.13 s across four runs. The word is zero-fill BSS: PT_LOAD[1] segment offset 0x44caa8, beyond filesz 0x1bc014, so the ELF holds no initial value, and the arm-time read before the first guest instruction logged 0x00000000.",
+  "evidence": {
+    "run_E": "1956 guest events, 0 self reads, 576 events on the word, 0 chain gaps; 0->1 at 2.393590 (lr 0x00609a40), first read==1 at 2.840156 (lr 0x0091fdb0), 0 reads==1 before the write",
+    "runs_reproduced": ["B 3.348297/3.531398", "D 2.409792/3.074423", "E 2.393590/2.840156", "F 4.346518/5.473972"],
+    "write_named": "stw r10,0(r11) at 0x0091f3d4 in f_0091f364; r11 = [TOC-32220] = 0x0177caa8, r10 = 1 on the counter-is-zero arm",
+    "instruments_agree": "mprotect READ+WRITE trap and software block watch (rsv::store_range) report the same six writes in the same order from the same guest lr",
+    "watcher_defect_found_and_fixed": "the block watch's own vm::read32 of a trap page was published as a guest READ carrying the interrupted store's lr; 6 of 575 events in the unfixed run. Fixed with a thread_local self-read depth, counted and printed."
+  },
+  "new_tests": ["tests/write_paths.cpp: 7 write funnels driven and checked against the log, 8 checks"],
+  "ctest": "35/35 pass after rebase on main 22d2a0c",
+  "at": "2026-11-12T18:50Z"
 }
