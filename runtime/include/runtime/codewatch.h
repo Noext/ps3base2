@@ -97,6 +97,26 @@ extern std::atomic<bool> g_note_on;
 void note_line(uint32_t ea);
 void note_hit(uint32_t addr, uint32_t size, const char* how, uint32_t value);
 
+/* Byte-precise watch of ONE guest range, armed from PS3BASE_BLOCKWATCH=lo-hi.
+ *
+ * The 128-byte line watch above answers "did anything touch this line", which is
+ * not enough to name the field: the RDR block at 0x0177cc00 has ten interesting
+ * pointers inside two lines, and the question is which of them the title writes
+ * and with what. This one logs the offset inside the range, the width, the value
+ * and the caller for every write that overlaps it, and it is on from t=0.
+ *
+ * Costs one compare per store when disarmed (a single load of g_block_on). */
+extern std::atomic<bool> g_block_on;
+bool blockwatch_hit(uint32_t addr, uint32_t size, const uint8_t* data, const char* how);
+
+/* Called before a store is applied: prev is still readable, which is what makes
+ * "0 -> 0" (a redundant write) distinguishable from "0x0123456 -> 0". */
+inline void block_store(uint32_t addr, uint32_t size, const uint8_t* data, const char* how) {
+    if (!g_block_on.load(std::memory_order_relaxed)) return;
+    blockwatch_hit(addr, size, data, how);
+}
+void blockwatch_arm(uint32_t lo, uint32_t hi);
+
 void init();
 void start_scan();
 void measure_pattern();

@@ -1,6 +1,7 @@
 #include "runtime/codewatch.h"
 
 #include "runtime/host.h"
+#include "runtime/image.h"
 #include "runtime/log.h"
 #include "runtime/memory.h"
 #include "runtime/syncwatch.h"
@@ -210,7 +211,147 @@ void note_hit(uint32_t addr, uint32_t size, const char* how, uint32_t value) {
              syncwatch::list().c_str());
 }
 
+/* ------------------------------------------------------------------------
+ * Block writes: who writes the guest block at PS3BASE_BLOCKWATCH=lo-hi.
+ * ---------------------------------------------------------------------- */
+std::atomic<bool> g_block_on{false};
+namespace {
+std::atomic<uint32_t> g_block_lo{0}, g_block_hi{0};
+std::atomic<uint64_t> g_block_hits{0};
+/* Every distinct (offset, width, value, caller) is reported once and counted.
+ * A block like 0x0177cc00 is read and re-read a thousand times a second, so an
+ * unfiltered log is unreadable; a repeat of the same write from the same PC is
+ * the same fact, not a new one. */
+struct BlockKey { uint32_t off, size, val, lr, pc; };
+BlockKey g_block_seen[512];
+uint64_t g_block_counts[512];
+int g_block_n = 0;
+}
+
+namespace {
+/* Host frames, symbolised: the only thing that names a writer whose guest lr is
+ * unusable. Depth 12 is enough to get out of rsv::store_range -> the lifted
+ * ppu::st* inline -> the lifted f_XXXX body, which is where the answer is. */
+std::string host_stack() {
+    void* pcs[16];
+    const int n = backtrace_port::capture(pcs, 16);
+    std::string s;
+    char b[160];
+    for (int i = 1; i < n; i++) {
+        Dl_info info{};
+        if (dladdr(pcs[i], &info) && info.dli_sname)
+            std::snprintf(b, sizeof b, " %s+0x%llx", info.dli_sname,
+                          static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(pcs[i]) - reinterpret_cast<uintptr_t>(info.dli_saddr)));
+        else if (info.dli_fname)
+            std::snprintf(b, sizeof b, " %s+0x%llx", info.dli_fname,
+                          static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(pcs[i]) - reinterpret_cast<uintptr_t>(info.dli_fbase)));
+        else
+            std::snprintf(b, sizeof b, " %p", pcs[i]);
+        s += b;
+    }
+    return s;
+}
+
+/* Name a guest PC without pulling in the dispatch table: codewatch.cpp is also
+ * linked into the small unit-test binaries, which have no generated table, so
+ * lv2::describe_address() would be an undefined symbol there. The span table is
+ * weak and absent in exactly those binaries, which this handles. */
+const char* where(uint32_t pc) {
+    static thread_local char buf[128];
+    const char* image_name = nullptr;
+    uint32_t image_base = 0;
+    if (&image::image_count) {
+        for (uint32_t i = 0; i < image::image_count; i++) {
+            if (pc >= image::images[i].text_lo && pc < image::images[i].text_hi) {
+                image_name = image::images[i].name;
+                image_base = image::images[i].text_lo;
+                break;
+            }
+        }
+    }
+    uint32_t entry = 0;
+    if (&image::function_span_count) {
+        uint32_t l = 0, h = image::function_span_count;
+        while (l < h) {
+            const uint32_t mid = l + (h - l) / 2;
+            const image::FunctionSpan& s = image::function_spans[mid];
+            if (pc < s.lo) h = mid;
+            else if (pc > s.hi + 3) l = mid + 1;
+            else { entry = s.entry; break; }
+        }
+    }
+    if (image_name)
+        std::snprintf(buf, sizeof buf, "%s+0x%x f_%08x+0x%x", image_name, pc - image_base, entry, entry ? pc - entry : 0);
+    else
+        std::snprintf(buf, sizeof buf, "0x%08x (no image)", pc);
+    return buf;
+}
+}
+
+void blockwatch_arm(uint32_t lo, uint32_t hi) {
+    g_block_lo.store(lo);
+    g_block_hi.store(hi);
+    g_block_on.store(true, std::memory_order_relaxed);
+    LOG_INFO("blockwatch", "watching guest 0x%08x..0x%08x from t=0; every write into it is logged with offset, width, value and caller", lo, hi);
+    /* Arm-time contents, so a field that is already zero when the watch starts
+     * is distinguishable from one the title zeroes later. */
+    for (uint32_t a = lo; a < hi; a += 16) {
+        if (!vm::range_mapped(a, 16)) break;
+        LOG_INFO("blockwatch", "  arm-time 0x%08x: %08x %08x %08x %08x", a, vm::read32(a), vm::read32(a + 4), vm::read32(a + 8), vm::read32(a + 12));
+    }
+}
+
+bool blockwatch_hit(uint32_t addr, uint32_t size, const uint8_t* data, const char* how) {
+    const uint32_t lo = g_block_lo.load(std::memory_order_relaxed);
+    const uint32_t hi = g_block_hi.load(std::memory_order_relaxed);
+    const uint32_t n = size ? size : 1;
+    if (addr + n <= lo || addr >= hi) return false;
+    g_block_hits.fetch_add(1, std::memory_order_relaxed);
+    const uint32_t first = (addr > lo) ? addr : lo;
+    /* The word that actually landed at the first overlapping 4-byte slot, big-
+     * endian the way the guest sees it. */
+    uint32_t val = 0;
+    const uint32_t w0 = first & ~3u;
+    if (w0 >= addr && w0 + 4 <= addr + n) {
+        std::memcpy(&val, data + (w0 - addr), 4);
+        val = __builtin_bswap32(val);
+    } else {
+        val = vm::range_mapped(w0, 4) ? vm::read32(w0) : 0;
+    }
+    Context c{0, 0, nullptr};
+    if (current_context) c = current_context();
+    const uint32_t prev = vm::range_mapped(w0, 4) ? vm::read32(w0) : 0;
+    int slot = -1;
+    for (int i = 0; i < g_block_n; i++) {
+        const BlockKey& k = g_block_seen[i];
+        if (k.off == w0 && k.size == n && k.val == val && k.lr == c.lr) { slot = i; break; }
+    }
+    if (slot < 0 && g_block_n < 512) {
+        slot = g_block_n++;
+        g_block_seen[slot] = BlockKey{w0, n, val, c.lr, c.cia};
+    }
+    if (slot >= 0) g_block_counts[slot]++;
+    if (slot >= 0 && g_block_counts[slot] > 1) return true;
+    LOG_INFO("blockwatch", "WRITE +0x%03x (0x%08x) w%u prev 0x%08x -> 0x%08x by %s | guest lr 0x%08x %s | thread %s",
+             w0 - lo, w0, n, prev, val, how, c.lr, where(c.lr),
+             c.thread ? c.thread : host::thread_name().c_str());
+    /* The guest lr is a RETURN ADDRESS and can be stale: inside a constructor
+     * that was inlined into a caller it is the caller's lr, and when the store
+     * happens inside the runtime's own memcpy it can be anything at all -- the
+     * burst that writes this block reported lr 0x0177cde0, which is inside the
+     * BSS being written. The host stack is what actually names the writer, so it
+     * is captured for the first observation of each distinct site. */
+    LOG_INFO("blockwatch", "  host:%s", host_stack().c_str());
+    return true;
+}
+
 void init() {
+    if (const char* b = std::getenv("PS3BASE_BLOCKWATCH")) {
+        const char* dash = std::strchr(b, '-');
+        const uint32_t lo = static_cast<uint32_t>(std::strtoul(b, nullptr, 16));
+        const uint32_t hi = dash ? static_cast<uint32_t>(std::strtoul(dash + 1, nullptr, 16)) : lo + 0x100;
+        blockwatch_arm(lo, hi);
+    }
     if (!std::getenv("PS3BASE_CODEWATCH")) return;
     if (const char* r = std::getenv("PS3BASE_CODEWATCH_RANGES")) {
         uint32_t lo = static_cast<uint32_t>(std::strtoul(r, nullptr, 16));

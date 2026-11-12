@@ -1009,6 +1009,7 @@ bool SpuThread::dma_direct(uint32_t cmd, uint32_t lsa, uint32_t ea, uint32_t siz
             }
         }
         if (g_edge_direct >= 2 && !merge_hit && edge_loaded(ls) && in_ring(ls, ea, size) && !(table && ea < table + 0xA280 && ea + size > table)) {
+            cw::block_store(ea, size, ls + lsa, "spu:direct put");
             cw::check_store(ea, size, ls + lsa, "spu:direct");
             cw::note_hit(ea, size, "spu:direct", size >= 4 ? vm::read32(ea) : 0);
             std::memcpy(vm::ptr(ea), ls + lsa, size);

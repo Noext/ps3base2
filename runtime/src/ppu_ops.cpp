@@ -147,6 +147,10 @@ bool stdcx(Context& ctx, uint8_t* base, uint32_t ea, uint64_t value) {
 std::atomic<uint64_t> g_dcbz_on_line{0};
 void notify_store(uint8_t* base, uint32_t ea, uint32_t size) {
     (void)base;
+    if (cw::g_block_on.load(std::memory_order_relaxed)) {
+        static const uint8_t zero[128] = {};
+        cw::block_store(ea, size, zero, "ppu::dcbz");
+    }
     if (!cw::g_on.load(std::memory_order_relaxed)) return;
     const uint32_t line = cw::g_line.load(std::memory_order_relaxed);
     if (line != 0xFFFFFFFFu && ((ea & ~127u) == line || ((ea + size - 1) & ~127u) == line)) {

@@ -223,6 +223,7 @@ bool commit_if(uint32_t line, uint64_t rtime, const uint8_t* expected, const uin
     rlog("commit_ok", line, "offset=%u size=%u rtime=%llu", offset, size,
          static_cast<unsigned long long>(rtime));
     if (g_logged) log_change(line, offset, data, size, size == 128 ? "putllc" : "stcx");
+    cw::block_store(line + offset, size, data, size == 128 ? "rsv::commit_if putllc" : "rsv::commit_if stcx");
     uint8_t* dst = vm::ptr(line + offset);
     for (uint32_t i = 0; i < size; i += 8) {
         uint64_t want, was;
@@ -244,6 +245,7 @@ void store_unconditional(uint32_t line, const uint8_t* data) {
     uint64_t v0 = lock_line(e);
     rlog("putlluc", line, "ver=%llu", static_cast<unsigned long long>(v0));
     if (g_logged) log_change(line, 0, data, 128, "putlluc");
+    cw::block_store(line, 128, data, "rsv::store_unconditional");
     cw::check_store(line, 128, data, "rsv::store_unconditional");
     cw::note_hit(line, 128, "rsv::store_unconditional", __builtin_bswap32(*reinterpret_cast<const uint32_t*>(data)));
     std::memcpy(vm::ptr(line), data, 128);
@@ -256,6 +258,7 @@ void store_locked(uint32_t addr, const void* data, uint32_t size) {
     Entry& e = entry(addr & ~127u);
     uint64_t v0 = lock_line(e);
     if (g_logged) log_change(addr & ~127u, addr & 127u, static_cast<const uint8_t*>(data), size, "store");
+    cw::block_store(addr, size, static_cast<const uint8_t*>(data), "rsv::store_locked");
     cw::check_store(addr, size, static_cast<const uint8_t*>(data), "rsv::store_locked");
     cw::note_hit(addr, size, "rsv::store_locked", size >= 4 ? __builtin_bswap32(*static_cast<const uint32_t*>(data)) : 0);
     std::memcpy(vm::ptr(addr), data, size);
@@ -266,6 +269,7 @@ void store_locked(uint32_t addr, const void* data, uint32_t size) {
 
 void store_range(uint32_t addr, const uint8_t* data, uint32_t size) {
     if (!size) return;
+    cw::block_store(addr, size, data, "rsv::store_range");
     cw::check_store(addr, size, data, "rsv::store_range");
     cw::note_hit(addr, size, "rsv::store_range", size >= 4 ? __builtin_bswap32(*reinterpret_cast<const uint32_t*>(data)) : 0);
     const uint32_t first = addr >> 7;
@@ -314,6 +318,7 @@ void merge_bits(uint32_t addr, const uint8_t* data, const uint8_t* base, uint32_
         uint8_t changed = data[i] ^ base[i];
         if (changed) dst[i] = static_cast<uint8_t>((dst[i] & ~changed) | (data[i] & changed));
     }
+    cw::block_store(addr, size, dst, "rsv::merge_bits");
     cw::check_store(addr, size, dst, "rsv::merge_bits");
     cw::note_hit(addr, size, "rsv::merge_bits", size >= 4 ? vm::read32(addr) : 0);
     unlock_line(e, v0, true);
