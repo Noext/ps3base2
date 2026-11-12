@@ -183,3 +183,81 @@ frame-allocator bump pointer at 0x19e90 into a region that was never initialised
 (0x23800), so the DMA list it builds has null EAs and the SPU jumps to zeroed
 LS. That is outside the channel layer and needs the allocator's initialisation
 and the list-build caller traced, which T1's block dump names directly.
+### Second run of the same binary (timing varies, signature does not)
+
+```
+E  81.732703 spu: thread 0x200 'SecondaryCellSpursKernel0' DMA GET cmd 0x40 unmapped ea 0x00000000 size 0x80 lsa 0x1a100 pc 0x06428
+E  81.732770 spu: thread 0x200 'SecondaryCellSpursKernel0' DMA GET cmd 0x40 unmapped ea 0x00000000 size 0x80 lsa 0x1a100 pc 0x06510
+E  81.732837 spu: thread 0x200 unknown stop code 0x0 at 0x1a100
+I  81.735276 tty: [0] The SPURS is aborted.
+I  80.593093 rsx: flip 2281 (buffer 0)
+I  81.735292 process: _sys_process_exit(0x8001000c)
+I  81.735330 ppu: process exit -2147418100 from thread 0x1000004 lr=0x3000c7e8 (not lifted)
+```
+
+Three runs of the fixed binary abort at 95.1 s (flips 2701), 81.7 s (flips 2281),
+and the pre-fix binary at 86.0 s (flips 2341). Same pc, same lsa, same null ea
+every time; only the wall-clock point varies. That is a timing-dependent guest
+program reaching the same bad state, not a race in the channel layer.
+
+### Conformance table -- every channel the SPURS kernel and libsre's policies use
+
+Legend: OK = matches RPCS3; FIXED = deviated, corrected here with a test;
+NAMED = deviates by design and logs its name. RPCS3 line numbers are from
+refs/rpcs3 (symlinked from /root/Dev/rpcs3).
+
+| ch | name                    | RPCS3 spec                                    | ps3base before        | now      |
+|----|-------------------------|-----------------------------------------------|-----------------------|----------|
+| 0  | RdEventStat             | :5717 masked bits, clears count               | OK                    | OK       |
+| 1  | WrEventMask             | :6549 preserve unread count                   | dropped it            | FIXED    |
+| 2  | WrEventAck              | :6581 keep count; TM-freeze at ack            | recomputed, dropped   | FIXED    |
+| 3  | RdSigNotify1            | :5664 pop_wait                                | OK                    | OK       |
+| 4  | RdSigNotify2            | :5669 pop_wait                                | OK                    | OK       |
+| 7  | WrDec                   | :6540 re-base start, unfreeze                 | OK                    | OK       |
+| 8  | RdDec                   | :5698 value - elapsed                         | OK                    | OK       |
+| 9  | WrMSSyncReq             | :5518 count 1, write ignored                  | OK                    | OK       |
+| 11 | RdEventMask             | :5712 mask                                    | OK                    | OK       |
+| 12 | RdTagMask               | :5656 ch_tag_mask                             | OK                    | OK       |
+| 13 | RdMachStat              | :6179 ie | (isolated<<1)                      | OK (ie only)          | OK       |
+| 14 | WrSRR0                  | :6195 value & 0x3fffc                         | OK                    | OK       |
+| 15 | RdSRR0                  | :5591 srr0                                    | OK                    | OK       |
+| 16 | MFC_LSA                 | :6480 raw                                     | OK                    | OK       |
+| 17 | MFC_EAH                 | :6485 stored, unused (32-bit EA)              | OK                    | OK       |
+| 18 | MFC_EAL                 | :6490 raw                                     | OK                    | OK       |
+| 19 | MFC_Size                | :6495 min(value,0xffff)                       | OK                    | OK       |
+| 20 | MFC_TagID               | :6500 & 0x1f in RPCS3 process path           | OK                    | OK       |
+| 21 | MFC_Cmd                 | :4970 dispatch; RCHCNT 16-queued :5529        | count constant 16     | FIXED    |
+| 22 | MFC_WrTagMask           | :6420 re-test armed update                    | no re-test            | FIXED    |
+| 23 | MFC_WrTagUpdate         | :6446 IMMEDIATE/ANY/ALL distinct              | all behaved as IMMED. | FIXED    |
+| 24 | MFC_RdTagStat           | :5652 pop + clear count                       | OK                    | OK       |
+| 25 | MFC_RdListStallStat     | :3472 rotl(1,tag) | stat                    | OK                    | OK       |
+| 26 | MFC_WrListStallAck      | :4965 clear stall, resume, complete           | resumed, tag already  |
+|    |                         |                                               | reported done         | FIXED    |
+| 27 | MFC_RdAtomicStat        | :5675 0/1/2/4 per MFC.h:38-45                 | OK                    | OK       |
+| 28 | WrOutMbox               | :6402 push_wait                               | OK                    | OK       |
+| 29 | RdInMbox                | :5595 pop_wait                                | OK                    | OK       |
+| 30 | WrOutIntrMbox           | :6201 code<64 send, <128 throw, 128/192 flag  | OK                    | OK       |
+| 69 | Set_Bkmk_Tag             | :6610 no-op                                   | OK                    | OK       |
+| 70 | PM_Start_Ev              | :6610 no-op                                   | OK                    | OK       |
+| 71 | PM_Stop_Ev               | :6610 no-op                                   | OK                    | OK       |
+
+DMA lists (commands 0x24/25/26, 0x34/35/36, 0x44/45/46): element parse, stall bit
+0x80, ts mask 0x7fff, lsa advance align(ts,16), stall-and-notify event SN and
+stall stat all match RPCS3 do_list_transfer (:2927-3480). The FIXED item is the
+completion bookkeeping only (row 26).
+
+Atomics: GETLLAR 0xD0 -> stat 4, PUTLLC 0xB4 -> 0 or 1 plus LR event on failure,
+PUTLLUC 0xB0 -> stat 2, PUTQLLUC 0xB8 -> no stat. Matches MFC.h:38-45 and
+SPUThread.cpp:4849/4901/4929.
+
+Instructions:
+
+| op    | RPCS3 spec                          | ps3base before      | now   |
+|-------|-------------------------------------|---------------------|-------|
+| iret  | SPUInterpreter.cpp:615 srr0 + e/d   | OK                  | OK    |
+| bisled| :618 unconditional link, branch on count | OK            | OK    |
+| stop  | :159 word & 0x3fff                  | OK                  | OK    |
+| stopd | :579 always 0x3fff                  | routed to op_stop   | FIXED |
+
+The e/d bits are 18 and 19 of the word (SPUOpcodes.h:15-16), which the
+interpreter already used; the test now pins them.
