@@ -4,6 +4,7 @@
 #include "runtime/reservation.h"
 
 #include "spu/aot.h"
+#include "spu/channel_state.h"
 #include "spu/context.h"
 #include "hle.h"
 
@@ -129,9 +130,17 @@ struct SpuThread : Host {
     void* native = nullptr;
 
     uint32_t mfc_lsa = 0, mfc_eal = 0, mfc_size = 0, mfc_tag = 0;
-    uint32_t tag_mask = 0;
-    uint32_t tag_stat = 0;
-    bool tag_stat_count = false;
+    /* The tag-status state machine lives in spu/channel_state.h so the unit test
+     * drives the same code the runtime does. */
+    TagState tag{};
+    /* Commands accepted but not yet complete. This runtime performs DMA inline,
+     * so the only occupant of the queue is a DMA list stopped at a
+     * stall-and-notify element: RPCS3 keeps that command in mfc_queue with the
+     * stall bit set and resumes it from MFC_WrListStallAck (SPUThread.cpp:4965).
+     * The count matters because RCHCNT(MFC_Cmd) reports 16 - queued, and the
+     * SPURS kernel decides whether to issue a command from that number. */
+    uint32_t mfc_queue = 0;
+    uint32_t mfc_queued_count() const { return mfc_queue < 16 ? 16 - mfc_queue : 0; }
     uint32_t stall_stat = 0;
     bool stall_stat_count = false;
     uint32_t atomic_stat = 0;

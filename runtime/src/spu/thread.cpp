@@ -57,7 +57,7 @@ namespace {
 std::atomic<uint64_t> g_ev_reads{0}, g_ev_waits{0}, g_ev_wait_us{0}, g_getllar{0}, g_putllc_ok{0}, g_putllc_fail{0}, g_getllar_same{0};
 
 enum : uint32_t {
-    EV_LR = 0x400, EV_S1 = 0x200, EV_S2 = 0x100, EV_TM = 0x20, EV_SN = 0x2,
+    EV_LR = 0x400, EV_S1 = 0x200, EV_S2 = 0x100, EV_TM = 0x20, EV_MB = 0x10, EV_SN = 0x2,
 };
 
 constexpr uint64_t SPU_USER_EVENT_KEY = 0xFFFFFFFF53505501ull;
@@ -150,8 +150,7 @@ uint32_t SpuThread::dec_now() {
 }
 
 void SpuThread::set_events(uint32_t bits) {
-    events |= bits;
-    if (event_mask & bits) event_count = true;
+    event_set(events, event_mask, event_count, bits);
 }
 
 bool SpuThread::interrupt_pending() {
@@ -299,8 +298,14 @@ void SpuThread::push_snr(uint32_t number, uint32_t value) {
 
 void SpuThread::push_in_mbox(uint32_t value) {
     std::lock_guard lk(m);
+    const bool was_empty = in_mbox.empty();
     if (in_mbox.size() >= 4) in_mbox.back() = value;
     else in_mbox.push_back(value);
+    /* SPU_EVENT_MB, RPCS3 SPUThread.cpp:2094: the inbound-mailbox event fires
+     * when the mailbox goes from empty to non-empty. Without it a guest parked
+     * on ch0 with MB masked never learns a message arrived, and the SPURS
+     * handler's wait for the system-service reply is a permanent sleep. */
+    if (was_empty) set_events(EV_MB);
     cv.notify_all(); wake_rsv_waiter();
 }
 
@@ -313,9 +318,9 @@ uint32_t SpuThread::pop_out_mbox() {
 
 uint32_t SpuThread::channel_count(uint32_t ch) {
     switch (ch) {
-    case 21: return 16;
+    case 21: return mfc_queued_count();
     case 23: return 1;
-    case 24: return tag_stat_count;
+    case 24: return tag.stat_count;
     case 25: return stall_stat_count;
     case 27: return atomic_stat_count;
     case 9: return 0;
@@ -326,9 +331,9 @@ uint32_t SpuThread::channel_count(uint32_t ch) {
     case 0: collect_events(); return event_count ? 1 : 0;
     case 3: return snr_count[0];
     case 4: return snr_count[1];
-    case 21: return 16;
+    case 21: return mfc_queued_count();
     case 23: return 1;
-    case 24: return tag_stat_count;
+    case 24: return tag.stat_count;
     case 25: return stall_stat_count;
     case 27: return atomic_stat_count;
     case 28: return out_mbox_full ? 0 : 1;
@@ -342,14 +347,11 @@ uint32_t SpuThread::channel_count(uint32_t ch) {
 uint32_t SpuThread::read_channel(uint32_t ch) {
     switch (ch) {
     case 8: return dec_now();
-    case 12: return tag_mask;
+    case 12: return tag.tag_mask;
     case 13: return ctx.interrupts_enabled ? 1 : 0;
     case 15: return ctx.srr0;
     case 24:
-        if (tag_stat_count) {
-            tag_stat_count = false;
-            return tag_stat;
-        }
+        if (tag.stat_count) return tag.take_stat();
         break;
     case 27:
         if (atomic_stat_count) {
@@ -437,8 +439,7 @@ uint32_t SpuThread::read_channel(uint32_t ch) {
         }
         if (cp0) critpath::spu_waited(cp, cp0, critpath::SW_LR);
         if (job_stats && wait_start.time_since_epoch().count()) g_ev_wait_us.fetch_add(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - wait_start).count(), std::memory_order_relaxed);
-        event_count = false;
-        return events & event_mask;
+        return event_take(events, event_mask, event_count);
     }
     case 3:
     case 4: {
@@ -451,13 +452,12 @@ uint32_t SpuThread::read_channel(uint32_t ch) {
     }
     case 8: return dec_now();
     case 11: return event_mask;
-    case 12: return tag_mask;
+    case 12: return tag.tag_mask;
     case 13: return ctx.interrupts_enabled ? 1 : 0;
     case 15: return ctx.srr0;
     case 24:
-        if (!block(lk, [&] { return tag_stat_count; })) return 0;
-        tag_stat_count = false;
-        return tag_stat;
+        if (!block(lk, [&] { return tag.stat_count; })) return 0;
+        return tag.take_stat();
     case 25: {
         if (!block(lk, [&] { return stall_stat_count; })) return 0;
         stall_stat_count = false;
@@ -490,31 +490,32 @@ void SpuThread::write_channel(uint32_t ch, uint32_t value) {
     case 19: mfc_size = value > 0xFFFF ? 0xFFFF : value; return;
     case 20: mfc_tag = value & 0x1F; return;
     case 21: process_mfc(value & 0xFF); return;
-    case 22: tag_mask = value; return;
-    case 23:
-        tag_stat = tag_mask;
-        if (value == 1 && tag_mask == 0) return;
-        tag_stat_count = true;
-        return;
+    case 22: tag.write_mask(value); return;
+    case 23: tag.write_update(value); return;
     default: break;
     }
     std::unique_lock lk(m);
     switch (ch) {
     case 1:
         collect_events();
-        event_mask = value;
-        if (events & event_mask) event_count = true;
+        if (const uint32_t bad = event_unimplemented(value)) {
+            static std::atomic<int> shown{0};
+            if (shown.fetch_add(1) < 8)
+                LOG_ERROR("spu", "thread 0x%x WrEventMask 0x%x names events this runtime cannot deliver: 0x%x", id, value, bad);
+        }
+        event_write_mask(events, event_mask, event_count, value);
         lk.unlock();
         check_interrupt();
         return;
     case 2:
         collect_events();
-        if ((value & EV_TM) && !(event_mask & EV_TM)) {
+        /* Freeze BEFORE the ack drops the bit: RPCS3 captures read_dec() at the
+         * moment of the ack (SPUThread.cpp:6592). */
+        if (event_ack_freezes_decrementer(value, event_mask) && !dec_frozen) {
             dec_value = dec_now();
             dec_frozen = true;
         }
-        events &= ~value;
-        event_count = (events & event_mask) != 0;
+        event_ack(events, event_mask, event_count, value);
         lk.unlock();
         check_interrupt();
         return;
@@ -534,19 +535,22 @@ void SpuThread::write_channel(uint32_t ch, uint32_t value) {
         lk.unlock();
         process_mfc(value & 0xFF);
         return;
-    case 22: tag_mask = value; return;
-    case 23:
-        tag_stat = tag_mask;
-        if (value == 1 && tag_mask == 0) return;
-        tag_stat_count = true;
-        return;
+    case 22: tag.write_mask(value); return;
+    case 23: tag.write_update(value); return;
     case 26: {
-        uint32_t tag = value & 0x1F;
-        auto st = stalled[tag];
+        uint32_t tagid = value & 0x1F;
+        auto st = stalled[tagid];
         if (!st.active) return;
-        stalled[tag].active = false;
+        stalled[tagid].active = false;
         lk.unlock();
-        run_list(tag, st.cmd, st.lsa, st.list, st.remaining);
+        const bool done = run_list(tagid, st.cmd, st.lsa, st.list, st.remaining);
+        if (done) {
+            std::lock_guard lk2(m);
+            if (mfc_queue) mfc_queue--;
+            tag.fence &= ~(1u << tagid);
+            tag.command_completed();
+            cv.notify_all(); wake_rsv_waiter();
+        }
         return;
     }
     case 28:
@@ -1155,8 +1159,16 @@ bool SpuThread::run_list(uint32_t tag, uint32_t cmd, uint32_t lsa, uint32_t list
         list = (list + 8) & 0x3FFF8;
         size -= 8;
         if (stall && size >= 8) {
+            /* The command is NOT complete: RPCS3 leaves it in mfc_queue with the
+             * stall bit set (SPUThread.cpp:3465-3480), which is what makes
+             * get_mfc_completed() clear that tag until MFC_WrListStallAck
+             * finishes the list. Reporting the tag as completed here tells the
+             * guest its transfer landed while half the elements are still
+             * pending, and a deferred MFC_TAG_UPDATE_ALL then resolves early. */
             std::lock_guard lk(m);
             stalled[tag] = {true, cmd, cur, list, size};
+            mfc_queue++;
+            this->tag.fence |= 1u << tag;
             set_events(EV_SN);
             stall_stat |= 1u << tag;
             stall_stat_count = true;
@@ -1401,8 +1413,11 @@ void SpuThread::start() {
     for (int i = 0; i < 4; i++) ctx.gpr[3 + i].u64[1] = args[i];
     ctx.pc = image_entry & 0x3FFFC;
     ctx.interrupts_enabled = image_entry & 1;
-    tag_mask = tag_stat = stall_stat = atomic_stat = 0;
-    tag_stat_count = stall_stat_count = atomic_stat_count = false;
+    tag = TagState{};
+    stall_stat = atomic_stat = 0;
+    mfc_queue = 0;
+    for (auto& s : stalled) s.active = false;
+    stall_stat_count = atomic_stat_count = false;
     out_mbox_full = out_intr_full = false;
     events = event_mask = 0;
     event_count = false;

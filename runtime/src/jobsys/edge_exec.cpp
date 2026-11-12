@@ -99,10 +99,7 @@ struct FastHost final : spu::Host {
             return 0u - static_cast<uint32_t>(__rdtsc() >> 5);
         case 13: return t.ctx.interrupts_enabled ? 1 : 0;
         case 24:
-            if (t.tag_stat_count) {
-                t.tag_stat_count = false;
-                return t.tag_stat;
-            }
+            if (t.tag.stat_count) return t.tag.take_stat();
             break;
         case 27:
             if (t.atomic_stat_count) {
@@ -117,9 +114,9 @@ struct FastHost final : spu::Host {
     }
     uint32_t channel_count(uint32_t ch) override {
         switch (ch) {
-        case 21: return 16;
+        case 21: return t.mfc_queued_count();
         case 23: return 1;
-        case 24: return t.tag_stat_count;
+        case 24: return t.tag.stat_count;
         case 27: return t.atomic_stat_count;
         default: return t.channel_count(ch);
         }
@@ -135,12 +132,8 @@ struct FastHost final : spu::Host {
         case 19: t.mfc_size = v > 0xFFFF ? 0xFFFF : v; return;
         case 20: t.mfc_tag = v & 0x1F; return;
         case 21: dec_run = 0; mfc(v & 0xFF); return;
-        case 22: t.tag_mask = v; return;
-        case 23:
-            t.tag_stat = t.tag_mask;
-            if (v == 1 && t.tag_mask == 0) return;
-            t.tag_stat_count = true;
-            return;
+        case 22: t.tag.write_mask(v); return;
+        case 23: t.tag.write_update(v); return;
         default: t.write_channel(ch, v); return;
         }
     }
@@ -279,8 +272,7 @@ struct SandboxHost final : spu::Host {
         switch (ch) {
         case 13: return t.ctx.interrupts_enabled ? 1 : 0;
         case 24:
-            t.tag_stat_count = false;
-            return t.tag_stat;
+            return t.tag.take_stat();
         case 27:
             t.atomic_stat_count = false;
             return t.atomic_stat;
@@ -290,9 +282,9 @@ struct SandboxHost final : spu::Host {
     }
     uint32_t channel_count(uint32_t ch) override {
         switch (ch) {
-        case 21: return 16;
+        case 21: return t.mfc_queued_count();
         case 23: return 1;
-        case 24: return t.tag_stat_count;
+        case 24: return t.tag.stat_count;
         case 27: return t.atomic_stat_count;
         default: fail(0x200 | ch); return 0;
         }
@@ -310,12 +302,8 @@ struct SandboxHost final : spu::Host {
         case 18: t.mfc_eal = v; return;
         case 19: t.mfc_size = v > 0xFFFF ? 0xFFFF : v; return;
         case 20: t.mfc_tag = v & 0x1F; return;
-        case 22: t.tag_mask = v; return;
-        case 23:
-            t.tag_stat = t.tag_mask;
-            if (v == 1 && t.tag_mask == 0) return;
-            t.tag_stat_count = true;
-            return;
+        case 22: t.tag.write_mask(v); return;
+        case 23: t.tag.write_update(v); return;
         case 21: break;
         default: fail(0x1000 | ch); return;
         }
@@ -664,8 +652,9 @@ bool Executor::run_edge(const JobRef& j, const Cmd& c, bool reference, Sandbox* 
     for (int k = 0; k < 4; k++) api.mask[k] = 0xff;
     api.buf = toggle;
     api.cmd = &c;
-    th.tag_mask = th.tag_stat = th.atomic_stat = 0;
-    th.tag_stat_count = th.atomic_stat_count = false;
+    th.tag = spu::TagState{};
+    th.atomic_stat = 0;
+    th.atomic_stat_count = false;
     th.raddr = 0;
     th.events = 0;
     th.event_mask = 0;
@@ -677,8 +666,9 @@ bool Executor::run_edge(const JobRef& j, const Cmd& c, bool reference, Sandbox* 
         std::memcpy(s.ctx.gpr, th.ctx.gpr, sizeof th.ctx.gpr);
         s.ctx.pc = th.ctx.pc;
         s.ctx.interrupts_enabled = th.ctx.interrupts_enabled;
-        s.tag_mask = s.tag_stat = s.atomic_stat = 0;
-        s.tag_stat_count = s.atomic_stat_count = false;
+        s.tag = spu::TagState{};
+        s.atomic_stat = 0;
+        s.atomic_stat_count = false;
         s.raddr = 0;
         ApiState st = api;
         if (!run_sandboxed(s, st, *pre)) pre->abort = true;

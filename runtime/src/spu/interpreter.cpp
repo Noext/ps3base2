@@ -34,7 +34,7 @@ struct Table {
         set(0x0C0, 11, op_a); set(0x0C1, 11, op_and); set(0x0C2, 11, op_cg); set(0x0C8, 11, op_ah); set(0x0C9, 11, op_nand); set(0x0D3, 11, op_avgb);
         set(0x10C, 11, op_nop); set(0x10D, 11, op_wrch);
         set(0x128, 11, op_biz); set(0x129, 11, op_binz); set(0x12A, 11, op_bihz); set(0x12B, 11, op_bihnz);
-        set(0x140, 11, op_stop); set(0x144, 11, op_stqx);
+        set(0x140, 11, op_stopd); set(0x144, 11, op_stqx);
         set(0x1A8, 11, op_bi); set(0x1A9, 11, op_bisl); set(0x1AA, 11, op_iret); set(0x1AB, 11, op_bisled); set(0x1AC, 11, op_nop);
         set(0x1B0, 11, op_gb); set(0x1B1, 11, op_gbh); set(0x1B2, 11, op_gbb); set(0x1B4, 11, op_fsm); set(0x1B5, 11, op_fsmh); set(0x1B6, 11, op_fsmb);
         set(0x1B8, 11, op_frest); set(0x1B9, 11, op_frsqest); set(0x1C4, 11, op_lqx);

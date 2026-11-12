@@ -762,8 +762,9 @@ void fresh_check(spu::Context& c, const JobRef& j, const Cmd& cmd, uint32_t spu_
     if (mask & 0x80) std::memcpy(s.ctx.gpr, c.gpr, sizeof c.gpr);
     else std::memset(s.ctx.gpr, 0, sizeof s.ctx.gpr);
     prepare_ls(s.ls, s.ctx, j, cmd, spu_num, buf, true, !(mask & 2));
-    s.tag_mask = s.tag_stat = s.atomic_stat = 0;
-    s.tag_stat_count = s.atomic_stat_count = false;
+    s.tag = spu::TagState{};
+    s.atomic_stat = 0;
+    s.atomic_stat_count = false;
     s.raddr = 0;
     ApiState st;
     for (int k = 0; k < 4; k++) st.mask[k] = 0xff;
@@ -879,8 +880,9 @@ bool probe_entry(spu::Context& c) {
     std::memcpy(s.ctx.gpr, c.gpr, sizeof c.gpr);
     s.ctx.pc = c.pc;
     s.ctx.interrupts_enabled = c.interrupts_enabled;
-    s.tag_mask = s.tag_stat = s.atomic_stat = 0;
-    s.tag_stat_count = s.atomic_stat_count = false;
+    s.tag = spu::TagState{};
+    s.atomic_stat = 0;
+    s.atomic_stat_count = false;
     s.raddr = 0;
     ApiState st;
     for (int k = 0; k < 4; k++) st.mask[k] = 0xff;
