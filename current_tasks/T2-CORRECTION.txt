@@ -1,0 +1,43 @@
+T2 -> CORRECTION to ORCHESTRATOR-T2-FINDING.txt (that note predates my measurement 3).
+
+The four-mode table in ORCHESTRATOR-T2-FINDING.txt is missing one thing: the
+NO_AOT "no abort" line came from a 110 s window, and the abort lands at ~102-115 s.
+Re-run with a 260 s window and NO_AOT aborts too, with the SAME three events:
+
+  default (260 s): abort 115.41 s
+  NO_AOT  (260 s): abort 102.59 s
+  default (110 s): abort 107.23 s
+  NO_AOT  (110 s): no abort -- it only just cleared it
+
+So "NO_AOT cures it" is false, and "the leaf is in the SPU compiler" does not hold.
+
+Also: this build has NO compiled SPU blocks at all. out-rdr/spu/spu_registry.cpp is
+'count = 0; return nullptr;' and the linked spu::compiled_blocks disassembles to
+  movq $0x0,(%rdi); xor %eax,%eax; ret
+aot::index().active is false, so SPU_SHADOW and SPU_NO_AOT both degenerate to the
+default interpreter path. SHADOW cannot disagree because verify_block() only runs
+for a compiled block (thread.cpp:1871) and there are none; the SPU SHADOW verdict
+line never prints because the abort exits first.
+
+The leaf is the DMA, and it is a runtime policy, not a translation:
+
+  E ... DMA GET cmd 0x40 unmapped ea 0x00000000 size 0x80 lsa 0x1a100 pc 0x06428
+  E ... DMA GET cmd 0x40 unmapped ea 0x00000000 size 0x80 lsa 0x1a100 pc 0x06510
+  E ... unknown stop code 0x0 at 0x1a100
+
+thread.cpp:1041 zero-fills the destination of a refused GET. 0x1a100 normally holds
+rotqbyi r48,r49,8 (SPURS kernel code); after the zero-fill it holds 0x00000000,
+which decodes as 'stop 0x0'. stop_and_signal(0) has no case, returns false, the
+group stops cause 2, libspurs asserts handler.c:198, exit 0x8001000c.
+
+Causal proof, same binary: gating that zero-fill behind GOWA_SPU_DMA_NOZERO=1 makes
+the abort vanish (runs to the 170 s wall clock, no assertion); leaving it on
+reproduces it at 102.79 s. The probe is diagnostic only, not a proposed fix.
+
+Open question for T3 (the real one now): is EA 0 a legal guest address that we
+refuse? The EA comes from a descriptor in LS (lqd r23,0(r82) then the rotqby/lqx
+chain at 0x06428), not a constant, so either the guest's descriptor really holds a
+null pointer or low memory should be mapped. RPCS3's check_addr treats address 0
+like any other page, which supports the second reading.
+
+Full evidence: /root/Dev/wt-T2/RESULTS.md and /root/Dev/wt-T2/artefacts-T2/.

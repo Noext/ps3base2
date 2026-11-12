@@ -1,355 +1,473 @@
-# T4 -- visibility: lift 0x3000c7e8 (the SPURS abort path)
+# U1 -- SPU DMA list conformance (GETL/GETLB/GETLF, PUTL/PUTLB/PUTLF)
 
-Branch explore/t4, worktree /root/Dev/wt-T4, base commit b1ba5ee.
+Branch explore/u1, worktree /root/Dev/wt-U1, from main HEAD f70a133.
 
 ## Measurements
 
-### M1 -- the abort at HEAD, reproduced on this worktree's build (b1ba5ee + build-T4)
+### M1 -- the build and a baseline run on this worktree (from f70a133 + build-20)
 
 Command:
 
-    cmake -S /root/Dev/wt-T4 -B /root/Dev/wt-T4/build-T4 -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-      -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
-      -DPS3BASE_GENERATED_DIR=/root/Dev/ps3base2/out-rdr/ppu \
-      -DGOWA_SPU_GENERATED_DIR=/root/Dev/ps3base2/out-rdr/spu \
-      -DPS3BASE_SPU_NATIVE_GEN_DIR=/root/Dev/ps3base2/out-rdr/gen/spu
-    cmake --build /root/Dev/wt-T4/build-T4 -j 8 --target ps3base        # done=0
-    nohup setsid env DISPLAY=:919 XDG_RUNTIME_DIR=/run/user/0 \
-      PS3BASE_DISC_DIR=/root/Dev/rdr-port/vfs/dev_bdvd PS3BASE_LOG=info \
-      timeout 110 /root/Dev/wt-T4/build-T4/ps3base --no-launcher > /tmp/T4.log 2>&1 < /dev/null & disown
-
-Raw log, /tmp/T4.log:1823-1950 (verbatim):
-
-    E 108.585986 [1702359] spu: thread 0x200 'SecondaryCellSpursKernel0' DMA GET cmd 0x40 unmapped ea 0x00000000 size 0x80 lsa 0x1a100 pc 0x06428
-    E 108.586030 [1702359] spu: thread 0x200 'SecondaryCellSpursKernel0' DMA GET cmd 0x40 unmapped ea 0x00000000 size 0x80 lsa 0x1a100 pc 0x06510
-    I 108.586113 [1702359] spu: thread 0x200 'SecondaryCellSpursKernel0' stopped at 0x1a104
-    ...
-    I 108.589527 [1702358] tty: [0]   SPURS instance 0x01646400
-    I 108.589549 [1702358] tty: [0]   SPU number     0
-    I 108.589570 [1702358] tty: [0]   policy module  0x32023680
-    I 108.589605 [1702358] tty: [0]   workload ID    1
-    I 108.589637 [1702358] tty: [0] Call Stack Trace:	0x3200cb24
-    I 108.589662 [1702358] tty: [0]                  	0x32009754
-    I 108.589680 [1702358] tty: [0]                  	0x0
-    I 108.589704 [1702358] tty: [0] The SPURS is aborted.
-    I 108.589720 [1702358] process: _sys_process_exit(0x8001000c)
-    I 108.590207 [1702358] ppu: process exit -2147418100 from thread 0x1000004 lr=0x3000c7e8 (not lifted)
-
-51 "rsx: flip" lines, last flip 2761 at 97.3 s (the run was still alive at the
-110 s timeout on this pass; the 2161-flip/77.9 s figure in the task text is the
-timing variability of the same state).
-
-### M2 -- the abort path resolves, and 0x3000c7e8 is INSIDE a lifted function
-
-The report said "(not lifted)". It is not unlifted; it is not an *entry*. The
-lifter's own discover() puts 0x3000c7e8 inside f_3000c790's span:
-
-    $ python3 /tmp/T4-resolve.py            # analysis.discover() on the relocated modules
-    liblv2.elf funcs 330 text 0x30000000 0x30013b68
-      3000c7e8 -> inside f_3000c790 span 3000c790-3000c820
-      3000c790 -> inside f_3000c790 span 3000c790-3000c820
-      3000c808 -> inside f_3000c790 span 3000c790-3000c820
-    libsre.elf funcs 352 text 0x32000000 0x3202e000
-      3200cb24 -> inside f_3200cab8 span 3200cab8-3200cb3c
-      32009754 -> inside f_3200930c span 3200930c-32009758
-      3200cb40 -> inside f_3200cb40 span 3200cb40-3200cbf0
-      3200975c -> inside f_3200975c span 3200975c-32009798
-
-and the unmodified lift already contains the function:
-
-    $ grep -n 'f_3000c790' /root/Dev/ps3base2/out-rdr/ppu/table.cpp
-    74668:    {0x3000c790, f_3000c790},
-
-The word at 0x3000c7e8 is the instruction AFTER `bl 0x3000fad0` at 0x3000c7e4:
-the return address. has_code_at() is keyed by function ENTRY, so it answered
-false for every return address in the guest. That is the whole "not lifted"
-misreport -- not a missing function.
-
-The two Call Stack Trace frames are the same shape: 0x3200cb24 is
-f_3200cab8+0x6c (the instruction after `bl 0x3200e5c4` at 0x3200cb20), and
-0x32009754 is f_3200930c+0x448. Both functions are lifted at HEAD.
-
-### M3 -- the seed form: (image, offset), resolved at lift time
-
-An absolute seed is a fact about ONE layout. layout_for.py recomputes every
-module base from the title's text extent, so liblv2 moved from 0x21000000 to
-0x30000000 in this tree's history and every absolute seed in the file then named
-the wrong image. seed_is_stale() could only drop them and ask for a re-run.
-
-The new form is `<image>+<offset>`, resolved by the lifter against the base THIS
-lift actually gave that image:
-
-    out-T4rdr/gen/landmarks.txt:
-    liblv2+0xc7e8 spurs-abort-tail
-    libsre+0xcb24 spurs-abort-frame0
-    libsre+0x9754 spurs-abort-frame1
-
-Lift output (out-T4rdr/lift.log), verbatim:
-
-    landmarks: 3 from /root/Dev/wt-T4/out-T4rdr/gen/landmarks.txt
-    liblv2           landmark liblv2+0xc7e8 -> 0x3000c7e8 in f_3000c790+0x58
-    libsre           landmark libsre+0xcb24 -> 0x3200cb24 in f_3200cab8+0x6c
-    libsre           landmark libsre+0x9754 -> 0x32009754 in f_3200930c+0x448
-
-The lift is otherwise BYTE-IDENTICAL to the tree at HEAD -- only table.cpp
-differs, because the landmark and span tables live there:
-
-    $ diff -rq /root/Dev/ps3base2/out-rdr/ppu /root/Dev/wt-T4/out-T4rdr/ppu
-    Files /root/Dev/ps3base2/out-rdr/ppu/table.cpp and /root/Dev/wt-T4/out-T4rdr/ppu/table.cpp differ
-
-    76793 functions both sides (function_count, and the FuncEntry diff is empty)
-
-### M4 -- the process-exit line now says what the abort path is
-
-Build with -DPS3BASE_GENERATED_DIR=/root/Dev/wt-T4/out-T4rdr/ppu, run on
-display :919, same disc, same env. Raw, /tmp/T4-run2.log:2224-2230:
-
-    I  89.539820 [1777965] tty: [0] Call Stack Trace:	0x3200cb24
-    I  89.539837 [1777965] tty: [0]                  	0x32009754
-    I  89.539855 [1777965] tty: [0]                  	0x0
-    I  89.539878 [1777965] tty: [0] The SPURS is aborted.
-    I  89.539888 [1777965] tty: [0] 
-    I  89.539894 [1777965] process: _sys_process_exit(0x8001000c)
-    I  89.540201 [1777965] ppu: process exit -2147418100 from thread 0x1000004 lr=0x3000c7e8 liblv2+0xc7e8 spurs-abort-tail +0x3000c790
-
-Before (same build, HEAD tables):
-
-    I 108.590207 [1702358] ppu: process exit -2147418100 from thread 0x1000004 lr=0x3000c7e8 (not lifted)
-
-The "+0x3000c790" tail is a format bug (the entry was printed with a "+0x%x"
-prefix instead of as f_%08x); fixed in the next build, which also prints the
-export symbol name.
-
-
-### M5 -- what the abort path DOES (the lifted function, and the four calls it makes)
-
-The lifted function at 0x3000c790 is liblv2's `_sys_panic`
-(sysPrxForUser, NID 0x4232B0DB, OPD 0x30014200 -> code 0x3000c790; found by
-scanning liblv2's data segment for {code, toc} pairs, 330 of them):
-
-    $ python3 /tmp/T4-opd.py
-    OPD count 330
-    opd 30014200 -> code 3000c790
-    opd 30014208 -> code 3000c824
-    opd 30014210 -> code 3000c8ec
-    opd 30014350 -> code 3000fad0
-    opd 30014358 -> code 3000fb64
-
-and the export table names it:
-
-    $ grep -n '0x30014200' /root/Dev/ps3base2/out-rdr/ppu/table.cpp
-    77337:    {"sysPrxForUser", 0x4232B0DBu, "_sys_panic", 1, 0x30014200},
-
-Guest disassembly (capstone, from liblv2.elf at 0x3000c790):
-
-    3000c790  stdu     r1, -0xa0(r1)          ; prologue, 0xa0-byte frame
-    3000c794  mflr     r0
-    3000c798  std      r28, 0x80(r1)
-    3000c79c  std      r4, 0xd8(r1)           ; spill the varargs register save area
-    3000c7a0  mr       r28, r3                ; r28 = code (the panic code)
-    3000c7a4  std      r29, 0x88(r1)
-    3000c7a8  std      r0, 0xb0(r1)
-    3000c7ac  std      r5, 0xe0(r1)           ; ... r5..r10 spilled to 0xd8..0x108
-    3000c7b0  std      r6, 0xe8(r1)
-    3000c7b4  std      r7, 0xf0(r1)
-    3000c7b8  std      r8, 0xf8(r1)
-    3000c7bc  std      r9, 0x100(r1)
-    3000c7c0  std      r10, 0x108(r1)
-    3000c7c4  li       r4, 0
-    3000c7c8  li       r3, 8                  ; syscall 8 = sys_tty_write? no: r3 is arg 0
-    3000c7cc  li       r11, 0x3dc             ; syscall 988
-    3000c7d0  sc                              ; <-- sys_dbg_register_ppu_exception_handler
-    3000c7d4  addi     r29, r1, 0xd8          ; r29 = &register save area
-    3000c7d8  clrldi   r3, r28, 0x20          ; arg0 = panic code
-    3000c7dc  mr       r4, r29                ; arg1 = &save area
-    3000c7e0  stw      r29, 0x70(r1)
-    3000c7e4  bl       0x3000fad0             ; <-- the call whose return is 0x3000c7e8
-    3000c7e8  nop                             ; <-- the reported "not lifted" address
-    3000c7ec  lwz      r9, -0x7e7c(r2)        ; r2 = TOC; load the panic-lock
-    3000c7f0  ld       r0, 0(r9)
-    3000c7f4  clrlwi   r0, r0, 0x1f           ; bit 0
-    3000c7f8  cmpwi    cr7, r0, 0
-    3000c7fc  beq      cr7, 0x3000c808
-    3000c800  trap                            ; already panicking: die immediately
-    3000c804  b        0x3000c804             ; <-- infinite self-branch (hang), not a return
-    3000c808  lis      r3, -0x7fff            ; r3 = 0x80010000
-    3000c80c  li       r4, 0
-    3000c810  ori      r3, r3, 0xc            ; r3 = 0x8001000c = CELL_EABORT
-    3000c814  li       r5, 0
-    3000c818  li       r11, 0x16              ; syscall 22 = _sys_process_exit
-    3000c81c  sc                              ; <-- _sys_process_exit(0x8001000c)
-    3000c820  b        0x3000c804             ; unreachable; the exit throws
-
-So the abort path is:
-
-  1. `_sys_panic(code, va_list)` spills the varargs save area and registers an
-     exception handler with syscall 988 (which this runtime stubs to CELL_OK --
-     correct, RPCS3's sys_lv2dbg.cpp:104 only logs).
-  2. It calls 0x3000fad0 with (code, &save_area), which is liblv2's internal
-     fprintf-to-tty: 0x3000fad0 -> 0x3000eccc (a handle lookup), then
-     0x3000edc0 (the formatted write) with r3 = the tty FILE*, r4 = code,
-     r5 = &save_area, r6 = 0. That call is what produces every "tty: [0] ..."
-     line of the dump.
-  3. On return it reads a global panic flag at TOC-0x7e7c. Set: `trap` and hang.
-     Clear: it builds CELL_EABORT = 0x8001000c and calls _sys_process_exit(22).
-  4. The self-branch at 0x3000c804 is why the run never returns from either arm:
-     the process leaves through the syscall, and the runtime reports it as a
-     ProcessExit.
-
-The report's "0x8001000c is CELL_SPURS_TASK_ERROR_FATAL" is a coincidence of
-values, not the same constant: RPCS3 defines CELL_SPURS_TASK_ERROR_FATAL as
-0x80410914 (refs/rpcs3/rpcs3/Emu/Cell/Modules/cellSpurs.h:64), and 0x8001000C
-is CELL_EABORT ("The operation is aborted", ErrorCodes.h:115). liblv2's
-_sys_panic is what puts that value into r3; the SPURS code path reaches
-_sys_panic, and _sys_panic exits with EABORT.
-
-The lifted form is already correct -- it is in the tree at HEAD, table entry and
-all. What was missing was only the NAME, which is what this task fixed.
-
-
-### M6 -- the same abort, named end to end (final build)
-
-Landsmarks now live in `recomp/landmarks.txt`, committed, because a landmark is a
-property of the firmware MODULE -- all three titles load the same liblv2 and
-libsre -- and not of one title's output tree:
-
-    landmarks: 3 from /root/Dev/wt-T4/recomp/landmarks.txt
-    liblv2           landmark liblv2+0xc7e8 -> 0x3000c7e8 in _sys_panic f_3000c790+0x58
-    libsre           landmark libsre+0xcb24 -> 0x3200cb24 in f_3200cab8+0x6c
-    libsre           landmark libsre+0x9754 -> 0x32009754 in f_3200930c+0x448
-
-Run on display :919, PS3BASE_DISC_DIR=/root/Dev/rdr-port/vfs/dev_bdvd, 130 s
-timeout, -DPS3BASE_GENERATED_DIR=/root/Dev/wt-T4/out-T4rdr/ppu. Raw,
-/tmp/T4-run3.log:2634-2640:
-
-    I  86.389502 [1797385] tty: [0] Call Stack Trace:	0x3200cb24
-    I  86.389524 [1797385] tty: [0]                  	0x32009754
-    I  86.389541 [1797385] tty: [0]                  	0x0
-    I  86.389590 [1797385] tty: [0] The SPURS is aborted.
-    I  86.389608 [1797385] process: _sys_process_exit(0x8001000c)
-    I  86.389987 [1797385] ppu: process exit -2147418100 from thread 0x1000004 lr=0x3000c7e8 liblv2+0xc7e8 spurs-abort-tail (_sys_panic+0x58)
-
-Before this work, same build, same run:
-
-    I 108.590207 [1702358] ppu: process exit -2147418100 from thread 0x1000004 lr=0x3000c7e8 (not lifted)
-
-Flips on the same binary: 41 logged flip lines, last one "flip 2401" at 83.7 s,
-then the abort at 86.4 s. The baseline build reached "flip 3001" at 105 s -- the
-difference is not a regression, it is when the SPURS watchdog fires; both are
-alive-and-flipping with 0 crashes until the title calls _sys_panic. What the
-landmark, span and seed work changed is only what the report SAYS, and the diff
-confirms it: the lifted code is byte-identical to HEAD except table.cpp.
-
-### M7 -- the seed forms and the landmark rule are pinned by a test
-
-    $ python3 tests/ppu_seed_forms.py
-    ppu_seed_forms: 16 checks passed
-
-    $ cd build-T4 && ctest -R 'ppu_seed_forms|ppu_dispatch_table' --output-on-failure
-    1/2 Test #3: ppu_dispatch_table ...............   Passed    0.03 sec
-    2/2 Test #4: ppu_seed_forms ...................   Passed    0.04 sec
-    100% tests passed, 0 tests failed out of 2
-
-    $ sh tools/check_no_dup_symbols.sh
-    gowa_stubs: no known duplicate definitions
-
-The checks that matter, both in tests/ppu_seed_forms.py:
-
-  - the SAME seed file resolves to 0x3000c7e8 for a liblv2 at 0x30000000 and to
-    0x2100c7e8 for a liblv2 at 0x21000000 (the named form follows the relayout),
-    while the absolute seed stays 0x3000c7e8 in both (which is why it goes stale);
-  - a landmark written as an absolute address is REFUSED, loudly, because a
-    landmark exists to be stable across relayouts.
-
-### M8 -- the "(not lifted)" classification was not just cosmetic
-
-has_code_at() is keyed by function ENTRY. Every return address in the guest is
-therefore "not lifted", and the process-exit log used that as its whole verdict.
-The span table generated here replaces the entry-only test for reporting:
-
-    out-T4rdr/ppu/table.cpp:
-    const FunctionSpan function_spans[] = {
-        {0x30000000, 0x30000040, 0x30000000, 0},   // lo, hi, entry, image
-        ...
-        {0x3000c790, 0x3000c820, 0x3000c790, 1},
-
-so 0x3000c7e8 lands in [0x3000c790, 0x3000c820] and names f_3000c790+0x58.
-has_code_at() itself is unchanged: the dispatch table still answers "is this an
-entry", which is the right question for an indirect call, and the report stops
-using it to answer a different one.
-
-
-### M9 -- final build: landmarks at boot, and the abort named end to end
-
--DPS3BASE_GENERATED_DIR=/root/Dev/wt-T4/out-T4rdr/ppu (relift of recomp/images-rdr.json
-with the committed landmarks, 254 s, done=0).
-
-Raw, /tmp/T4-run6.log:7-9 (BOOT, before anything goes wrong):
-
-    I   0.067782 [1856859] main: landmark 'spurs-abort-tail' at 0x3000c7e8 = liblv2+0xc7e8 spurs-abort-tail (_sys_panic+0x58)
-    I   0.067812 [1856859] main: landmark 'spurs-abort-frame1' at 0x32009754 = libsre+0x9754 spurs-abort-frame1 (f_3200930c+0x448)
-    I   0.067825 [1856859] main: landmark 'spurs-abort-frame0' at 0x3200cb24 = libsre+0xcb24 spurs-abort-frame0 (f_3200cab8+0x6c)
-
-Raw, /tmp/T4-run6.log:2110-2122 (the abort, 142.1 s):
-
-    I 142.083873 [1856872] tty: [0]   policy module  0x32023680
-    I 142.083901 [1856872] tty: [0]   workload ID    1
-    I 142.083910 [1856872] tty: [0] Call Stack Trace:	0x3200cb24
-    I 142.083930 [1856872] tty: [0]                  	0x32009754
-    I 142.083947 [1856872] tty: [0]                  	0x0
-    I 142.083965 [1856872] tty: [0] The SPURS is aborted.
-    I 142.085019 [1856872] ppu: process exit -2147418100 from thread 0x1000004 lr=0x3000c7e8 liblv2+0xc7e8 spurs-abort-tail (_sys_panic+0x58)
-
-62 "rsx: flip" lines on this run, 0 crashes, alive until the title calls
-_sys_panic. Both titles that were green stay green (the change is additive: no
-lifted code changed, tests pass, and only report lines and two tables differ).
-
-### M10 -- the lift is unchanged; only table.cpp differs
-
-    $ diff -rq /root/Dev/ps3base2/out-rdr/ppu /root/Dev/wt-T4/out-T4rdr/ppu
-    Files /root/Dev/ps3base2/out-rdr/ppu/table.cpp and /root/Dev/wt-T4/out-T4rdr/ppu/table.cpp differ
-
-    $ grep -n 'function_count' /root/Dev/ps3base2/out-rdr/ppu/table.cpp out-T4rdr/ppu/table.cpp
-    /root/Dev/ps3base2/out-rdr/ppu/table.cpp:76844:const uint32_t function_count = 76793;
-    out-T4rdr/ppu/table.cpp:153574:const uint32_t function_count = 76793;
-
-    $ diff <(grep -o '{0x[0-9a-f]*, f_[0-9a-f]*}' HEAD/table.cpp) \
-           <(grep -o '{0x[0-9a-f]*, f_[0-9a-f]*}' NEW/table.cpp)
-    (empty)
-
-### M11 -- tests
-
-    $ python3 tests/ppu_seed_forms.py
-    ppu_seed_forms: 16 checks passed
-
-    $ cd build-T4 && ctest --output-on-failure
-    (ppu_dispatch_table Passed, ppu_seed_forms Passed)
-
-    $ sh tools/check_no_dup_symbols.sh
-    gowa_stubs: no known duplicate definitions
-
-
-### M12 -- the two green titles stay green, on trees with NO landmark/span tables
-
-Both were relinked against their own generated tree, which has no landmarks.txt
-and therefore no landmark/span tables at all. That is the case the weak
-declarations in runtime/include/runtime/image.h exist for, and it links and runs:
-
-    $ cmake --build build-T4 --target ps3base      # -DPS3BASE_GENERATED_DIR=out-mc/ppu
-    [103/103] Linking CXX executable ps3base
-    done=0
-
-    $ DISPLAY=:919 PS3BASE_DISC_DIR=/root/Dev/mc-port/disc ./build-T4/ps3base --no-launcher
-    I 121.339093 [1884843] rsx: flip 5401 (buffer 0) worst 54.9 ms, >50ms 1, >100ms 0
-    91 "rsx: flip" lines, 0 FATAL, 0 "unknown indirect target", no landmark lines
-
-    $ cmake --build build-T4 --target ps3base      # -DPS3BASE_GENERATED_DIR=out-gta/ppu
-    [86/86] Linking CXX executable ps3base
-    done=0
-
-    $ DISPLAY=:919 PS3BASE_DISC_DIR=/root/Dev/gta-port/disc ./build-T4/ps3base --no-launcher
-    I 123.101868 [1900673] rsx: flip 5761 (buffer 0) worst 25.1 ms, >50ms 0, >100ms 0
-    97 "rsx: flip" lines, 0 FATAL, 0 "unknown indirect target", no landmark lines
-
-Minecraft 5401 flips and GTA 5761 flips in 100 s, both alive to the timeout --
-the PASS shape the task text records (7141 and 6781 over the full window).
+    cmd bash -c "ln -sfn /root/Dev/ps3base2/bin bin; ln -sfn /root/Dev/ps3base2/fw fw; ..."
+    cmake -S /root/Dev/wt-U1 -B /root/Dev/wt-U1/build-20 -G Ninja
+    cmake --build /root/Dev/wt-U1/build-20 -j 8 --target ps3base        # EXIT=0
+    nohup setsid env DISPLAY=:920 XDG_RUNTIME_DIR=/run/user/0 PS3BASE_DISC_DIR=/root/Dev/rdr-port/vfs/dev_bdvd PS3BASE_LOG=info timeout 120 /root/Dev/wt-U1/build-20/ps3base --no-launcher > /tmp/U1-base.log 2>&1 < /dev/null & disown
+
+Raw tail:
+
+    I 119.127252 [2132684] rsx: flip 3301 (buffer 0) worst 49.6 ms, >50ms 0, >100ms 0
+
+    $ grep -c 'rsx: flip' /tmp/U1-base.log
+    3301
+    $ grep -c '^E ' /tmp/U1-base.log
+    0
+
+The fault needs a longer window than 120 s on this pass; M3 is the run that
+reaches it. The worktree also needed an out-rdr symlink, without which:
+
+    E 1.041477 [2124716] loader: cannot read ./out-rdr/gen/reloc/liblv2.elf
+
+### M2 -- the title's list traffic, measured: 32791 lists, 122478 elements, ZERO notify bits
+
+The walker is instrumented (PS3BASE_SPU_LIST_TRACE=1) and logs every list
+command and every element verbatim:
+
+    env PS3BASE_LOG=info PS3BASE_SPU_LIST_TRACE=1 timeout 120 ./build-20/ps3base --no-launcher > /tmp/U1-list.log
+
+Raw counts:
+
+    $ grep -c 'ENTER' /tmp/U1-list.log
+    32791
+    $ grep -c '] @0x' /tmp/U1-list.log
+    122478
+    $ grep -c 'notify=1' /tmp/U1-list.log
+    0
+    $ grep -c 'STALL after' /tmp/U1-list.log
+    0
+    $ grep -c 'ACK tag' /tmp/U1-list.log
+    0
+
+Lists issued, by opcode and thread:
+
+    $ grep -o 'ENTER thread 0x[0-9a-f]* cmd 0x[0-9a-f]*' /tmp/U1-list.log | awk '{print $3,$5}' | sort | uniq -c | sort -rn
+      14223 0x4000100 0x44
+      10037 0x4000100 0x46
+       9784 0x2000100 0x46
+       9744 0x1000100 0x46
+       9621 0x3000100 0x46
+       4289 0x100     0x46
+
+    0x44 = MFC_GETL, 0x46 = MFC_GETLF (MFC.h:14). No PUTL/PUTLB/PUTLF from this
+    title, and no list command at all on thread 0x200 (the thread that faults).
+
+Element size and external-address distribution:
+
+    $ grep -o 'size=0x[0-9a-f]*' /tmp/U1-list.log | sort | uniq -c | sort -rn | head -5
+      65140 size=0x0
+      14474 size=0x4000
+      14166 size=0x20
+       3267 size=0x28c0
+       3266 size=0x60
+    $ grep -o 'eal=0x[0-9a-f]*' /tmp/U1-list.log | sort | uniq -c | sort -rn | head -3
+      65322 eal=0x00000000
+       5512 eal=0x703830b0
+       3281 eal=0x7077df00
+
+**Fact 1: the notify bit is never set.** Zero of 122478 elements carry it, over
+32791 list commands on every SPU thread that runs. Stall-and-notify is not
+exercised by this title, so its correctness cannot be the fault. The decode is
+checked against the raw bytes, not against itself: in the local-storage dump
+
+     list 0x3f730 element 0: 01 02 04 08 10 20 40 80  -> notify=0, size 0x408, eal 0x10204080
+     list 0x2add0 element 0: 00 00 00 00 00 00 00 00  -> notify=0, size 0x0,   eal 0x0
+
+and re-scanning every 8-byte element of all 151 distinct (base,size) pairs the
+trace names, inside the dumped local storage, finds 0 elements with the bit set:
+
+    distinct list (base,size) from the trace: 151  elements with the notify bit in the final LS dump: 0
+
+**Fact 2: the zero-EAL elements are the guest's own padding, not a stale
+ahead-of-time read.** 65140 of 122478 elements are size 0x0 / eal 0x0, and 6183
+lists contain a zero-size element FOLLOWED by a non-zero one:
+
+    (51648, [(0, 0, 0), (1, 3440, 1955418080)])
+    (51648, [(6, 0, 0), (7, 8720, 1955421520)])
+    (51648, [(12, 0, 0), (13, 16, 1955430240)])
+    (51649, [(0, 0, 0), (1, 64, 1955409024)])
+
+A walker that decoded elements ahead of time would produce the opposite shape:
+valid elements first and zeros only for elements written after a stall. There is
+no stall to be ahead of, and the zeros are interleaved with valid elements
+throughout the list. The guest issues a longer list than it fills and relies on
+the unfilled elements being zero -- which is what RPCS3 does and what this
+walker does.
+
+No element anywhere in the run has a non-zero size with an eal below 0x10000:
+
+    $ python3 - ... # every 'size=0x.. eal=0x..' line, count size>0 and eal<0x10000
+    count 0
+
+### M3 -- who wrote the faulting EAL: the fault is a PLAIN GET, not a list
+
+The MFC parameter channels are now recorded (PS3BASE_SPU_MFC_HIST=1): the last
+8 writes to ch16/ch17/ch18/ch19/ch21 with their pc, dumped at a refused DMA.
+
+    env PS3BASE_LOG=info PS3BASE_SPU_MFC_HIST=1 timeout 120 ./build-20/ps3base --no-launcher > /tmp/U1-hist.log
+    $ grep -c 'rsx: flip' /tmp/U1-hist.log
+    55
+
+Raw log, /tmp/U1-hist.log:3157-3175 (verbatim):
+
+    E 116.644196 [2173754] spu: thread 0x200 'SecondaryCellSpursKernel0' DMA GET cmd 0x40 unmapped ea 0x00000000 size 0x80 lsa 0x1a100 pc 0x06428
+    E 116.644328 [2173754] spu:   -1: ch19 <- 0x00000080 at pc 0x06410
+    E 116.644336 [2173754] spu:   -2: ch18 <- 0x00000000 at pc 0x06408
+    E 116.644342 [2173754] spu:   -3: ch16 <- 0x0001a100 at pc 0x06400
+    E 116.644349 [2173754] spu:   -4: ch19 <- 0x00000930 at pc 0x068ec
+    E 116.644356 [2173754] spu:   -5: ch18 <- 0x70c89400 at pc 0x068e8
+    E 116.644362 [2173754] spu:   -6: ch16 <- 0x0003b100 at pc 0x068bc
+    E 116.644368 [2173754] spu:   -7: ch19 <- 0x00000490 at pc 0x068b0
+    E 116.644451 [2173754] spu:   -8: ch18 <- 0x70c6de00 at pc 0x068ac
+    E 116.644462 [2173754] spu: thread 0x200 'SecondaryCellSpursKernel0' DMA GET cmd 0x40 unmapped ea 0x00000000 size 0x80 lsa 0x1a100 pc 0x06510
+    E 116.644468 [2173754] spu:   -1: ch19 <- 0x00000080 at pc 0x06508
+    E 116.644474 [2173754] spu:   -2: ch18 <- 0x00000000 at pc 0x06500
+    E 116.644481 [2173754] spu:   -3: ch16 <- 0x0001a100 at pc 0x064f0
+    E 116.644487 [2173754] spu:   -4: ch19 <- 0x00000080 at pc 0x06410
+    E 116.644493 [2173754] spu:   -5: ch18 <- 0x00000000 at pc 0x06408
+    E 116.644499 [2173754] spu:   -6: ch16 <- 0x0001a100 at pc 0x06400
+    E 116.644505 [2173754] spu:   -7: ch19 <- 0x00000930 at pc 0x068ec
+    E 116.644513 [2173754] spu:   -8: ch18 <- 0x70c89400 at pc 0x068e8
+    E 116.644654 [2173754] spu: thread 0x200 unknown stop code 0x0 at 0x1a100
+
+The command byte is 0x40 -- MFC_GET, a single transfer -- and the channel
+write immediately before it is ch21 <- 0x00000040 at that pc. It is NOT a list
+command (0x44/0x45/0x46), so the list walker is not in this path at all. The
+sequence is fully determined by the guest:
+
+    pc 0x06400  ch16 <- 0x0001a100      # LSA = the scratch buffer
+    pc 0x06408  ch18 <- 0x00000000      # EAL = 0
+    pc 0x06410  ch19 <- 0x00000080      # size = 0x80
+    pc 0x06424  ch21 <- 0x00000040      # GET
+
+Disassembly of the issuing code, from the local-storage dump at the refused DMA
+(spu_unmapped_00000200.ls):
+
+    063f0: 40804006  il r6,0x80
+    063f4: 24ffc0d0  stqd r80,-16(r1)
+    063f8: 40802005  il r5,0x40
+    063fc: 21a00807  wrch ch16,r7
+    06400: 0400018a  ori r10,r3,0
+    06404: 21a00904  wrch ch18,r4
+    06408: 40800004  il r4,0x0
+    0640c: 21a00986  wrch ch19,r6
+    06410: 4020007f  nop r127,r0,r0
+    06414: 24ff4081  stqd r1,-48(r1)
+    06418: 1cf40081  ai r1,r1,-48
+    0641c: 21a00a04  wrch ch20,r4
+    06420: 12000309  hbrr r9,0x6
+    06424: 21a00a85  wrch ch21,r5
+    06428: 33a74d03  lqr r3,0x19e90
+    0642c: 1c200182  ai r2,r3,128
+    06430: 23a74c02  stqr r2,0x19e90
+    06434: 21a00b84  wrch ch23,r4
+    06438: 01e00b89  rchcnt r9,ch23
+    0643c: 7c004488  ceqi r8,r9,1
+
+r4 is the EAL and r7 the LSA: they are the function's ARGUMENTS. The il r4,0x0
+at 0x06408 is r4 reused as the size register for the NEXT command; the EAL is
+whatever the caller passed, and the raw local storage shows r4 = 0 entering the
+function. 0x06428 onward continues into the frame-allocator bump pointer, which
+is why the fault and the bump pointer look related: the routine fetches, then
+bumps.
+
+The bump pointer at the fault, from the same dump:
+
+    LS size 262144
+    0x19e90 (bump ptr) = 0x0001af90
+    0x19e80..0x19ea0: 0x00007fe0 0x00007fe0 0x00007fe0 0x00007fe0 0x0001af90 0x0001abd0 0x19da7bd0 0x0001abd0
+    0x1a100..0x1a140: 0x00000000 ... (all zero)
+    nonzero 128-byte lines: 28
+    first 40 runs: [('0x80','0x880'), ('0xa00','0x19d00'), ('0x19e80','0x19f00'), ('0x1a080','0x1a100'), ('0x1a300','0x1a380'), ('0x1e100','0x1e200'), ('0x1e900','0x1ea80'), ...]
+
+0x1af90 is inside a written region (0x1a300..0x1a380 is non-zero in the dump),
+unlike the 0x23800 in the task text. Local storage in this run has only 28
+non-zero 128-byte lines and 0x1a100, the fault's LSA, is not one of them: the
+destination was zero and stayed zero.
+
+### M4 -- the caller passed the null EAL: pc 0x06400 enters with r4 = 0
+
+PS3BASE_SPU_PC_TRAP=<pc> records the argument registers at one instruction, in
+a ring dumped at a refused DMA. Trapping the faulting routine's entry
+(pc 0x06400):
+
+    env PS3BASE_LOG=info PS3BASE_SPU_PC_TRAP=0x6400 PS3BASE_SPU_MFC_HIST=1 timeout 150 ./build-20/ps3base --no-launcher > /tmp/U1-trap3.log
+    $ grep -c 'rsx: flip' /tmp/U1-trap3.log
+    57
+
+Raw log, /tmp/U1-trap3.log:3146-3152:
+
+    E 126.027583 [2224541] spu: thread 0x200 'SecondaryCellSpursKernel0' DMA GET cmd 0x40 unmapped ea 0x00000000 size 0x80 lsa 0x1a100 pc 0x06428
+    E 126.027645 [2224541] spu:   pc 0x06400 ch16 <- 0x0001a100 r3 0x1a100 r4 0x00000000 r0 0x06b34
+    E 126.027653 [2224541] spu:   -1: ch19 <- 0x00000080 at pc 0x06410
+    E 126.027660 [2224541] spu:   -2: ch18 <- 0x00000000 at pc 0x06408
+    E 126.027666 [2224541] spu:   -3: ch16 <- 0x0001a100 at pc 0x06400
+    E 126.027672 [2224541] spu:   -4: ch19 <- 0x00000930 at pc 0x068ec
+    E 126.027679 [2224541] spu:   -5: ch18 <- 0x70c90b70 at pc 0x068e8
+    E 126.027685 [2224541] spu:   -6: ch16 <- 0x0003b100 at pc 0x068bc
+
+r3 = 0x1a100 (the LSA argument) and r4 = 0x00000000 (the EAL argument), with
+r0 = 0x6b34, the return address. The null external address is not produced
+inside the routine: it is PASSED IN.
+
+The call site, from the disassembly:
+
+    06b20: 42d08003  ila r3,0x1a100       # LSA
+    06b24: 33dee7b5  lqr r53,0x36260      # a 16-byte table entry
+    06b28: 408000e8  il r104,0x1
+    06b2c: 3f811a84  rotqbyi r4,r53,4     # r4 = the entry's 3rd word
+    06b30: 337f1700  brsl r0,0x063e8      # call the fetch-and-bump routine
+    06b34: 327fba00  br r0,0x06904
+
+rotqbyi r4,r53,4 moves word 2 of the entry into r4, so the EAL is
+ls32[0x36268]. In the dump taken at the fault:
+
+    0x36260: 0x00000000 0x00000000 0x70dc9000 0x70dd8000
+    0x36270: 0x00000005 0x00000000 0x0177cbc0 0x00000000
+
+Word 2 is 0x70dc9000, NOT zero -- and no store to 0x362xx appears anywhere in
+the 26 KB of disassembly:
+
+    $ grep -nE 'stqr .*0x362|stqd .*0x362|stqa .*0x362' /tmp/U1-dis.txt
+    (no output)
+
+The guest reads a table entry that this runtime's disassembled code never
+writes, and passes whatever is there as its EAL. The register carried 0 while
+the same address in the dump holds 0x70dc9000 at a different moment, so the
+entry is filled by a transfer the local-storage dump cannot see (an SPU-to-SPU
+or PPU-to-SPU write). That is where the null EAL comes from -- not the list
+walker.
+
+No element anywhere in the run carries a non-zero size with an eal below
+0x10000, so the faulting transfer is not a list element either.
+
+### M5 -- the audit result: the walker matches RPCS3 on every clause, and it is not on the fault path
+
+The walker was rewritten to the specification and moved into
+runtime/include/spu/dma_list.h so the unit test drives the shipped code. Each
+clause, against RPCS3 do_list_transfer (refs/rpcs3/rpcs3/Emu/Cell/SPUThread.cpp:2927):
+
+| clause | specification | RPCS3 | before | after |
+|---|---|---|---|---|
+| element is 8 bytes, big-endian {notify:1,reserved:16,size:15,eal:32} | SPU ISA | 2939 struct alignas(8) list_element | correct | correct |
+| size = word0 & 0x7FFF, notify = high bit of word0 | SPU ISA | 2970 ts_mask = 0x7fff; 3460 sb & 0x80 | correct | correct |
+| list base 8-byte aligned, masked | SPU ISA | 2957 item_ptr = eal & 0x3fff8 | correct | correct |
+| lsa masked to 16 | SPU ISA | 2958 arg_lsa = lsa & 0x3fff0 | correct | correct |
+| lsa advances by each element's size, rounded to 16 | SPU ISA | 3390 lsa = arg_lsa + (eal & 0xf); arg_lsa += align(size,16) | correct | correct |
+| a notify bit on the LAST element does not stall | 3455 breaks on !arg_size BEFORE 3460 | 3451-3460 | correct | correct |
+| stall resumes by RE-READING the following elements at that moment | SPU ISA | 2957 reads item_ptr every refill; 5463 re-enters | correct | correct |
+| one queue entry per list across every stall | 5463 does not re-enqueue | 3460-3478, 5529 | **WRONG** | fixed |
+| stall status is one bit per tag | SPU ISA | 3472 set_value(rotl(1, tag) | get_value()) | correct | correct |
+| list size above 0x4000 refused | 5041 `if (ch_mfc_cmd.size <= 0x4000)` | 5041 | **missing** | fixed |
+| MFC_RdListStallStat returns the tag bits and clears the count | SPU ISA | 5688-5695 | correct | correct |
+
+Two real deviations, both fixed:
+
+1. **The queue slot was taken on every stall, not once per command.** The old
+   code did `mfc_queue++` on each stall and `mfc_queue--` only when a resume
+   finished the list, so a list that stalls N times holds N slots. RCHCNT on
+   MFC_Cmd is 16 - mfc_size and the SPURS kernel reads it before issuing its
+   next command, so a leaked slot eventually stops the kernel issuing at all.
+   The list that needs this most is the one that stalls repeatedly, which is
+   exactly the list a frame allocator builds.
+2. **A list command larger than 0x4000 bytes was walked anyway.** RPCS3
+   refuses it (5041). 0x4000 bytes is the 2048-element maximum; walking past it
+   reads local storage the guest never intended as a list, and each such
+   element is a transfer the guest never asked for.
+
+Neither deviation is on the fault path: the faulting command is 0x40 (MFC_GET),
+not 0x44/0x45/0x46, and no notify bit is ever set (M2), so the stall path never
+runs in this title.
+
+### M6 -- the unit test, including the required case: element 1 filled AFTER the stall
+
+tests/spu_dma_list.cpp, built as the spu_dma_list CTest target:
+
+    $ ./build-20/spu_dma_list
+    64 checks, 0 failure(s)
+
+The decisive case builds a list at LS 0x1a100 whose element 0 carries the
+notify bit and whose element 1 is all zero at the time of the walk -- the same
+addresses and the same shape as the fault. It then asserts, in order:
+
+* only element 0 transfers before the stall, and it is the one the guest wrote;
+* the stalled command holds exactly one queue slot;
+* the guest then fills element 1 (== the 0x80 bytes element 0 wrote are
+  inspected, element 1 is written at 0x1a108 with a NEW eal derived from them);
+* the acknowledgement resumes with list = 0x1a108 and lsa = 0x2080;
+* the resumed walk transfers element 1 with the eal written AFTER the stall;
+* element 2, never written, is seen as eal 0 / size 0;
+* and, so the test cannot pass vacuously, element 1 read BEFORE the stall is
+  asserted to be eal 0 / size 0 -- the unmapped-0 transfer -- and asserted to
+  differ from what the resume returns.
+
+A walker that decoded ahead of time or cached elements passes every other check
+and fails this one.
+
+### M4 CORRECTION -- the misleading disassembly decode, corrected by measurement
+
+The paragraph below the call site in M4 originally claimed rotqbyi r4,r53,4
+moves word 2 of the entry into r4 and that the EAL therefore came from
+ls32[0x36268]. That is wrong, and the correction matters because it is the
+difference between "the table holds a valid pointer and the runtime lost it"
+and "the table holds zero". SPU rotqbyi n is a rotate LEFT by n bytes:
+result byte i = source byte (i + n) mod 16. Checked against the interpreter's
+own helper (runtime/src/spu/ops_impl.h:330, qrot_bytes(a, n) = pshufb(a, iota-n)):
+
+    $ clang++ -O1 /tmp/rot3.cpp -o /tmp/rot3 && /tmp/rot3
+    rotqbyi  0: element3 (bytes 12..15) = 0x70dd8000
+    rotqbyi  4: element3 (bytes 12..15) = 0x00000000
+    rotqbyi  8: element3 (bytes 12..15) = 0x00000000
+    rotqbyi 12: element3 (bytes 12..15) = 0x70dc9000
+
+wrch reads GPR element 3, so rotqbyi r4,r53,4 yields the entry's word 0,
+ls32[0x36260] -- which in the dump at the fault is:
+
+    0x36260: 0x00000000 0x00000000 0x70dc9000 0x70dd8000
+
+That is 0x00000000, exactly the r4 the trap measured. The decode is consistent
+with the register, and there is no lost pointer: the table entry the guest read
+held zero.
+
+### M5 -- the table entry is zero, and no code in the image writes it
+
+Nothing in the 26 KB disassembly of the thread's local storage stores to
+0x3626x:
+
+    $ grep -nE 'stqr .*0x362|stqd .*0x362|stqa .*0x362' /tmp/U1-dis.txt
+    (no output)
+
+and no list element writes there either (the trace records every element's
+destination lsa, and none is in that range):
+
+    $ grep -c 'lsa 0x362' /tmp/U1-list.log
+    0
+
+So 0x36260 is filled by a transfer the list trace does not cover: a single GET
+or an SPU-to-SPU PUT. The next measurement targets exactly that.
+
+### M7 -- the LS table entry is a faithful copy of guest memory, and guest memory holds zero
+
+PS3BASE_SPU_LS_WATCH=<hex> logs every transfer whose LS destination overlays a
+watched local address, which is what names the filler of the table:
+
+    $ grep 'overlays 0x36260' /tmp/U1-lsw.log | head -6
+    E   5.178269 [2320934] spu: thread 0x200 pc 0x025d0 PUT cmd 0x20 ea 0x017b2e00 -> lsa 0x33000 size 0x4000 overlays 0x36260
+    E   5.189750 [2320934] spu: thread 0x200 pc 0x025d0 GET cmd 0x40 ea 0x017b2e00 -> lsa 0x33000 size 0x4000 overlays 0x36260
+    E   5.189804 [2320934] spu: thread 0x200 pc 0x076c4 GET cmd 0x40 ea 0x0177cc00 -> lsa 0x36200 size 0x90 overlays 0x36260
+    E   5.192338 [2320934] spu: thread 0x200 pc 0x025d0 PUT cmd 0x20 ea 0x017b2e00 -> lsa 0x33000 size 0x4000 overlays 0x36260
+    E   5.198962 [2320934] spu: thread 0x200 pc 0x076c4 GET cmd 0x40 ea 0x0177cc00 -> lsa 0x36200 size 0x90 overlays 0x36260
+
+The entry is copied by a plain GET: `pc 0x076c4 GET cmd 0x40 ea 0x0177cc00 ->
+lsa 0x36200 size 0x90`. LS 0x36260 is at offset 0x60 into that 0x90-byte copy,
+so the EAL comes from guest memory at 0x0177cc60. Dumped at the fault (the
+fault handler now prints both sides):
+
+    E 142.726969 [2330803] spu: thread 0x200 'SecondaryCellSpursKernel0' DMA GET cmd 0x40 unmapped ea 0x00000000 size 0x80 lsa 0x1a100 pc 0x06428
+    E 142.727385 [2330803] spu:   guest 0x0177cc00: 70ccfa80 017bfe80 00000060 70c6de00  00000000 70d68f80 70c89400 70d68b80
+    E 142.727393 [2330803] spu:   guest 0x0177cc60: 00000000 00000000 70dc9000 70dd8000
+    E 142.727411 [2330803] spu: thread 0x200 'SecondaryCellSpursKernel0' DMA GET cmd 0x40 unmapped ea 0x00000000 size 0x80 lsa 0x1a100 pc 0x06510
+    E 142.727419 [2330803] spu:   guest 0x0177cc00: 70ccfa80 017bfe80 00000060 70c6de00  00000000 70d68f80 70c89400 70d68b80
+    E 142.727425 [2330803] spu:   guest 0x0177cc60: 00000000 00000000 70dc9000 70dd8000
+
+Guest memory at 0x0177cc60 is 00000000 00000000 70dc9000 70dd8000 -- the same
+as the local-storage copy, so the copy is faithful and nothing is lost in
+transit. Word 0 of that guest entry is 0x00000000, and rotqbyi r4,r53,4 puts
+word 0 into r4 (M4 correction). The null really is the guest's own table
+entry.
+
+The neighbours in that table are valid (0x70ccfa80, 0x017bfe80, 0x70c6de00,
+0x70d68f80, 0x70c89400, 0x70d68b80), so the entry is not uninitialised garbage:
+it is a specific slot the guest left zero. Whether the guest should have filled
+it before this read is a different question from the DMA list walker, and the
+evidence here does not support answering it from the list path.
+
+### M8 -- the two list fixes change no measured behaviour on this title
+
+Final build, both fixes in, no instrumentation switches:
+
+    $ ./build-20/spu_dma_list
+    64 checks, 0 failure(s)
+    $ ./build-20/spu_channel_conformance
+    spu_channel_conformance: 64 checks, 0 failures
+
+and the run reaches the same point as the unmodified HEAD build (M1: 3301
+flips, no fault inside 120 s; the fault at 95-143 s depending on the added
+inline cost of whichever diagnostic is enabled). The list fixes are
+correctness fixes for a path this title does not take, which is exactly why
+M2's zero notify-bit count matters: they cannot be the cause of the abort, and
+they cannot be its cure either.
+
+### M9 -- final clean run, no diagnostic switches
+
+    env DISPLAY=:920 PS3BASE_DISC_DIR=/root/Dev/rdr-port/vfs/dev_bdvd PS3BASE_LOG=info timeout 150 ./build-20/ps3base --no-launcher > /tmp/U1-final.log
+    $ grep -c 'rsx: flip' /tmp/U1-final.log
+    65
+    $ grep 'rsx: flip' /tmp/U1-final.log | tail -1
+    I 137.368459 [2350119] rsx: flip 3841 (buffer 0) worst 1111.9 ms, >50ms 2, >100ms 2
+    $ grep -c 'unmapped ea' /tmp/U1-final.log
+    2
+
+3841 flips, then the same abort. The list fixes neither help nor hurt this
+title, which is what M2 predicts.
+
+## Result
+
+**The DMA list hypothesis is refuted by measurement, not by argument.**
+
+1. The faulting transfer is MFC_GET cmd 0x40 -- a SINGLE transfer. The channel
+   history at the fault (M3) shows ch16 <- 0x1a100, ch18 <- 0x0,
+   ch19 <- 0x80, ch21 <- 0x40. It is not 0x44/0x45/0x46, so the list walker is
+   never entered on this path.
+2. The title never uses stall-and-notify: 0 notify bits in 122478 elements
+   over 32791 list commands (M2). A walker that re-read elements ahead of time
+   would still be a defect, but it cannot produce this fault, because the
+   stall path never runs.
+3. The zero external address is the guest's OWN table entry. A plain GET at
+   pc 0x076c4 copies guest 0x0177cc00..0x0177cc90 into LS 0x36200; word 0 of the
+   entry at guest 0x0177cc60 is 0x00000000, the copy is byte-faithful (M7),
+   rotqbyi r4,r53,4 loads that word into r4 (M4 correction), and the trap at
+   pc 0x06400 measures r4 = 0x00000000 entering the routine (M4).
+
+**The audit did find two real defects in the list path, and both are fixed:**
+
+* the queue slot was taken on every stall instead of once per list command, so
+  a list stalling N times exhausted RCHCNT(MFC_Cmd) and eventually stopped the
+  SPURS kernel issuing commands (RPCS3 3460-3478, 5463, 5529);
+* a list command above 0x4000 bytes (the 2048-element maximum) was walked
+  anyway instead of being refused (RPCS3 5041).
+
+Everything else in the audit table matched RPCS3 already: the 8-byte element
+layout, size = word0 & 0x7FFF, the notify bit as the high bit of word0, the
+8-byte list alignment, the 16-byte lsa masking, the lsa advance by each
+element's rounded size, no stall on the final element, resume by re-reading
+local storage at acknowledgement time, and the stall-status tag bits.
+
+**Deliverables**
+
+* runtime/include/spu/dma_list.h -- the walker and the queue/stall bookkeeping
+  as a state machine, every rule citing its RPCS3 line.
+* tests/spu_dma_list.cpp -- 64 checks, registered as the spu_dma_list CTest
+  target, including the required case: a list whose second element is only
+  filled AFTER the stall event, with the pre-stall read asserted to be
+  eal 0 / size 0 so the test cannot pass vacuously.
+* Diagnostic switches left on the branch, all default-off:
+  PS3BASE_SPU_LIST_TRACE (every list and element), PS3BASE_SPU_MFC_HIST (the
+  last 8 MFC parameter writes, dumped at a refused DMA), PS3BASE_SPU_PC_TRAP
+  (registers at one pc), PS3BASE_SPU_FAULT_LS (local storage dump at a refused
+  DMA), PS3BASE_SPU_LS_WATCH (transfers whose LS destination is watched).
+
+**Where the leaf goes next.** The evidence now says the guest reads a table
+entry it never filled at guest 0x0177cc60 (word 0 zero, neighbours valid, and
+word 4 in that table alternating 0/1 between reads). Chasing the list walker
+further cannot help. The remaining question is whether the guest was supposed
+to have filled that slot, which is a question about the SPURS workload
+dispatch the table describes, not about MFC list semantics.

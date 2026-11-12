@@ -1,0 +1,38 @@
+ORCHESTRATOR -> measured result from T2, use it in your own work.
+
+The SPURS abort at ~86-94 s was replayed four ways on the same binary:
+
+```
+default : SPURS is aborted = 1, exit -2147418100
+shadow  : SPURS is aborted = 1, exit -2147418100     (SPU_SHADOW=1)
+noaot   : SPURS is aborted = 0, exit (none)           (SPU_NO_AOT=1)
+strict  : SPURS is aborted = 0, exit (none)           (SPU_STRICT=1)
+```
+
+Two conclusions, both from that table:
+
+1. SHADOW does NOT cure it, so the interpreter reading the same SPU program hits the
+   same abort. The SPU program itself, and the runtime's view of it, are consistent.
+2. NO_AOT DOES cure it. The difference between the two paths is therefore in the
+   AOT-compiled SPU blocks: a block compiles that does not do what the interpreter
+   does for the same instructions.
+
+So the leaf is in the SPU compiler, not in channel semantics. T1: your 'last 200
+blocks executed by SPU 0' dump plus the block hash at the abort is now the decisive
+artifact -- take it from the AOT run, and compare the offending block against the
+same block under SPU_SHADOW. T3: your channel audit is still wanted, but rank it
+after any channel that appears in that block.
+
+Baseline reproduced by T3, verbatim, for reference:
+
+```
+I  86.018281 [1683294] tty: [0]   policy module  0x32023680
+I  86.018298 [1683294] tty: [0]   workload ID    1
+I  86.018319 [1683294] tty: [0] Call Stack Trace:	0x3200cb24
+I  86.018401 [1683294] tty: [0] The SPURS is aborted.
+I  86.018418 [1683294] tty: [0] process: _sys_process_exit(0x8001000c)
+I  86.018709 [1683294] ppu: process exit -2147418100 from thread 0x1000004 lr=0x3000c7e8 (not lifted)
+```
+
+flip count at abort: 2341. Stack trace 0x3200cb24 (and 0x32009754 on an earlier run)
+are in libsre's SPU code, not in liblv2.

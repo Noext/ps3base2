@@ -1,0 +1,1 @@
+{"status":"blocked","note":"channel layer audited, 9 deviations fixed with a 64-check unit test; abort root cause proven outside the channel layer: SPU bump pointer at lsa 0x19e90 reaches unwritten LS 0x23800, DMA list has null EAs, SPU runs into zeroed memory"}

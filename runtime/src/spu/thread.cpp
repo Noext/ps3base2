@@ -3,6 +3,7 @@
 #include "runtime/jobsys.h"
 #include "../jobsys/edge_consumer.h"
 #include "spu/aot.h"
+#include "spu/dma_list.h"
 #include "hle.h"
 #include "edge/edge_gpu.h"
 #include "edge/edge_adapters.h"
@@ -482,12 +483,37 @@ uint32_t SpuThread::read_channel(uint32_t ch) {
 }
 
 void SpuThread::write_channel(uint32_t ch, uint32_t value) {
+    /* PS3BASE_SPU_PC_TRAP=<pc>: log the registers at one instruction. The
+     * question "where did this zero come from" is answered by the argument
+     * registers, which exist only at the instruction that builds them. */
+    {
+        static const uint32_t trap_pc = []() -> uint32_t {
+            const char* e = std::getenv("PS3BASE_SPU_PC_TRAP");
+            return e ? static_cast<uint32_t>(std::strtoul(e, nullptr, 16)) : 0xFFFFFFFFu;
+        }();
+        if (ctx.pc == trap_pc) {
+            /* A ring, not a prefix: the entry that matters is the last one
+             * before the fault, which a first-N print never reaches. */
+            TrapRec& t = trap_ring[trap_ring_i % 16];
+            t.pc = ctx.pc; t.ch = ch; t.value = value;
+            t.r3 = ctx.gpr[3].u32[3]; t.r4 = ctx.gpr[4].u32[3]; t.r0 = ctx.gpr[0].u32[3];
+            trap_ring_i++;
+            static std::atomic<int> n{0};
+            if (n.fetch_add(1) < 12) {
+                LOG_ERROR("spu", "thread 0x%x TRAP pc 0x%05x ch%u <- 0x%08x", id, ctx.pc, ch, value);
+                for (int r = 0; r < 32; r++) {
+                    LOG_ERROR("spu", "    r%-2d = 0x%08x%08x", r,
+                              static_cast<unsigned>(ctx.gpr[r].u32[0]), static_cast<unsigned>(ctx.gpr[r].u32[3]));
+                }
+            }
+        }
+    }
     switch (ch) {
     case 14: ctx.srr0 = value & 0x3FFFC; return;
-    case 16: mfc_lsa = value; return;
-    case 17: return;
-    case 18: mfc_eal = value; return;
-    case 19: mfc_size = value > 0xFFFF ? 0xFFFF : value; return;
+    case 16: mfc_lsa = value; mfc_hist_note(ch, value, ctx.pc); return;
+    case 17: mfc_hist_note(ch, value, ctx.pc); return;
+    case 18: mfc_eal = value; mfc_hist_note(ch, value, ctx.pc); return;
+    case 19: mfc_size = value > 0xFFFF ? 0xFFFF : value; mfc_hist_note(ch, value, ctx.pc); return;
     case 20: mfc_tag = value & 0x1F; return;
     case 21: process_mfc(value & 0xFF); return;
     case 22: tag.write_mask(value); return;
@@ -532,21 +558,28 @@ void SpuThread::write_channel(uint32_t ch, uint32_t value) {
     case 19: mfc_size = value > 0xFFFF ? 0xFFFF : value; return;
     case 20: mfc_tag = value & 0x1F; return;
     case 21:
+        mfc_hist_note(ch, value, ctx.pc);
         lk.unlock();
         process_mfc(value & 0xFF);
         return;
     case 22: tag.write_mask(value); return;
     case 23: tag.write_update(value); return;
     case 26: {
-        uint32_t tagid = value & 0x1F;
-        auto st = stalled[tagid];
-        if (!st.active) return;
-        stalled[tagid].active = false;
+        /* MFC_WrListStallAck, SPUThread.cpp:5463: clear the tag's stall status
+         * and resume the walk from the stored cursor. The command keeps its
+         * mfc_queue entry across the resume -- only the stall bit goes away. */
+        const uint32_t tagid = value & 0x1F;
+        uint32_t cmd = 0;
+        spu::ListCursor cursor;
+        static const bool ltr = std::getenv("PS3BASE_SPU_LIST_TRACE") != nullptr;
+        const bool had = lists.take(tagid, cmd, cursor);
+        if (ltr) LOG_INFO("spulist", "ACK tag %u stalled=%d list 0x%05x remaining 0x%x", tagid, had ? 1 : 0, cursor.list, cursor.remaining);
+        if (!had) return;
         lk.unlock();
-        const bool done = run_list(tagid, st.cmd, st.lsa, st.list, st.remaining);
+        const bool done = run_list(tagid, cmd, cursor.lsa, cursor.list, cursor.remaining);
         if (done) {
             std::lock_guard lk2(m);
-            if (mfc_queue) mfc_queue--;
+            lists.complete(tagid);
             tag.fence &= ~(1u << tagid);
             tag.command_completed();
             cv.notify_all(); wake_rsv_waiter();
@@ -1019,6 +1052,17 @@ static bool dma_in_range(uint32_t ea, uint32_t size)
     return ea + size > range.first && ea < range.second;
 }
 
+void SpuThread::mfc_hist_note(uint32_t ch, uint32_t value, uint32_t pc) {
+    /* PS3BASE_SPU_MFC_HIST=1: the last few writes to the MFC parameter channels.
+     * When a DMA arrives with a nonsense external address the question is
+     * always "who wrote that EAL", and the answer is one of these. */
+    static const bool on = std::getenv("PS3BASE_SPU_MFC_HIST") != nullptr;
+    if (!on) return;
+    auto& h = mfc_hist[mfc_hist_i % 8];
+    h.ch = ch; h.value = value; h.pc = pc;
+    mfc_hist_i++;
+}
+
 void SpuThread::dma(uint32_t cmd, uint32_t lsa, uint32_t ea, uint32_t size) {
     if (!size) return;
     if (dma_in_range(ea, size)) {
@@ -1037,10 +1081,78 @@ void SpuThread::dma(uint32_t cmd, uint32_t lsa, uint32_t ea, uint32_t size) {
     bool put = (cmd & 0xF0) == 0x20 || (cmd & 0xF0) == 0x30 || (cmd & 0xF0) == 0xA0;
     if (put && edge::gpu::g_active && edge::gpu::on_put(ls, lsa, ea, size)) return;
     if (dma_watched(ea, size)) log_watched_dma(put ? "PUT" : "GET", cmd, ea, lsa, size, put ? ls + lsa : nullptr);
+    /* PS3BASE_SPU_LS_WATCH=<hex>[,<hex>...]: log every transfer whose LS
+     * destination overlays a watched local address. The question "who fills
+     * this LS table entry" is not answerable from the EA watch, because the
+     * writer may be a PUT whose LSA lands here from any thread. */
+    {
+        static const std::vector<std::pair<uint32_t,uint32_t>> ls_watch = [] {
+            std::vector<std::pair<uint32_t,uint32_t>> v;
+            if (const char* e = std::getenv("PS3BASE_SPU_LS_WATCH")) {
+                std::string list = e; size_t pos = 0;
+                while (pos < list.size()) {
+                    size_t end = list.find(',', pos);
+                    if (end == std::string::npos) end = list.size();
+                    v.push_back({static_cast<uint32_t>(std::strtoul(list.substr(pos, end - pos).c_str(), nullptr, 16)), 1});
+                    pos = end + 1;
+                }
+            }
+            return v;
+        }();
+        if (!ls_watch.empty()) {
+            const uint32_t dlsa = lsa & 0x3FFFFu;
+            for (auto& w : ls_watch) {
+                if (dlsa < w.first + 16 && dlsa + size > w.first) {
+                    static std::atomic<int> lw{0};
+                    if (lw.fetch_add(1) < 40)
+                        LOG_ERROR("spu", "thread 0x%x pc 0x%05x %s cmd 0x%02x ea 0x%08x -> lsa 0x%05x size 0x%x overlays 0x%05x",
+                                  id, ctx.pc, put ? "PUT" : "GET", cmd, ea, dlsa, size, w.first);
+                }
+            }
+        }
+    }
     if (ea < 0xF0000000u && (ea < 0x10000 || !vm::is_mapped(ea) || !vm::is_mapped(ea + size - 1))) {
         static std::atomic<int> reported{0};
         if (reported.fetch_add(1) < 20) {
             LOG_ERROR("spu", "thread 0x%x '%s' DMA %s cmd 0x%02x unmapped ea 0x%08x size 0x%x lsa 0x%05x pc 0x%05x", id, name.c_str(), put ? "PUT" : "GET", cmd, ea, size, lsa, ctx.pc);
+            {
+                /* PS3BASE_SPU_FAULT_LS=1: dump local storage at a refused DMA.
+                 * The issuing code is in LS, so this is the only way to name it
+                 * without a symbol table. */
+                static const bool dump = std::getenv("PS3BASE_SPU_FAULT_LS") != nullptr;
+                if (dump && reported.load() <= 2) {
+                    char fn[64];
+                    std::snprintf(fn, sizeof fn, "spu_unmapped_%08x.ls", id);
+                    if (FILE* f = std::fopen(fn, "wb")) {
+                        std::fwrite(ls, 1, LS_SIZE, f);
+                        std::fclose(f);
+                    }
+                }
+            }
+            /* The table entry the caller read is a COPY of guest memory: the
+             * GET at pc 0x076c4 fills LS 0x36200..0x36290 from EA 0x0177cc00.
+             * So the value at fault is whatever the guest holds at 0x0177cc60. */
+            if (vm::is_mapped(0x0177cc00u)) {
+                LOG_ERROR("spu", "  guest 0x0177cc00: %08x %08x %08x %08x  %08x %08x %08x %08x",
+                          vm::read32(0x0177cc00u), vm::read32(0x0177cc04u), vm::read32(0x0177cc08u), vm::read32(0x0177cc0cu),
+                          vm::read32(0x0177cc10u), vm::read32(0x0177cc14u), vm::read32(0x0177cc18u), vm::read32(0x0177cc1cu));
+                LOG_ERROR("spu", "  guest 0x0177cc60: %08x %08x %08x %08x",
+                          vm::read32(0x0177cc60u), vm::read32(0x0177cc64u), vm::read32(0x0177cc68u), vm::read32(0x0177cc6cu));
+                LOG_ERROR("spu", "  ls  0x36260:   %08x %08x %08x %08x",
+                          __builtin_bswap32(*reinterpret_cast<uint32_t*>(ls + 0x36260)),
+                          __builtin_bswap32(*reinterpret_cast<uint32_t*>(ls + 0x36264)),
+                          __builtin_bswap32(*reinterpret_cast<uint32_t*>(ls + 0x36268)),
+                          __builtin_bswap32(*reinterpret_cast<uint32_t*>(ls + 0x3626c)));
+            }
+            for (uint32_t k = 0; k < 16 && k < trap_ring_i; k++) {
+                const TrapRec& t = trap_ring[(trap_ring_i - 1 - k) % 16];
+                LOG_ERROR("spu", "  pc 0x%05x ch%u <- 0x%08x r3 0x%05x r4 0x%08x r0 0x%05x",
+                          t.pc, t.ch, t.value, t.r3, t.r4, t.r0);
+            }
+            for (uint32_t k = 0; k < 8 && k < mfc_hist_i; k++) {
+                const auto& h = mfc_hist[(mfc_hist_i - 1 - k) % 8];
+                LOG_ERROR("spu", "  -%u: ch%u <- 0x%08x at pc 0x%05x", k + 1, h.ch, h.value, h.pc);
+            }
         }
         /* A refused GET currently zero-fills its destination. That can overwrite
          * an SPU instruction the thread is about to execute: the all-zero word
@@ -1144,33 +1256,65 @@ void SpuThread::dma(uint32_t cmd, uint32_t lsa, uint32_t ea, uint32_t size) {
 }
 
 bool SpuThread::run_list(uint32_t tag, uint32_t cmd, uint32_t lsa, uint32_t list, uint32_t size) {
-    uint32_t base_cmd = cmd & ~0xFu;
-    uint32_t cur = lsa & 0x3FFF0;
-    list &= 0x3FFF8;
-    while (size >= 8) {
-        uint8_t* e = ls + list;
-        bool stall = (e[0] & 0x80) != 0;
-        uint32_t tsize = ((uint32_t(e[2]) << 8) | e[3]) & 0x7FFF;
-        uint32_t ea;
-        std::memcpy(&ea, e + 4, 4);
-        ea = __builtin_bswap32(ea);
-        dma(base_cmd, cur | (ea & 0xF), ea, tsize);
-        cur = (cur + ((tsize + 15) & ~15u)) & 0x3FFF0;
-        list = (list + 8) & 0x3FFF8;
-        size -= 8;
-        if (stall && size >= 8) {
+    /* The walker is spu/dma_list.h, which the unit test drives directly, so a
+     * defect cannot be fixed here and left in the test's copy or vice versa. */
+    const uint32_t base_cmd = cmd & ~0xFu;
+    /* RPCS3 refuses a list command whose size exceeds 0x4000 (SPUThread.cpp:5041,
+     * "if (ch_mfc_cmd.size <= 0x4000)" -- anything larger falls through to its
+     * unknown-command throw). 0x4000 bytes is the 2048-element maximum. Walking
+     * past it reads local storage the guest never meant as a list. */
+    if (size > 0x4000) {
+        static std::atomic<int> big_list{0};
+        if (big_list.fetch_add(1) < 8)
+            LOG_ERROR("spu", "thread 0x%x list cmd 0x%02x size 0x%x exceeds the 2048-element maximum; refused (RPCS3:5041)",
+                      id, cmd, size);
+        return true;
+    }
+    spu::ListCursor c = spu::list_start(lsa, list, size);
+
+    static const bool ltrace = std::getenv("PS3BASE_SPU_LIST_TRACE") != nullptr;
+    static std::atomic<uint64_t> list_n{0};
+    const uint64_t list_id = ltrace ? list_n.fetch_add(1) : 0;
+    if (ltrace) LOG_INFO("spulist", "#%llu ENTER thread 0x%x cmd 0x%02x tag %u lsa 0x%05x list 0x%05x size 0x%x",
+                         (unsigned long long)list_id, id, cmd, tag, lsa, c.list, size);
+    uint32_t elem_i = 0;
+
+    spu::ListElement e;
+    while (spu::list_next(ls, c, e)) {
+        const uint32_t tlsa = spu::list_transfer_lsa(c, e);
+        if (ltrace) LOG_INFO("spulist", "#%llu[%u] @0x%05x notify=%d size=0x%x eal=0x%08x -> lsa 0x%05x",
+                             (unsigned long long)list_id, elem_i, c.list - 8u, e.notify ? 1 : 0, e.size, e.eal, tlsa);
+        elem_i++;
+        if (e.size > 0x4000) {
+            /* 16 KB is the MFC's largest single transfer. An element may encode
+             * more, which RPCS3 hands to its DMA layer; dropping it silently
+             * would make the list look shorter than the guest issued, so it is
+             * reported and the destination left untouched. */
+            static std::atomic<int> big{0};
+            if (big.fetch_add(1) < 8)
+                LOG_ERROR("spu", "thread 0x%x list element %u size 0x%x exceeds 16KB (eal 0x%08x lsa 0x%05x)",
+                          id, elem_i - 1, e.size, e.eal, tlsa);
+        } else {
+            dma(base_cmd, tlsa, e.eal, e.size);
+        }
+        c.lsa = spu::list_advance_lsa(c.lsa, e.size);
+        if (spu::list_should_stall(e, c)) {
             /* The command is NOT complete: RPCS3 leaves it in mfc_queue with the
-             * stall bit set (SPUThread.cpp:3465-3480), which is what makes
+             * stall bit set (SPUThread.cpp:3460-3478), which is what makes
              * get_mfc_completed() clear that tag until MFC_WrListStallAck
-             * finishes the list. Reporting the tag as completed here tells the
-             * guest its transfer landed while half the elements are still
-             * pending, and a deferred MFC_TAG_UPDATE_ALL then resolves early. */
+             * resumes the walk from this cursor (SPUThread.cpp:5463). Reporting
+             * the tag as completed here tells the guest its transfer landed
+             * while half the elements are still pending.
+             *
+             * The queue entry is the command's for its whole life: a list that
+             * stalls three times occupies ONE slot, not three. */
+            if (ltrace) LOG_INFO("spulist", "#%llu STALL after element %u, next 0x%05x, %u byte(s) left, tag %u",
+                                 (unsigned long long)list_id, elem_i, c.list, c.remaining, tag);
             std::lock_guard lk(m);
-            stalled[tag] = {true, cmd, cur, list, size};
-            mfc_queue++;
+            lists.stall(tag, cmd, c);
             this->tag.fence |= 1u << tag;
             set_events(EV_SN);
-            stall_stat |= 1u << tag;
+            stall_stat |= spu::list_stall_bit(tag);
             stall_stat_count = true;
             cv.notify_all(); wake_rsv_waiter();
             return false;
@@ -1415,8 +1559,7 @@ void SpuThread::start() {
     ctx.interrupts_enabled = image_entry & 1;
     tag = TagState{};
     stall_stat = atomic_stat = 0;
-    mfc_queue = 0;
-    for (auto& s : stalled) s.active = false;
+    lists.reset();
     stall_stat_count = atomic_stat_count = false;
     out_mbox_full = out_intr_full = false;
     events = event_mask = 0;

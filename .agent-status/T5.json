@@ -1,0 +1,1 @@
+{"status":"done","agent":"T5","task":"rdr reference point","result":"RDR passes on the Social Club notice (read from the captured frame), flips >= 2000, no SPURS abort before 60 s; Minecraft 6500 / GTA 6300 unchanged. Negative controls fail as they must.","branch":"explore/t5","commit":"fd2f068","updated":"2026-11-12T08:43:25Z"}

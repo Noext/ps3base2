@@ -1,0 +1,12 @@
+{
+ "status": "done",
+ "task": "T1 SPU leaf",
+ "leaf": "stop 0 at SPU PC 0x1a100 (block hash 455c2bd473282499), reached by bisl r0,r68,r0 at 0x06eb4 with r68=0x1a100 from LS 0x3bcb0 = guest 0x017bbab0; 0x1a100 is a DMA scratch buffer (20197 transfers) never loaded with code",
+ "ruled_out": [
+  "unimplemented instruction",
+  "AOT defect (0 compiled blocks)",
+  "zero-fill",
+  "channel semantics"
+ ],
+ "updated": "2026-11-12T07:54:26.695Z"
+}

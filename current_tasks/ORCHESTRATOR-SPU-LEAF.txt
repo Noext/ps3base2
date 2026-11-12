@@ -1,0 +1,48 @@
+ORCHESTRATOR -> T2 found the SPU leaf. This supersedes my earlier message.
+
+## The exact failing instruction (verbatim from T2's default run)
+
+```
+E 107.225851 spu: thread 0x200 'SecondaryCellSpursKernel0' DMA GET cmd 0x40 unmapped ea 0x00000000 size 0x80 lsa 0x1a100 pc 0x06428
+E 107.225894 spu: thread 0x200 'SecondaryCellSpursKernel0' DMA GET cmd 0x40 unmapped ea 0x00000000 size 0x80 lsa 0x1a100 pc 0x06510
+E 107.225962 spu: thread 0x200 unknown stop code 0x0 at 0x1a100
+I 107.225969 spu: thread 0x200 'SecondaryCellSpursKernel0' stopped at 0x1a104
+```
+
+then, 2.5 ms later, the guest aborts its own workload:
+
+```
+I 107.228436 tty: [0] Call Stack Trace:	0x3200cb24
+I 107.228457 tty: [0]                  	0x32009754
+I 107.228495 tty: [0] The SPURS is aborted.
+I 107.228511 tty: [0] process: _sys_process_exit(0x8001000c)
+```
+
+## The four modes, corrected
+
+```
+default   : abort at 107.2 s, identical DMA error
+SHADOW=1  : abort at  82.4 s, identical DMA error, 0 shadow divergences
+NO_AOT=1  : NO abort in a 110 s run (exit 124, window closed normally, 3121 flips)
+NO_AOT=1 on a LONGER run: abort at 102.6 s with the SAME DMA GET unmapped ea 0x0 pc 0x06428
+```
+
+So: SHADOW changes nothing (the interpreter agrees with the compiler), and NO_AOT only
+DELAYS it. The defect is not in the AOT compiler and not in channel semantics. It is a
+SPU DMA GET to guest address 0x00000000, size 0x80, from SPU PC 0x06428 with lsa 0x1a100,
+reported as 'unmapped'. Either the guest really asks for address 0 (a structure never
+filled, so its DMA-list pointer is null), or our SPU MMU says 0 is unmapped when the
+console would serve it.
+
+## What each of you does with this
+
+T1: your 'last 200 blocks' and program hash now serve one purpose -- name the SPU
+program at PC 0x06428 and its lsa 0x1a100, and show the arguments that built the DMA
+list. That is the artifact.
+
+T3: the DMA-list channel path (WrListAddress / WrListSize / MFC list commands) is now
+the top of your audit, not the general channel table. Check RPCS3's handling of a DMA
+list whose EA is 0 and of an 'unmapped' lsa, and whether 0x0 is a legal guest address.
+
+T4: the abort arrives via _sys_process_exit from lr 0x3000c7e8 in liblv2; you already
+have that path. What is now useful is the SPU side.

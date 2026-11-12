@@ -1,0 +1,5 @@
+{
+ "status": "done",
+ "commit": "9fa4d811b4d94ddf614daa64b0bcf8050bb501f8",
+ "summary": "SPURS decompression task inflateServer_psn_final.task.elf: 7 launches all CELL_OK, and its DMA helper writes 19.5MB into RSX local memory 0xC0000000+, not only the S3 buffer; zero SPU PUTs touch the crash-dump addresses"
+}

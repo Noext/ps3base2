@@ -1,0 +1,54 @@
+{
+ "status": "done",
+ "branch": "explore/t2",
+ "worktree": "/root/Dev/wt-T2",
+ "results": "/root/Dev/wt-T2/RESULTS.md",
+ "commit": "47fee2d",
+ "summary": "RUNTIME SEMANTICS, not a compiler bug. Four-mode replay: default ABORTS (49 flips, 107.23s), SPU_SHADOW=1 ABORTS identically with 0 divergences (39 flips, 82.42s), SPU_NO_AOT=1 ABORTS identically at 102.59s once the window is long enough (the 110s run had only just cleared the 107s abort), SPU_STRICT=1 dies at 0.319s on lsa 0x818 (the SPURS kernel entry). There is nothing compiled to blame: out-rdr/spu/spu_registry.cpp is 'count=0; return nullptr;' and the linked symbol disassembles to movq $0x0,(%rdi); xor; ret, so aot::index().active is false in every mode. The named block: on SecondaryCellSpursKernel0, two MFC GETs (cmd 0x40, 128 bytes) from EA 0x00000000 into LSA 0x1a100 at pc 0x06428 and 0x06510; the runtime's unmapped-DMA fallback (thread.cpp:1041) zero-fills the destination over live SPURS kernel code (0x1a100 is rotqbyi r48,r49,8 in the normal path); the zero word decodes as 'stop 0x0'; stop_and_signal(0) has no case and returns false; the group stops with cause 2; libspurs asserts handler.c:198; _sys_process_exit(0x8001000c). Causal proof on the same binary: gating that zero-fill behind GOWA_SPU_DMA_NOZERO=1 removes the abort entirely (runs to 170s, no assertion), control reproduces it at 102.79s.",
+ "evidence": {
+  "default": {
+   "flips": 49,
+   "abort_s": 107.23,
+   "exit": "0x8001000c"
+  },
+  "shadow": {
+   "flips": 39,
+   "abort_s": 82.42,
+   "divergences": 0,
+   "shadow_checks": 0
+  },
+  "noaot_110s": {
+   "abort": false,
+   "note": "window only just cleared the 107s abort"
+  },
+  "noaot_260s": {
+   "flips": 46,
+   "abort_s": 102.59
+  },
+  "strict": {
+   "fails_at_s": 0.319,
+   "lsa": "0x818",
+   "exit": 70
+  },
+  "aot_table": "empty (spu_registry.cpp 16 lines, compiled_blocks disassembles to movq $0x0,(%rdi); xor %eax,%eax; ret)",
+  "named_block": {
+   "lsa": "0x1a100",
+   "pc": [
+    "0x06428",
+    "0x06510"
+   ],
+   "ea": "0x00000000",
+   "cmd": "0x40",
+   "size": 128,
+   "zero_word": "0x00000000 decodes as stop 0x0",
+   "normal_content": "rotqbyi r48,r49,8"
+  },
+  "causal": {
+   "GOWA_SPU_DMA_NOZERO=1": "no abort to 170s",
+   "control_same_binary": "abort at 102.79s"
+  },
+  "shadow_note": "SPU_SHADOW is inert with an empty AOT table: verify_block only runs when a compiled block b exists (thread.cpp:1871), and shadow_checks/shadow_diffs stay 0; the SPU SHADOW end-of-run verdict never prints because the abort exits first. The shadow run therefore proves nothing about compiler/interpreter agreement.",
+  "caveat": "GOWA_SPU_DMA_NOZERO=1 is a diagnostic probe gated by env, added only to establish causality; it is not proposed as the fix."
+ },
+ "logs": "/root/Dev/wt-T2/artefacts-T2/"
+}
