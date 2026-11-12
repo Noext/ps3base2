@@ -171,3 +171,32 @@ The new `reservation_line` is one of the 35. The four reservation tests:
     lock_counter           3 checks, 0 failures
 
 
+## Measurement 8 -- what the 541 -> 1921 actually means: the run survives longer, the frame rate does not change
+
+Read honestly, the flip numbers are a duration difference, not a speed-up:
+
+    baseline  541 flips / 21.88 s = 24.7 flips/s, aborted at 23.5 s
+    fix      1921 flips / 85.98 s = 22.3 flips/s, aborted at 87.0 s
+
+The frame rate is unchanged (slightly lower, 10%, well inside run-to-run noise on
+a machine at load 20 -- the same binary gave 601 flips in 23.8 s on the Vulkan
+presenter). What changed by 3.7x is how long the title runs before libsre aborts
+SPURS: 23.5 s -> 87.0 s. The reservation fix does not make rendering faster; it
+stops the guest losing its own atomic updates, so the taskset that was dying at
+23 s keeps going to 87 s.
+
+That is the correct claim and the one this task supports: the SPURS abort is a
+separate defect (same `_sys_process_exit(0x8001000c)`, same liblv2+0xc7e8), and
+the honest statement is that it arrives later. The strict criterion in
+docs/regress-baseline.md (screen + flips >= 2000 + no abort before 60 s) is
+still not met by this change alone: measured under tools/regress.sh,
+
+    $ DISPLAY_NUM=:951 SECONDS_PER_GAME=140 tools/regress.sh rdr
+    rdr          FAIL  SPURS abort     flips=601    crashes=0   screen=socialclub@13s abort=at 25s
+
+-- the Social Club notice IS read back from the captured frame (screen_hit at
+13 s, /tmp/regress-rdr-shots/hit.png), and the abort is at 25 s in that
+invocation because regress.sh runs the Vulkan presenter (window present), which
+is the other path. This change is not sufficient for RDR PASS on its own.
+
+
