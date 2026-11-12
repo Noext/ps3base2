@@ -220,10 +220,30 @@ rouge RDR n'est donc pas un artefact du binaire reconstruit : c'est l'etat de la
 `da6866a` pour ce titre, et il appartient a la piste SPURS, pas a ce verificateur. Le
 critere 5 tel qu'enonce (« les 3 jeux verts ») est neanmoins **FAUX** et je le declare tel.
 
+Troisieme verification, sur l'autre chemin de presentation. L2 documente que le
+presenter Vulkan et le chemin headless ne sont pas interchangeables et que le chemin
+headless est bien plus favorable a RDR (87 s avant l'abort). Je l'ai donc mesure :
+
+```
+$ cd /root/Dev/ps3base2 && env -u DISPLAY PS3BASE_DISC_DIR=/root/Dev/rdr-port/vfs/dev_bdvd \
+    PS3BASE_LOG=info timeout 110 ./build-rdr/ps3base --no-launcher
+exit=12
+E   0.017020 gpu: SDL window creation failed: No available video device
+I  42.883461 rsx: flip 841 (buffer 0) worst 37.7 ms, >50ms 0, >100ms 0
+I  44.505813 tty: [0] The SPURS is aborted.
+```
+
+Meme sur le chemin headless, l'abort tombe a **44,5 s** sur ce binaire, donc toujours avant
+la barre de 60 s. Les trois essais (Vulkan 23,6 s / binaire independant 33,9 s / headless
+44,5 s) convergent : RDR echoue le critere d'abort quelle que soit la presentation, et
+l'ecart entre les trois est l'ecart de charge machine, pas un changement de cause.
+
 Honnetete sur les deux verts : `minecraft` a tourne sur le binaire que J'AI lie depuis les
 sources de HEAD (`/tmp/ps3base-H`, installe dans `build/ps3base`) ; `gta-sa` a tourne sur
 `build-gta/ps3base` date de 09:32, donc sur un arbre anterieur a `da6866a`. Le vert gta-sa
-est un vert de NON-REGRESSION, pas une preuve d'equivalence avec HEAD.
+est un vert de NON-REGRESSION, pas une preuve d'equivalence avec HEAD. Le critere 5 est
+donc, en toute rigueur, **2 verts sur 3**, et le vert gta-sa porte sur un binaire plus
+ancien que la ligne mesuree.
 
 ---
 
