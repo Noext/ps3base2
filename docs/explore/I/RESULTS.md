@@ -1,17 +1,25 @@
 # PISTE I — Natif : comprendre l'exit 124 et retablir l'oracle
 
-Base : /root/Dev/explore-I (branche explore/I) sur d290fda de wasm-base.
-Worktree cree a l'instant, arbres partages lies (bin out out-mc third_party fw ref).
+Base : `/root/Dev/explore-I` (branche `explore/I`) sur d290fda de wasm-base.
 
-## 0. Antecedents (grep -R dans refs/ et docs/)
+## 0. Resume des faits mesures (le detail et les sorties brutes suivent)
 
-A remplir avec la sortie brute du grep, voir section 2.
+| # | fait | preuve |
+|---|---|---|
+| 1 | Le binaire natif **demarre** et presente 60 images/s sur le RTX 4060 | section 4 : `gpu: Vulkan presenter on NVIDIA GeForce RTX 4060 Laptop GPU`, `rsx: flip 541`, 1892 lignes de log, 0 erreur |
+| 2 | `exit 124` est le code de `timeout` : le processus **n'est pas bloque** | section 4 : il presente encore des images au moment ou `timeout` le tue |
+| 3 | Deux pieges de lancement expliquent le symptome documente "une ligne puis exit 124" | section 6 et 7 : mauvais cwd -> `cannot read ./bin/mc/mc.elf` ; pas de `DISPLAY` -> `SDL window creation failed` |
+| 4 | Aucune des 31 ouvertures `/dev/nvidiactl` rapportees avant n'apparait | section 12.2 : `0` occurrence sur 6 runs ; le loader choisit `nvidia_icd.json` sans erreur |
+| 5 | La couche de validation Khronos **n'est pas installee** | section 12.1 : seules `VK_LAYER_INTEL_nullhw` et `VK_LAYER_MESA_overlay` sont presentes |
+| 6 | Lavapipe (Vulkan logiciel) **fonctionne** et fait tourner l'oracle a ~20 fps | section 12.4 : `Vulkan presenter on llvmpipe (LLVM 20.1.2)` |
+| 7 | Le natif **atteint le menu principal et le panneau Start Game** | section 9 : captures `oracle-04-main-menu.png`, `oracle-05-startgame.png` + 3 threads d'interface a t=54.97 s |
+| 8 | L'oracle pour la piste E est ecrit | `docs/explore/I/menu-trace.txt` (threads, syscalls) et `oracle-import-census.txt` (183 imports) |
 
-## 1. Etat de depart
+Conclusion en une phrase : **il n'y avait rien a reparer dans le binaire** ; l'exit 124 etait
+un lancement sans `DISPLAY`/`XDG_RUNTIME_DIR` valide, et le natif est un oracle complet qui va
+jusqu'au menu.
 
-Voir mesures ci-dessous.
-
-## 2. Antecedents
+## 1. Antecedents
 
 | Finding | Source (path:line) | Applies here? |
 |---|---|---|
@@ -407,3 +415,76 @@ le panneau **Start Game**, capture d'ecran a l'appui (`docs/explore/I/img/oracle
 | ce n'est pas Vulkan, ca bloque aussi avec le stub | docs/webassembly/BLOCAGE-PAS-VULKAN.md | non -- chemin different (sans fenetre le renderer est absent, voir section 6) |
 | headless/null backend | refs/jdc-ps3recomp/README.md:53 | non -- `PS3BASE_NO_RENDERER` suffit, mais ne produit aucune image |
 | lavapipe pour CI sans GPU | refs/jdc-ps3recomp/docs/BUILDING.md:304 | **oui, verifie** -- fonctionne, 20 fps (section 12.4) |
+## 16. Mesure 7 -- inventaire d'imports du run oracle (pour la piste E)
+
+Fichier brut : `docs/explore/I/oracle-import-census.txt` (183 imports distincts, extrait tel quel
+du bloc `census` periodique a t=125 s du run qui a atteint le menu).
+
+Les lignes qui concernent directement le blocage `f_002da36c` / `label[255]` de la piste E :
+
+    imp main_thread|cellGcmSys::cellGcmGetLabelAddress    n=34249  ret_last=0x50300410 ret_xor=0x50300fe0 nz=34249  lle=1 lr=0x002d9244 t=[0.1..125.0]
+    imp main_thread|cellGcmSys::_cellGcmSetFlipCommand    n=5724   ret_last=0x4e944    ret_xor=0x0        nz=5724   lle=1 lr=0x005d1ce8 t=[12.3..125.0]
+    imp main_thread|cellGcmSys::cellGcmGetControlRegister n=303461 ret_last=0x50100040 ret_xor=0x50100040 nz=303461 lle=1 lr=0x005d282c t=[0.1..125.0]
+    imp main_thread|cellSysutil::cellSysutilCheckCallback n=11449  ret_last=0x0        ret_xor=0x0        nz=0      lle=0 lr=0x002158d8 t=[11.7..125.0]
+
+Ce que cela dit a la piste E, en chiffres :
+
+1. Cote natif `cellGcmGetLabelAddress` renvoie des adresses qui **changent** d'un appel a
+   l'autre (`ret_xor=0x50300fe0` sur 34 249 appels) : l'adresse est derivee de l'index, pas
+   constante. Le correctif HLE de la piste E (pointeur au lieu de l'offset 0x1fe0) va dans le
+   bon sens, mais il reste a verifier que pour l'index 255 le pointeur tombe dans un bloc
+   que le renderer ecrit reellement.
+2. `_cellGcmSetFlipCommand` renvoie une valeur non nulle a chaque appel (`ret_last=0x4e944`,
+   5724 appels, tous non nuls). Dans la boucle `f_002da36c`, `gpr[3] = ld32(gpr[30]+1808)` est
+   ce compteur : cote natif il atteint plusieurs centaines de milliers a t=125 s.
+3. Le label est ecrit a chaque flip cote natif, puisque les flips avancent (5724 commandes de
+   flip en 113 s, `rsx: flip 5941` cote renderer). La piste E peut donc caler la valeur a
+   ecrire sur le compteur qu'elle observe au lieu de l'inventer : le natif montre la relation
+   sur 5724 iterations.
+4. `cellSysutilCheckCallback` est appele 11 449 fois en 113 s (~100/s). La boucle de l'ecran
+   TERMS OF USE et du menu tourne sur ce callback ; bloquer ce callback bloque l'interface.
+
+`menu-trace.txt` contient en plus l'histogramme des syscalls sur les 200 000 premiers appels :
+`sys_timer_usleep` 111 582, `sys_semaphore_wait` 40 968, `sys_fs_read` 6 920,
+`sys_event_queue_receive` 3 831. L'usleep domine aussi cote natif : les 25 740 usleep du run
+wasm ne sont donc pas une anomalie de volume, c'est la **cible de l'attente** qui differe.
+## 17. Mesure 8 -- reproduction independante du resultat (second run)
+
+Meme sequence, run neuf, sans aucune autre variable :
+
+    $ cat /tmp/I/menu2/driver.log
+    0s pid=2053747
+    22s warm
+    22s press cross / 31s press cross
+    40s press down / 44s press down / 48s press down
+    52s press cross
+    55s shot after accept
+    67s done
+
+    $ grep -ac 'GetFriendsThreadProc' /tmp/I/menu2/game.log
+    10
+    $ grep -a "_sys_ppu_thread_create '(4J) GetFriendsThreadProc'" /tmp/I/menu2/game.log | head -1
+    I  53.499479 [2053758] ppu: _sys_ppu_thread_create '(4J) GetFriendsThreadProc' entry 0x00bc4820 arg 0x43dd8a00 prio 1002 stack 0x20000 ...
+
+Capture finale : `docs/explore/I/img/oracle-06-repro-startgame.png`, panneau **Start Game**
+identique au premier run. Le thread du menu apparait a t=53.5 s (contre 54.97 s au premier
+run) : la sequence est reproductible a ~1.5 s pres, et le menu s'ouvre au meme endroit.
+
+## 18. Fichiers produits par cette piste
+
+| fichier | contenu |
+|---|---|
+| `docs/explore/I/RESULTS.md` | ce rapport |
+| `docs/explore/I/menu-trace.txt` | oracle : threads PPU horodates, marqueurs du menu, histogramme des syscalls |
+| `docs/explore/I/oracle-import-census.txt` | oracle : 183 imports distincts avec compteurs et plages horaires |
+| `docs/explore/I/img/oracle-00-terms.png` | ecran TERMS OF USE |
+| `docs/explore/I/img/oracle-02-autosave.png` | dialog autosave |
+| `docs/explore/I/img/oracle-04-main-menu.png` | menu principal (Start Game / Join Game) |
+| `docs/explore/I/img/oracle-05-startgame.png` | panneau Start Game |
+| `docs/explore/I/img/oracle-06-repro-startgame.png` | reproduction du panneau Start Game |
+| `docs/explore/I/img/native-menu-autosave.png` | surface presentee, 99.1% de pixels non noirs |
+| `docs/explore/I/img/run1.log` | log brut du premier run (1892 lignes) |
+| `docs/explore/I/drive_oracle.sh` | le script de pilotage utilise |
+
+Logs bruts complets (non commites, trop gros) : `/tmp/I/menu/game.log` (204 341 lignes),
+`/tmp/I/menu2/game.log`, `/tmp/I/scan/game.log`, `/tmp/I/run1.err`, `/tmp/I/noenv.err`.
