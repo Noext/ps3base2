@@ -126,18 +126,22 @@ extern "C" int gowa_stub_45() { return 0; }
  * stopped being true: the file is in the glob. If the SPU edge path ever needs a
  * flag that edge_gpu.cpp does not provide, add a different symbol, not this one. */
 
-/* compiled_blocks() is the AOT table: the SPU blocks compiled to native code for
- * this title. ps3base links none of them (they are produced by a generator that
- * needs the title's own block layout), so the table is empty and the interpreter
- * runs every block instead. aot.cpp already handles n == 0 -- it just leaves the
- * index inactive. */
-#include "spu/aot.h"
-namespace spu {
-const CompiledBlock* compiled_blocks(size_t& count) {
-    count = 0;
-    return nullptr;
-}
-}  // namespace spu
+/* compiled_blocks() is NOT defined here. It used to be, on the same belief that
+ * has broken this file four times: "this title links no generated SPU table, so
+ * a stub is harmless". The stub was a STRONG definition in an object file that
+ * is always linked into ps3base_runtime, so the linker never had an undefined
+ * reference to resolve and never pulled spu_registry.cpp.o out of
+ * libps3base_spu.a. The generated table was silently discarded:
+ *
+ *     RDR, 25899 compiled SPU blocks generated:
+ *     $ strings build-23/ps3base | grep -c 'compiled SPU blocks'
+ *     1                                     # the string is in the binary
+ *     $ grep -c 'compiled SPU blocks' /tmp/U4c.log
+ *     0                                     # and never once logged
+ *
+ * CMakeLists.txt already FAILS the configure when spu_registry.cpp is missing
+ * from the generated SPU directory, so every build has the real definition; the
+ * stub only ever shadowed it. Any target that links ps3base_spu gets the table.
 
 /* edge::gpu::g_active is NOT defined here. Three times it has been added back on
  * the belief that no edge GPU module is linked, and three times it broke the

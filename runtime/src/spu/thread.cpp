@@ -1257,6 +1257,21 @@ void SpuThread::dma(uint32_t cmd, uint32_t lsa, uint32_t ea, uint32_t size, uint
     }
 }
 
+
+/* Ring of the most recent MFC parameter-channel writes.
+ *
+ * When a transfer is refused, the decisive question is what the guest wrote to
+ * channels 16-19 just before it: the LSA, the effective address, the size, the
+ * list bound. The refusal log names a PC, and that PC is usually the instruction
+ * AFTER the wrch that did the damage, so the history is what identifies the
+ * argument. Cheap to record; dumped on refusal.
+ */
+void SpuThread::mfc_hist_note(uint32_t ch, uint32_t value, uint32_t pc) {
+    MfcHist& h = mfc_hist[mfc_hist_i++ & 7u];
+    h.ch = ch;
+    h.value = value;
+    h.pc = pc;
+}
 bool SpuThread::run_list(uint32_t tag, uint32_t cmd, uint32_t lsa, uint32_t list, uint32_t size) {
     uint32_t base_cmd = cmd & ~0xFu;
     uint32_t cur = lsa & 0x3FFF0;
@@ -1284,10 +1299,14 @@ bool SpuThread::run_list(uint32_t tag, uint32_t cmd, uint32_t lsa, uint32_t list
              *
              * The queue entry is the command's for its whole life: a list that
              * stalls three times occupies ONE slot, not three. */
-            if (ltrace) LOG_INFO("spulist", "#%llu STALL after element %u, next 0x%05x, %u byte(s) left, tag %u",
-                                 (unsigned long long)list_id, elem_i, c.list, c.remaining, tag);
             std::lock_guard lk(m);
-            lists.stall(tag, cmd, c);
+            /* The resume state is the cursor itself: where the next element
+             * lives and how much of the list is left. Re-read at ack time. */
+            spu::ListCursor resume;
+            resume.lsa = cur;
+            resume.list = uint32_t(list + (elem_index + 1) * 8);
+            resume.remaining = size;   /* bytes of list still to consume */
+            lists.stall(tag, cmd, resume);
             this->tag.fence |= 1u << tag;
             set_events(EV_SN);
             stall_stat |= spu::list_stall_bit(tag);

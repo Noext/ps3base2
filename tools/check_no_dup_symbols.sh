@@ -8,6 +8,8 @@
 #   edge::gpu::g_active       also defined in spu/edge/edge_gpu.cpp:131
 #   jsedge::spu_idle          also defined in jobsys/edge_consumer.cpp:997
 #   jsedge::enabled/init/...  also defined in jobsys/edge_consumer.cpp:1002+
+#   spu::compiled_blocks     also defined in <generated>/spu/spu_registry.cpp
+#                             (the AOT table; a stub here silently discards it)
 #
 # The root cause is always the same belief -- 'this directory is not linked for
 # this title' -- and it is always false: GOWA_RUNTIME_SOURCES globs
@@ -23,7 +25,7 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 STUBS="$ROOT/runtime/src/gowa_stubs.cpp"
 [ -f "$STUBS" ] || { echo "no $STUBS"; exit 2; }
 
-SYMS='g_active spu_idle on_wait_previous on_set_priorities set_prev_guard ext_stats'
+SYMS='g_active spu_idle on_wait_previous on_set_priorities set_prev_guard ext_stats compiled_blocks'
 
 bad=0
 for sym in $SYMS; do
