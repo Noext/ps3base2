@@ -858,3 +858,54 @@ this task's frame: `gamedata:/rdr2_installed.sdat` is announced as loaded, and
 the reads all come from the decrypted SDAT, which is the NPDRM path working as
 documented. No unimplemented-syscall, ENOSYS or refusal line appears anywhere
 in the run.
+
+## Phase 3 -- the RDR reference point (T5)
+
+### 3.1 RDR passes on the Social Club notice, not on liveness -- GREEN
+
+**Criterion:** tools/regress.sh calls RDR PASS only when the Rockstar Social
+Club legal notice is read back from the captured frame, the flip count is at
+least 2000, and no SPURS abort happens before 60 s. Verified by a run, and by
+two negative controls in which each half is moved and the run fails.
+
+```
+$ cd /root/Dev/wt-T5 && DISPLAY_NUM=:920 SECONDS_PER_GAME=120 tools/regress.sh rdr
+regress: 120s per game on display :920
+rdr          PASS  SPURS abort     flips=2101   crashes=0 screen=socialclub@10s abort=at 76s
+
+regress: all present games passed (0 skipped)
+```
+
+The screen is read from the pixels the title presented, not inferred from a
+counter. The frame the script captured and matched prints, through tesseract:
+
+```
+$ tesseract /tmp/regress-rdr-shots/hit.png -
+Your gameplay information may be displayed on web pages and leaderboards, including those
+located at http:/Avww.rockstargames.com/socialclub
+
+Playing the game may make you eligible to claim some prizes. Check out
+http:/www.rockstargames.com/socialclub/events.
+```
+
+Negative controls, both of which fail as they must:
+
+```
+$ sed -i 's/screen=socialclub/screen=ZZNOTONSCREEN/' docs/regress-baseline.md
+$ tools/regress.sh rdr
+rdr          FAIL  SPURS abort     flips=2341   crashes=0   screen=MISSING abort=at 85s
+
+$ sed -i 's/abort_after=60/abort_after=200/' docs/regress-baseline.md
+$ tools/regress.sh rdr
+rdr          FAIL  SPURS abort     flips=2641   crashes=0   screen=socialclub@14s abort=at 98s
+```
+
+The bar lives in one line of `docs/regress-baseline.md` -- `rdr flips=2000
+screen=socialclub abort_after=60` -- and minecraft 6500 / gta-sa 6300 are
+unchanged and still pass (6721 and 6481 flips measured on an idle machine).
+
+The SPURS side still aborts at 78-97 s with `PS3 SDK INTERNAL ASSERTION
+FAILURE: libspurs ... "handler.c", line 198, spurs_handler_entry` after two
+`SecondaryCellSpursKernel0` DMA GETs of `ea 0x00000000`, which is the next
+milestone, not this one: the criterion records that it happens *after* the
+notice and *after* 60 s, so progress on it is visible as a moved number.
