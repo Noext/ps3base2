@@ -195,3 +195,24 @@ every run. Across the control runs measured today it appears in W-N (7 frames), 
 F-H (0 -- the title's place in the recording is a bright flash), Q-P2 (11), T-T (10),
 POST-P (4). Title lifetime overlaps the abort in every case and never survives it.
 
+
+## Merge-queue checks (post-rebase, on origin/main 123c925)
+
+    $ git fetch /root/Dev/ps3base2 main:refs/remotes/origin/main -f && git rebase origin/main
+    Current branch explore/m5 is up to date.
+    $ git diff --name-status origin/main..HEAD
+    A	.agent-status/M5.json
+    A	RESULTS-M5.md
+    A	docs/evidence/rdr-after-title-exit.png
+    A	docs/evidence/rdr-title-control.png
+    A	docs/evidence/rdr-title-start-held.png
+    $ git diff --diff-filter=D --name-only origin/main..HEAD
+    (empty)                      # the branch deletes no file, shared RESULTS.md untouched
+    $ /root/Dev/ps3base2/tools/build_slot.sh ctest --test-dir build-64 -j 4
+    100% tests passed, 0 tests failed out of 40
+
+One target does not build on this tree and it is not this branch's file: `spu_live`
+fails with `tests/spu_bench/bench.cpp:631: no member named 'stalled' in 'spu::SpuThread'`.
+`git diff --name-only origin/main..HEAD` lists only the five files above, so the failure is
+identical on main; the ps3base target and all 40 tests build and pass.
+
