@@ -201,3 +201,40 @@ After regeneration: gen_syscall_table: 451 syscalls listed, 191 implemented (42.
 
 mmapper_conformance is new and registered as ctest case 34. The other 33 are the
 suite as it stood on main; none of them changed result.
+## Post-rebase proof (the merge queue rule)
+
+Rebased onto origin/main 8b912f1 ("spu: blockwatch, and the chain that zeroes the
+SPU descriptor field") before declaring done:
+
+    $ git fetch /root/Dev/ps3base2 main:refs/remotes/origin/main -f && git rebase origin/main
+    Successfully rebased and updated refs/heads/explore/w2.
+    $ git rev-list --count HEAD..origin/main
+    0
+
+Main had moved from 40a0597 to 8b912f1 in the meantime (codewatch.cpp,
+codewatch.h, ppu_ops.cpp, reservation.cpp, spu/thread.cpp). The branch diff
+contains no deletion of a file this task did not create:
+
+    $ git diff --name-status 40a0597..HEAD | grep '^D'
+    (no output)
+
+Everything rebuilt and rerun on the rebased tree, not on the pre-rebase one:
+
+    $ cmake --build build-31 -j 8 --target ps3base
+    [27/27] Linking CXX executable ps3base
+
+    $ ctest --output-on-failure
+    100% tests passed, 0 tests failed out of 34
+
+    $ ./mmapper_conformance
+    mmapper: 76 checks, 0 failed
+
+    $ ... ps3base --no-launcher       (RDR, 130 s)
+    I   0.472125 mmapper: sys_mmapper_allocate_address r3=0x10000000 r4=0xf0 r5=0x10000000 r6=0xd004fa94 r7=0x0 -> 0x0
+    I   0.472152 mmapper: sys_mmapper_allocate_address r3=0x10000000 r4=0xf0 r5=0x10000000 r6=0xd004fa94 r7=0x0 -> 0x0
+    I   0.472172 mmapper: sys_mmapper_allocate_address r3=0x10000000 r4=0xf0 r5=0x10000000 r6=0xd004fa94 r7=0x0 -> 0x0
+    I  30.699832 rsx: flip 721 (buffer 0) worst 38.7 ms, >50ms 0, >100ms 0
+    I  32.646121 ppu: process exit -2147418100 from thread 0x1000004 lr=0x3000c7e8 liblv2+0xc7e8 (no lifted code)
+
+Same three calls, same arguments, same returns; the title still stops on the
++0x060 SPU descriptor field, which is outside sys_mmapper.
