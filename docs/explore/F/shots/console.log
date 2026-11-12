@@ -1,0 +1,86 @@
+[0.00s] goto http://127.0.0.1:8106/game.html
+[0.02s] domcontentloaded 24 ms
+[0.03s] 'gpu' in navigator === true
+[0.04s] response 200 http://127.0.0.1:8106/game.js len=129492
+[0.06s] response 200 http://127.0.0.1:8106/game.data len=126426695
+[0.07s] response 200 http://127.0.0.1:8106/game.js len=129492
+[0.07s] response 200 http://127.0.0.1:8106/game.js len=129492
+[0.07s] response 200 http://127.0.0.1:8106/game.js len=129492
+[0.07s] response 200 http://127.0.0.1:8106/game.js len=129492
+[0.49s] response 200 http://127.0.0.1:8106/game.wasm len=45415256
+[70.80s] screenshot docs/explore/F/shots/shot-007.png bar="ps3base-wasm: top syscalls: 141(sys_timer_usleep)=390176 0(?)=0 0(?)=0 0(?)=0"
+[0.89s] console.error Failed to load resource: the server responded with a status of 404 (File not found)
+[1.41s] screenshot docs/explore/F/shots/shot-000.png bar="ps3base-wasm: memory backend bitset, region layout compact"
+[10.30s] screenshot docs/explore/F/shots/shot-001.png bar="ps3base-wasm: top syscalls: 141(sys_timer_usleep)=11147 95(_sys_lwmutex_create)=79 481(_sys_prx_start_module)=48 90(sys_"
+[80.87s] screenshot docs/explore/F/shots/shot-008.png bar="ps3base-wasm: top syscalls: 141(sys_timer_usleep)=450615 0(?)=0 0(?)=0 0(?)=0"
+[20.37s] screenshot docs/explore/F/shots/shot-002.png bar="ps3base-wasm: top syscalls: 141(sys_timer_usleep)=49285 0(?)=0 0(?)=0 0(?)=0"
+[90.92s] screenshot docs/explore/F/shots/shot-009.png bar="ps3base-wasm: top syscalls: 141(sys_timer_usleep)=512150 0(?)=0 0(?)=0 0(?)=0"
+[30.43s] screenshot docs/explore/F/shots/shot-003.png bar="ps3base-wasm: top syscalls: 141(sys_timer_usleep)=110361 0(?)=0 0(?)=0 0(?)=0"
+[100.99s] screenshot docs/explore/F/shots/shot-010.png bar="ps3base-wasm: top syscalls: 141(sys_timer_usleep)=573275 0(?)=0 0(?)=0 0(?)=0"
+[40.50s] screenshot docs/explore/F/shots/shot-004.png bar="ps3base-wasm: top syscalls: 141(sys_timer_usleep)=171657 0(?)=0 0(?)=0 0(?)=0"
+[111.05s] screenshot docs/explore/F/shots/shot-011.png bar="ps3base-wasm: top syscalls: 141(sys_timer_usleep)=634353 0(?)=0 0(?)=0 0(?)=0"
+[120.07s] resources [
+ {
+  "name": "http://127.0.0.1:8106/favicon.ico",
+  "transferSize": 635,
+  "encodedBodySize": 335,
+  "decodedBodySize": 335,
+  "durationMs": 4,
+  "startMs": 51,
+  "responseEndMs": 55
+ },
+ {
+  "name": "http://127.0.0.1:8106/worker.js",
+  "transferSize": 2564,
+  "encodedBodySize": 2264,
+  "decodedBodySize": 2264,
+  "durationMs": -13,
+  "startMs": 53,
+  "responseEndMs": 40
+ }
+]
+[120.07s] page state {
+ "heap": {
+  "used": 1024469,
+  "total": 1876545
+ },
+ "bar": "ps3base-wasm: top syscalls: 141(sys_timer_usleep)=696298 0(?)=0 0(?)=0 0(?)=0",
+ "logText": "ps3base-wasm: top syscalls: 141(sys_timer_usleep)=696298 0(?)=0 0(?)=0 0(?)=0\nps3base-wasm: hist yield43=0 usleep141=696298\nps3base-wasm: t=118s pc=0x002da5b4 syscalls=720598 exited=0\nps3base-wasm: guest clock +80045600 ticks/s (100.1% of 80MHz realtime)\nps3base-wasm: top syscalls: 141(sys_timer_usleep)=690049 0(?)=0 0(?)=0 0(?)=0\nps3base-wasm: hist yield43=0 usleep141=690049\nps3base-wasm: t=117s pc=0x002da5b4 syscalls=714349 exited=0\nps3base-wasm: guest clock +80044400 ticks/s (100.1% of 80MHz realtime)\nps3base-wasm: top syscalls: 141(sys_timer_usleep)=683835 0(?)=0 0(?)=0 0(?)=0\nps3base-wasm: hist yield43=0 usleep141=683835\nps3base-wasm: t=116s pc=0x002da5b4 syscalls=708135 exited=0\nps3base-wasm: guest clock +80043200 ticks/s (100.1% of 80MHz realtime)\nps3base-wasm: top syscalls: 141(sys_timer_usleep)=677509 0(?)=0 0(?)=0 0(?)=0\nps3base-wasm: hist yield43=0 usleep141=677509\nps3base-wasm: t=115s pc=0x002da5b4 syscalls=701809 exited=0\nps3base-wasm: guest clock +80046000 ticks/s (100.1% of 80MHz realtime)\nps3base-wasm: top syscalls: 141(sys_timer_usleep)=671380 0(?)=0 0(?)=0 0(?)=0\nps3base-wasm: hist yield43=0 usleep141=671380\nps3base-wasm: t=114s pc=0x002da5b4 syscalls=695680 exited=0\nps3base-wasm: guest clock +80043600 ticks/s (100.1% of 80MHz realtime)\nps3base-wasm: top syscalls: 141(sys_timer_usleep)=665216 0(?)=0 0(?)=0 0(?)=0\nps3base-wasm: hist yield43=0 usleep141=665215\nps3base-wasm: t=113s pc=0x002da5b4 syscalls=689515 exited=0\nps3base-wasm: guest clock +80045200 ticks/s (100.1% of 80MHz realtime)\nps3base-wasm: top syscalls: 141(sys_timer_usleep)=659030 0(?)=0 0(?)=0 0(?)=0\nps3base-wasm: hist yield43=0 usleep141=659030\nps3base-wasm: t=112s pc=0x002da5b4 syscalls=683330 exited=0\nps3base-wasm: guest clock +80046800 ticks/s (100.1% of 80MHz realtime)\nps3base-wasm: top syscalls: 141(sys_timer_usleep)=652852 0(?)=0 0(?)=0 0(?)=0\nps3base-wasm: hist yield43=0 usleep141=652852\nps3base-wasm: t=111s pc=0x002da5b4 syscalls=677152 exited=0\nps3base-wasm: guest clock +80038800 ticks/s (100.0% of 80MHz realtime)\nps3base-wasm: top syscalls: 141(sys_timer_usleep)=646637 0(?)=0 0(?)=0 0(?)=0\nps3base-wasm: hist yield43=0 usleep141=646637\nps3base-wasm: t=110s pc=0x002da5b4 syscalls=670937 exited=0\nps3base-wasm: guest clock +80053200 ticks/s (100.1% of 80MHz realtime)\nps3base-wasm: texmask=0x0 shaders vp=0 fp=0 | fb tris=0 verts=0 hash=5e509dc5 colors=1\nps3base-wasm: top syscalls: 141(sys_timer_usleep)=640468 0(?)=0 0(?)=0 0(?)=0\nps3base-wasm: hist yield43=0 usleep141=640468\nps3base-wasm: t=109s pc=0x002da5b4 syscalls=664768 exited=0\nps3base-wasm: guest clock +80046000 ticks/s (100.1% of 80MHz realtime)\nps3base-wasm: top syscalls: 141(sys_timer_usleep)=634353 0(?)=0 0(?)=0 0(?)=0\nps3base-wasm: hist yield43=0 usleep141=634353\nps3base-wasm: t=108s pc=0x002da5b4 syscalls=658653 exited=0\nps3base-wasm: guest clock +80044800 ticks/s (100.1% of 80MHz realtime)\nps3base-wasm: top syscalls: 141(sys_timer_usleep)=628262 0(?)=0 0(?)=0 0(?)=0\nps3base-wasm: hist yield43=0 usleep141=628262\nps3base-wasm: t=107s pc=0x002da5b4 syscalls=652561 exited=0\nps3base-wasm: guest clock +80044000 ticks/s (100.1% of 80MHz realtime)\nps3base-wasm: top syscalls: 141(sys_timer_usleep)=622105 0(?)=0 0(?)=0 0(?)=0\nps3base-wasm: hist yield43=0 usleep141=622105\nps3base-wasm: t=106s pc=0x002da5b4 syscalls=646405 exited=0\nps3base-wasm: guest clock +80049600 ticks/s (100.1% of 80MHz realtime)\nps3base-wasm: top syscalls: 141(sys_timer_usleep)=615913 0(?)=0 0(?)=0 0(?)=0\nps3base-wasm: hist yield43=0 usleep141=615913\nps3base-wasm: t=105s pc=0x002da5b4 syscalls=640213 exited=0\nps3base-wasm: guest clock +80044800 ticks/s (100.1% of 80MHz realtime)\nps3base-wasm: top syscalls: 141(sys_timer_usleep)=609767 0(?)=0 0(?)=0 0(?)=0\nps3base-wasm: hist yield43=0 usleep141=609767\nps3base-wasm: t=104s pc=0x002da5b4 syscalls=634066 exited=0\nps3base-wasm: guest clock +80043200 ticks/s (100.1% of 80MHz realtime)\nps3base-wasm: top syscalls: 141(sys_timer_usleep)=603601 0(?)=0 0(?)=0 0(?)=0\nps3base-wa"
+}
+[120.25s] closed after 120.25 s, 12 screenshots
+[50.57s] screenshot docs/explore/F/shots/shot-005.png bar="ps3base-wasm: top syscalls: 141(sys_timer_usleep)=233338 0(?)=0 0(?)=0 0(?)=0"
+[60.63s] screenshot docs/explore/F/shots/shot-006.png bar="ps3base-wasm: top syscalls: 141(sys_timer_usleep)=295145 0(?)=0 0(?)=0 0(?)=0"
+[70.70s] screenshot docs/explore/F/shots/shot-007.png bar="ps3base-wasm: top syscalls: 141(sys_timer_usleep)=363000 0(?)=0 0(?)=0 0(?)=0"
+[80.77s] screenshot docs/explore/F/shots/shot-008.png bar="ps3base-wasm: top syscalls: 141(sys_timer_usleep)=423566 0(?)=0 0(?)=0 0(?)=0"
+[90.83s] screenshot docs/explore/F/shots/shot-009.png bar="ps3base-wasm: top syscalls: 141(sys_timer_usleep)=483307 0(?)=0 0(?)=0 0(?)=0"
+[100.90s] screenshot docs/explore/F/shots/shot-010.png bar="ps3base-wasm: top syscalls: 141(sys_timer_usleep)=544148 0(?)=0 0(?)=0 0(?)=0"
+[110.97s] screenshot docs/explore/F/shots/shot-011.png bar="ps3base-wasm: top syscalls: 141(sys_timer_usleep)=602557 0(?)=0 0(?)=0 0(?)=0"
+[120.25s] resources [
+ {
+  "name": "http://127.0.0.1:8106/worker.js",
+  "transferSize": 2564,
+  "encodedBodySize": 2264,
+  "decodedBodySize": 2264,
+  "durationMs": -4,
+  "startMs": 27,
+  "responseEndMs": 23
+ },
+ {
+  "name": "http://127.0.0.1:8106/favicon.ico",
+  "transferSize": 635,
+  "encodedBodySize": 335,
+  "decodedBodySize": 335,
+  "durationMs": 577,
+  "startMs": 93,
+  "responseEndMs": 670
+ }
+]
+[120.26s] page state {
+ "heap": {
+  "used": 2523484,
+  "total": 3303228
+ },
+ "bar": "ps3base-wasm: top syscalls: 141(sys_timer_usleep)=651129 0(?)=0 0(?)=0 0(?)=0",
+ "logText": "ps3base-wasm: top syscalls: 141(sys_timer_usleep)=651129 0(?)=0 0(?)=0 0(?)=0\nps3base-wasm: hist yield43=0 usleep141=651129\nps3base-wasm: t=112s pc=0x002da5b4 syscalls=674889 exited=0\nps3base-wasm: guest clock +80051200 ticks/s (100.1% of 80MHz realtime)\nps3base-wasm: top syscalls: 141(sys_timer_usleep)=646173 0(?)=0 0(?)=0 0(?)=0\nps3base-wasm: hist yield43=0 usleep141=646173\nps3base-wasm: t=111s pc=0x002da5b4 syscalls=669933 exited=0\nps3base-wasm: guest clock +80042000 ticks/s (100.1% of 80MHz realtime)\nI 116.681040 [    5] cellAudio: audio stats: 0 blocks, 1 late wakeups, 0 stale blocks, 0 device underruns\nps3base-wasm: top syscalls: 141(sys_timer_usleep)=640667 0(?)=0 0(?)=0 0(?)=0\nps3base-wasm: hist yield43=0 usleep141=640667\nps3base-wasm: t=110s pc=0x002da5b4 syscalls=664427 exited=0\nps3base-wasm: guest clock +80052000 ticks/s (100.1% of 80MHz realtime)\nps3base-wasm: texmask=0x0 shaders vp=0 fp=0 | fb tris=0 verts=0 hash=5e509dc5 colors=1\nps3base-wasm: top syscalls: 141(sys_timer_usleep)=634796 0(?)=0 0(?)=0 0(?)=0\nps3base-wasm: hist yield43=0 usleep141=634796\nps3base-wasm: t=109s pc=0x002da5b4 syscalls=658555 exited=0\nps3base-wasm: guest clock +80047600 ticks/s (100.1% of 80MHz realtime)\nps3base-wasm: top syscalls: 141(sys_timer_usleep)=629128 0(?)=0 0(?)=0 0(?)=0\nps3base-wasm: hist yield43=0 usleep141=629128\nps3base-wasm: t=108s pc=0x002da5b4 syscalls=652888 exited=0\nps3base-wasm: guest clock +80045600 ticks/s (100.1% of 80MHz realtime)\nps3base-wasm: top syscalls: 141(sys_timer_usleep)=623742 0(?)=0 0(?)=0 0(?)=0\nps3base-wasm: hist yield43=0 usleep141=623742\nps3base-wasm: t=107s pc=0x002da5b4 syscalls=647501 exited=0\nps3base-wasm: guest clock +80049600 ticks/s (100.1% of 80MHz realtime)\nps3base-wasm: top syscalls: 141(sys_timer_usleep)=618439 0(?)=0 0(?)=0 0(?)=0\nps3base-wasm: hist yield43=0 usleep141=618439\nps3base-wasm: t=106s pc=0x002da5b4 syscalls=642199 exited=0\nps3base-wasm: guest clock +80050800 ticks/s (100.1% of 80MHz realtime)\nps3base-wasm: top syscalls: 141(sys_timer_usleep)=613120 0(?)=0 0(?)=0 0(?)=0\nps3base-wasm: hist yield43=0 usleep141=613120\nps3base-wasm: t=105s pc=0x002da5b4 syscalls=636879 exited=0\nps3base-wasm: guest clock +80070000 ticks/s (100.1% of 80MHz realtime)\nps3base-wasm: top syscalls: 141(sys_timer_usleep)=607975 0(?)=0 0(?)=0 0(?)=0\nps3base-wasm: hist yield43=0 usleep141=607975\nps3base-wasm: t=104s pc=0x002da5b4 syscalls=631734 exited=0\nps3base-wasm: guest clock +80150480 ticks/s (100.2% of 80MHz realtime)\nps3base-wasm: top syscalls: 141(sys_timer_usleep)=602557 0(?)=0 0(?)=0 0(?)=0\nps3base-wasm: hist yield43=0 usleep141=602557\nps3base-wasm: t=103s pc=0x002da5b4 syscalls=626316 exited=0\nps3base-wasm: guest clock +80122720 ticks/s (100.2% of 80MHz realtime)\nps3base-wasm: top syscalls: 141(sys_timer_usleep)=597174 0(?)=0 0(?)=0 0(?)=0\nps3base-wasm: hist yield43=0 usleep141=597174\nps3base-wasm: t=102s pc=0x002da5b4 syscalls=620934 exited=0\nps3base-wasm: guest clock +80081600 ticks/s (100.1% of 80MHz realtime)\nps3base-wasm: main menu NOT reached -- menu 0, ui 0\nps3base-wasm: top syscalls: 141(sys_timer_usleep)=591548 0(?)=0 0(?)=0 0(?)=0\nps3base-wasm: hist yield43=0 usleep141=591548\nps3base-wasm: t=101s pc=0x002da5b4 syscalls=615307 exited=0\nps3base-wasm: guest clock +80039600 ticks/s (100.0% of 80MHz realtime)\nps3base-wasm: top syscalls: 141(sys_timer_usleep)=586064 0(?)=0 0(?)=0 0(?)=0\nps3base-wasm: hist yield43=0 usleep141=586064\nps3base-wasm: t=100s pc=0x002da5b4 syscalls=609824 exited=0\nps3base-wasm: guest clock +80053600 ticks/s (100.1% of 80MHz realtime)\nps3base-wasm: texmask=0x0 shaders vp=0 fp=0 | fb tris=0 verts=0 hash=5e509dc5 colors=1\nps3base-wasm: top syscalls: 141(sys_timer_usleep)=580169 0(?)=0 0(?)=0 0(?)=0\nps3base-wasm: hist yield43=0 usleep141=580169\nps3base-wasm: t=99s pc=0x002da5b4 syscalls=603929 exited=0\nps3base-wasm: guest clock +80046800 ticks/s (100.1% of 80MHz realtime)\nps3base-wasm: top syscalls: 141(sys_timer_usleep)=574244 0(?)=0 0(?)=0 0(?)=0\nps3base-wasm: hist yi"
+}
+[120.58s] closed after 120.58 s, 12 screenshots
