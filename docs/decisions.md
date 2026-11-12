@@ -203,3 +203,68 @@ interpreter consumed were reconstructed from the dump's own word lines: the
 byte at the read is 0x95, a real opcode. 0xcd/0xdf sit in other heap objects
 printed in the same dump, at unaligned offsets. Nothing was missing from the
 buffer, so no file read, decrypt or SPURS job was skipped on this path.
+
+## D-011 -- A seed names (image, offset); an address is a fact about one layout
+
+**Context.** Every mechanism that records a guest address -- a discovery seed, a
+static seed, a hand-written landmark -- wrote it as an absolute number. Red Dead's
+liblv2 sat at 0x21000000 during one session and 0x30000000 after layout_for.py
+recomputed the module band from the title's text extent. `seed_is_stale()` can
+only DROP a seed whose address names no image and ask for another run; the file
+it was written to no longer says which function it meant, so the information is
+gone, not delayed.
+
+**Decision.** A seed may be written `<image>+<offset>`, and the lifter resolves
+it at lift time against the base this lift actually gave that image
+(`parse_seed` / `resolve_seeds` in recomp/ppu/codegen.py). The offset is a byte
+offset into that image's own code segment, so it survives any relayout. The
+absolute form still parses, because a discovery run emits it and cannot know the
+image base before the lift runs.
+
+`recomp/landmarks.txt` is committed and read by every lift. A landmark is a seed
+whose purpose is to be READ rather than lifted: it names an address the runtime
+already reaches, and the label beside it is what a report prints. It is a
+property of the firmware MODULE -- all three titles load the same liblv2 and
+libsre -- which is why the file lives beside the other committed facts about the
+firmware and not in a title's output tree. An absolute landmark is refused
+loudly, because a landmark that can go stale has no reason to exist.
+
+**Consequence, measured.** Red Dead's SPURS abort reports
+
+    ppu: process exit -2147418100 from thread 0x1000004 lr=0x3000c7e8 liblv2+0xc7e8 spurs-abort-tail (_sys_panic+0x58)
+
+where before it said `lr=0x3000c7e8 (not lifted)`. Both describe the same byte;
+only one names it. The address is the instruction after `bl 0x3000fad0` at
+0x3000c7e4, so the second report was also WRONG: the function is f_3000c790, and
+it was in the dispatch table at HEAD (out-rdr/ppu/table.cpp:74668). See D-012 for
+why the classification was wrong.
+
+tests/ppu_seed_forms.py pins the two forms, the per-image resolution (the same
+file resolves to 0x3000c7e8 for liblv2 at 0x30000000 and 0x2100c7e8 at
+0x21000000), and the refusal of an absolute landmark.
+
+## D-012 -- "Is there lifted code here" is a span question in a report, an entry question at a call
+
+**Context.** `has_code_at(addr)` is `lookup(addr) != nullptr`, and `lookup` is a
+per-word table built from the FuncEntry list -- keyed by function ENTRY. So it
+answers false for every return address in the guest, which is to say for most
+PCs a report ever shows. Red Dead's process-exit line used that answer as its
+entire verdict, and so printed "(not lifted)" for a PC inside a running, lifted
+function.
+
+**Decision.** The two questions are separated. `has_code_at` keeps its precise
+meaning: an indirect call needs an entry, because that is what can be called.
+Reporting uses a new `span_entry_at(addr)`, backed by a `FunctionSpan` table the
+lifter emits (lo, hi, entry, image per function), and `lv2::describe_address()`
+renders image + landmark + containing function + offset. It replaces the
+entry-only test in the process-exit, thread-exit and unknown-indirect-target
+lines.
+
+**Consequence.** The same abort now reads
+`liblv2+0xc7e8 spurs-abort-tail (_sys_panic+0x58)`; the two "Call Stack Trace"
+frames the title prints resolve to `libsre+0xcb24 spurs-abort-frame0
+(f_3200cab8+0x6c)` and `libsre+0x9754 spurs-abort-frame1 (f_3200930c+0x448)`.
+The lifted code is UNCHANGED -- diff of the generated tree against HEAD is
+table.cpp only, 76793 functions both sides -- because the gap was in the report,
+not in the lift.
+
