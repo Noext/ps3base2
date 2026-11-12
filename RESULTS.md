@@ -106,3 +106,89 @@ No element anywhere in the run has a non-zero size with an eal below 0x10000:
 
     $ python3 - ... # every 'size=0x.. eal=0x..' line, count size>0 and eal<0x10000
     count 0
+
+### M3 -- who wrote the faulting EAL: the fault is a PLAIN GET, not a list
+
+The MFC parameter channels are now recorded (PS3BASE_SPU_MFC_HIST=1): the last
+8 writes to ch16/ch17/ch18/ch19/ch21 with their pc, dumped at a refused DMA.
+
+    env PS3BASE_LOG=info PS3BASE_SPU_MFC_HIST=1 timeout 120 ./build-20/ps3base --no-launcher > /tmp/U1-hist.log
+    $ grep -c 'rsx: flip' /tmp/U1-hist.log
+    55
+
+Raw log, /tmp/U1-hist.log:3157-3175 (verbatim):
+
+    E 116.644196 [2173754] spu: thread 0x200 'SecondaryCellSpursKernel0' DMA GET cmd 0x40 unmapped ea 0x00000000 size 0x80 lsa 0x1a100 pc 0x06428
+    E 116.644328 [2173754] spu:   -1: ch19 <- 0x00000080 at pc 0x06410
+    E 116.644336 [2173754] spu:   -2: ch18 <- 0x00000000 at pc 0x06408
+    E 116.644342 [2173754] spu:   -3: ch16 <- 0x0001a100 at pc 0x06400
+    E 116.644349 [2173754] spu:   -4: ch19 <- 0x00000930 at pc 0x068ec
+    E 116.644356 [2173754] spu:   -5: ch18 <- 0x70c89400 at pc 0x068e8
+    E 116.644362 [2173754] spu:   -6: ch16 <- 0x0003b100 at pc 0x068bc
+    E 116.644368 [2173754] spu:   -7: ch19 <- 0x00000490 at pc 0x068b0
+    E 116.644451 [2173754] spu:   -8: ch18 <- 0x70c6de00 at pc 0x068ac
+    E 116.644462 [2173754] spu: thread 0x200 'SecondaryCellSpursKernel0' DMA GET cmd 0x40 unmapped ea 0x00000000 size 0x80 lsa 0x1a100 pc 0x06510
+    E 116.644468 [2173754] spu:   -1: ch19 <- 0x00000080 at pc 0x06508
+    E 116.644474 [2173754] spu:   -2: ch18 <- 0x00000000 at pc 0x06500
+    E 116.644481 [2173754] spu:   -3: ch16 <- 0x0001a100 at pc 0x064f0
+    E 116.644487 [2173754] spu:   -4: ch19 <- 0x00000080 at pc 0x06410
+    E 116.644493 [2173754] spu:   -5: ch18 <- 0x00000000 at pc 0x06408
+    E 116.644499 [2173754] spu:   -6: ch16 <- 0x0001a100 at pc 0x06400
+    E 116.644505 [2173754] spu:   -7: ch19 <- 0x00000930 at pc 0x068ec
+    E 116.644513 [2173754] spu:   -8: ch18 <- 0x70c89400 at pc 0x068e8
+    E 116.644654 [2173754] spu: thread 0x200 unknown stop code 0x0 at 0x1a100
+
+The command byte is 0x40 -- MFC_GET, a single transfer -- and the channel
+write immediately before it is ch21 <- 0x00000040 at that pc. It is NOT a list
+command (0x44/0x45/0x46), so the list walker is not in this path at all. The
+sequence is fully determined by the guest:
+
+    pc 0x06400  ch16 <- 0x0001a100      # LSA = the scratch buffer
+    pc 0x06408  ch18 <- 0x00000000      # EAL = 0
+    pc 0x06410  ch19 <- 0x00000080      # size = 0x80
+    pc 0x06424  ch21 <- 0x00000040      # GET
+
+Disassembly of the issuing code, from the local-storage dump at the refused DMA
+(spu_unmapped_00000200.ls):
+
+    063f0: 40804006  il r6,0x80
+    063f4: 24ffc0d0  stqd r80,-16(r1)
+    063f8: 40802005  il r5,0x40
+    063fc: 21a00807  wrch ch16,r7
+    06400: 0400018a  ori r10,r3,0
+    06404: 21a00904  wrch ch18,r4
+    06408: 40800004  il r4,0x0
+    0640c: 21a00986  wrch ch19,r6
+    06410: 4020007f  nop r127,r0,r0
+    06414: 24ff4081  stqd r1,-48(r1)
+    06418: 1cf40081  ai r1,r1,-48
+    0641c: 21a00a04  wrch ch20,r4
+    06420: 12000309  hbrr r9,0x6
+    06424: 21a00a85  wrch ch21,r5
+    06428: 33a74d03  lqr r3,0x19e90
+    0642c: 1c200182  ai r2,r3,128
+    06430: 23a74c02  stqr r2,0x19e90
+    06434: 21a00b84  wrch ch23,r4
+    06438: 01e00b89  rchcnt r9,ch23
+    0643c: 7c004488  ceqi r8,r9,1
+
+r4 is the EAL and r7 the LSA: they are the function's ARGUMENTS. The il r4,0x0
+at 0x06408 is r4 reused as the size register for the NEXT command; the EAL is
+whatever the caller passed, and the raw local storage shows r4 = 0 entering the
+function. 0x06428 onward continues into the frame-allocator bump pointer, which
+is why the fault and the bump pointer look related: the routine fetches, then
+bumps.
+
+The bump pointer at the fault, from the same dump:
+
+    LS size 262144
+    0x19e90 (bump ptr) = 0x0001af90
+    0x19e80..0x19ea0: 0x00007fe0 0x00007fe0 0x00007fe0 0x00007fe0 0x0001af90 0x0001abd0 0x19da7bd0 0x0001abd0
+    0x1a100..0x1a140: 0x00000000 ... (all zero)
+    nonzero 128-byte lines: 28
+    first 40 runs: [('0x80','0x880'), ('0xa00','0x19d00'), ('0x19e80','0x19f00'), ('0x1a080','0x1a100'), ('0x1a300','0x1a380'), ('0x1e100','0x1e200'), ('0x1e900','0x1ea80'), ...]
+
+0x1af90 is inside a written region (0x1a300..0x1a380 is non-zero in the dump),
+unlike the 0x23800 in the task text. Local storage in this run has only 28
+non-zero 128-byte lines and 0x1a100, the fault's LSA, is not one of them: the
+destination was zero and stayed zero.
