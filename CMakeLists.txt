@@ -415,6 +415,16 @@ target_compile_options(reservation_increment PRIVATE ${PS3BASE_ARCH_FLAGS})
 target_link_libraries(reservation_increment PRIVATE ${CMAKE_DL_LIBS} pthread)
 add_test(NAME reservation_increment COMMAND reservation_increment)
 
+# A reservation is the 128-byte line, not the 8 bytes lwarx loaded: a write by
+# another agent to any word of the line cancels it, and stwcx. may target any
+# word of the line. The write in the failing case is a plain memcpy into
+# vm::ptr, the shape of the 81 write sites that never reach rsv::.
+add_executable(reservation_line tests/reservation_line.cpp runtime/src/ppu_ops.cpp runtime/src/memory.cpp runtime/src/regions.cpp runtime/src/mem.cpp runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/backtrace_port.cpp runtime/src/host.cpp runtime/src/log.cpp)
+target_include_directories(reservation_line PRIVATE runtime/include "${CMAKE_SOURCE_DIR}/runtime/src")
+target_compile_options(reservation_line PRIVATE ${PS3BASE_ARCH_FLAGS})
+target_link_libraries(reservation_line PRIVATE ${CMAKE_DL_LIBS} pthread)
+add_test(NAME reservation_line COMMAND reservation_line)
+
 add_executable(lwmutex_contention tests/lwmutex_contention.cpp runtime/src/lv2/lwmutex.cpp runtime/src/lv2/object.cpp runtime/src/ppu_ops.cpp runtime/src/memory.cpp runtime/src/regions.cpp runtime/src/mem.cpp runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/backtrace_port.cpp runtime/src/host.cpp runtime/src/log.cpp)
 target_include_directories(lwmutex_contention PRIVATE runtime/include "${CMAKE_SOURCE_DIR}/runtime/src")
 target_compile_options(lwmutex_contention PRIVATE ${PS3BASE_ARCH_FLAGS})
