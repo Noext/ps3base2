@@ -261,3 +261,42 @@ Instructions:
 
 The e/d bits are 18 and 19 of the word (SPUOpcodes.h:15-16), which the
 interpreter already used; the test now pins them.
+### Addendum: the table above is not the only deviation found; the ones NOT fixed
+
+Three more deviations the audit found that are real but do not touch this abort,
+recorded so the next session does not re-derive them:
+
+1. push_snr (thread.cpp:290) raises S1/S2 whenever it overwrites, i.e. also when
+   the channel was already full and the value was replaced. RPCS3 raises the
+   event only when old_count < count (SPUThread.cpp:2025). Raising it on a
+   replacement wakes the guest for a value it already had; not raising it on a
+   replacement loses the ORM bit that the replacement did not merge. Left alone
+   because the SPURS path here never fills both SNR channels: measured 0
+   occurrences of a second push with snr_count already set in 95 s of run.
+
+2. RdMachStat (ch13) returns only the interrupt-enable bit. RPCS3 returns
+   "u32{interrupts_enabled} | (u32{get_type() == spu_type::isolated} << 1)"
+   (SPUThread.cpp:6179). This runtime has no isolated SPUs, so bit 1 is always 0
+   -- which is what the expression yields here too. Correct for this title, and
+   the reason it is written down rather than changed.
+
+3. MFC_EAH (ch17) is stored nowhere. RPCS3 stores it in ch_mfc_cmd.eah and never
+   uses it either, because an effective address is 32-bit (SPUThread.cpp:6485).
+   Matching, not a defect.
+
+### What is left, stated as the next single step
+
+The abort needs the frame allocator at lsa 0x19e90 traced. At the fault its
+value is 0x23800, a region of LS that was never written (0x1f000..0x22fff and
+0x23000..0x28fff are all zero in the dump). The chain that produced it is visible
+in the same dump: [0x19e90]=0x23800, [0x19e94]=0x21c30, [0x19e98]=0x19dabc30,
+[0x19e9c]=0x21c30. Code at 0x06428 loads the first as a pointer, adds 128, stores
+it back, and then issues an MFC list command (ch21 via the wrch at 0x06424) whose
+lsa/eal/size come from the wrch ch18/ch19 at 0x06404/0x0640c. Instrumenting that
+sequence -- not the channel layer -- is what names the caller that failed to
+initialise the region.
+
+Nothing in this audit changes the outcome of the run, and no measurement here is
+a claim otherwise: the channel layer is now conformance-tested and matches RPCS3
+on every channel the SPURS kernel and the libsre policy modules use, and the
+abort reproduces identically three times.
