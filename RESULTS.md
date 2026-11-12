@@ -1511,3 +1511,111 @@ NOT a field of it. Read at the caller's own copy of the structure pointer
 **0x00000000.** Stated without interpretation because none is earned: the address
 lies in the same BSS zero-fill block and nothing in this investigation wrote it.
 
+## The rebase (merge queue rule 1 and 2) and the final numbers
+
+Main advanced 19 commits while this branch ran, so the branch was rebased before
+being declared done:
+
+    $ git fetch /root/Dev/ps3base2 main:refs/remotes/origin/main -f
+      235529f..f364124  main -> origin/main
+    $ git rebase origin/main
+    Auto-merging RESULTS.md
+    CONFLICT (content): Merge conflict in RESULTS.md
+    ...
+
+RESULTS.md is shared and append-only (Y1 had just been fixed for exactly this:
+"RESULTS.md is shared and append-only -- append this branch section instead of
+replacing W2 and W3"). Resolved by KEEPING BOTH the Y1 section that main now has
+and this branch's section, which is what append-only means. Rebased cleanly:
+
+    9fc99de L1 measurement 3: the fix, the test, red-then-green, and the +0x60 field (0)
+    7f44d76 L1 measurement 2: 881 ESRCH (all _sys_lwmutex_lock), 0 EPERM
+    ecd18fc L1 measurement 1: the failing lock passes id 0; control+16 IS written
+    70c679c L1: claim the ghost-lock task
+
+    $ git diff --diff-filter=D --name-only main..HEAD
+    (empty -- this branch deletes no file it did not create)
+    $ git diff --stat main..HEAD
+     .agent-status/L1.json            |   1 +
+     CMakeLists.txt                   |   6 +
+     RESULTS.md                       | 231 +++++++++++++++++++++++++++++
+     current_tasks/L1.claim           |   3 +
+     runtime/include/runtime/kernel.h |   6 +
+     runtime/src/lv2/lwmutex.cpp      | 312 +++++++++++++++++++++++++++++++++++++--
+     runtime/src/lv2/lwsync.h         |  14 ++
+     runtime/src/ppu_runtime.cpp      |   6 +
+     runtime/src/thread.cpp           |   9 ++
+     tests/lwmutex_create.cpp         | 181 +++++++++++++++++++++++
+
+### Everyone's tests, on the REBASED tree
+
+    $ cd build-50 && ctest
+    100% tests passed, 0 tests failed out of 38
+    Total Test time (real) =   5.93 sec
+
+38/38, including the branch's own three:
+
+    19: lwmutex_contention ... Passed  3.86 sec
+    20: lwmutex_create ....... Passed  0.01 sec
+    21: lwmutex_hle .......... Passed  0.41 sec
+
+(`voice` initially reported "Not Run" because a full `-j 8` build stops in
+`spu_bench`, which needs `out-rdr/gen/spu/edge/edge_ovl_gen.h` and
+`renjob_whole_gen.h` -- neither exists in this tree and `build-rdr` on main has
+never built `spu_bench` either. Building `--target voice` directly links it, and
+then 38/38 run. The gap is pre-existing and not touched by this branch.)
+
+### The final numbers, on the rebased binary
+
+With the probes on (`PS3BASE_LWMUX_PROBE=1 PS3BASE_SYSCALL_ERRORS=1`):
+
+    W  32.312804 syserr: at process exit: 881 ESRCH/EPERM answers across 1 (syscall, code) pairs
+    W  32.312811 syserr:   syscall 97 -> 0x80010005 x881
+    W  32.312797 lwprobe: counts at process exit: lock-ESRCH=881 unlock-ESRCH=0
+       trylock-ESRCH=0 unlock2-ESRCH=0 destroy-ESRCH=0 unlock-EPERM=0
+    rsx: flip 721
+    ppu: process exit -2147418100 ... liblv2+0xc7e8
+
+With the probes OFF (the counts still tally; only formatting is gated):
+
+    rsx: flip 661
+    ppu: process exit -2147418100 ... liblv2+0xc7e8
+    0 crash: signal
+
+**661 flips is exactly main's recorded baseline** (`RESULTS.md:155`, W2:
+"baseline /tmp/W2.log flip 661"). This branch does not move the number, which is
+the correct outcome for work that fixed two create() semantics the title never
+exercises and proved the ESRCH is the console's own answer.
+
+### Answer to the four questions, in order
+
+1. **The guest sys_lwmutex_t at 0x165afc8, raw, at the first ESRCH** -- it is BSS
+   zero-fill (PT_LOAD[1] covers file bytes 0x1330000..0x14ec014; 0x165afc8 is past
+   that), and the caller's copy reads:
+
+       lock_var=0000000000000001 attribute=00000000 recursive=00000000
+       sleep_queue=00000000 pad=00000000
+
+   The lock word is HELD (1) by tid 0x1000000 while sleep_queue is 0. That is a
+   mutex taken through the fast path (lwarx/stwcx on +0), never contended, never
+   created.
+
+2. **Was it created by sys_lwmutex_create?** No -- not before those locks. The
+   create for this exact control block is at t=0.667860, 70 ms AFTER the first
+   failing lock at 0.598176, and it mints 0x95022100, which the firmware wrapper
+   then stores into +16 at 0.844 (blockwatch: `WRITE +0x010 prev
+   0x00000000 -> 0x95022100`). control+16 IS written; the brief's premise that it
+   is never written is false.
+
+3. **Against RPCS3** -- two real deviations found and fixed (protocol validation,
+   has_name direction); the id/struct distinction in `_sys_lwmutex_.cpp` is
+   already correct here, because the firmware wrapper is lifted and does the
+   `sleep_queue = *out_id` store itself. That store is not the syscall's job in
+   this runtime and making it the syscall's job would race the wrapper.
+
+4. **Fix + test + counts** -- fixed, tested (red 9 failures / green 0), and the
+   count is **881 ESRCH, 0 EPERM**, every one of them `_sys_lwmutex_lock` given
+   id 0 before the mutex existed. The console returns ESRCH for that too
+   (RPCS3 sys_lwmutex.cpp:191), so driving it to "zero" would mean inventing a
+   mutex the guest does not have. **+0x60 field: 0x00000000.**
+
