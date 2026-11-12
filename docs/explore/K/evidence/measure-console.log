@@ -1,0 +1,38 @@
+[0.34s] goto http://127.0.0.1:8571/game.html
+[0.43s] console.error Failed to load resource: the server responded with a status of 404 (File not found)
+[0.43s] gpu=true
+[1.05s] seam {"audio":{"head":18798368,"tail":18798432,"dropped":18798440,"written":18798448,"samples":18667224,"capacity":16384,"attached":1},"pad":{"words":8496664,"connected":8496672},"padProbe":18480816,"probeBlock":18481216,"heapBytes":268435456}
+[1.06s] entry mask 31 bits 11111 (1 audioInit, 2 portOpen, 4 portStart, 8 padInit, 16 padGetData)
+[2.10s] cellPadInit(4) via HLE -> 0
+[2.11s] cellPadGetData x4, no key -> statuses [0,0,0,0] len=8 words2/3=[0,0]
+[2.31s] KEYDOWN KeyZ -> cellPadGetData statuses [0,0,0,0,0,0]
+[2.31s]            page words [0,0,0,64] connected=1 held=["KeyZ"]
+[2.31s]            GUEST bytes  [0,116,0,64,128,128,128,128] len=8 reads=10 active=6 pageOwns=1
+[2.38s] KEYDOWN Enter too -> GUEST bytes [0,116,8,64,128,128,128,128] (start 0x08 in word 2, cross 0x40 in word 3)
+[2.39s] KEYUP both -> statuses [0,0,0] GUEST bytes [0,116,0,0,128,128,128,128] pageOwns=1
+[2.39s] history of distinct (word2,word3) pairs the guest saw: [[0,64],[0,0],[0,0],[0,0],[0,0],[0,0]]
+[2.39s] cellAudioInit + cellAudioPortOpen(2ch,32blk) + cellAudioPortStart -> port 0
+[2.41s] console.error Failed to load resource: the server responded with a status of 404 (File not found)
+[22.41s] audio per-second samples:
+[22.41s]   t=2020ms ring.written=1536 dropped=0 worklet.frames=0 blocks=0 starved=417 fps=- rms=- queue=640 | audioThread loops=31 mixed=0
+[22.41s]   t=3028ms ring.written=49664 dropped=0 worklet.frames=28800 blocks=225 starved=530 fps=14229.2 rms=0.2476 queue=128 | audioThread loops=220 mixed=189
+[22.41s]   t=4037ms ring.written=98304 dropped=0 worklet.frames=76928 blocks=601 starved=530 fps=25416.7 rms=0.2475 queue=768 | audioThread loops=410 mixed=379
+[22.41s]   t=5063ms ring.written=147456 dropped=0 worklet.frames=125056 blocks=977 starved=530 fps=31036.4 rms=0.2475 queue=256 | audioThread loops=602 mixed=571
+[22.41s]   t=6089ms ring.written=196864 dropped=0 worklet.frames=173056 blocks=1352 starved=530 fps=34409.3 rms=0.2475 queue=640 | audioThread loops=795 mixed=764
+[22.41s]   t=7113ms ring.written=246016 dropped=0 worklet.frames=245248 blocks=1916 starved=530 fps=37538.0 rms=0.2475 queue=768 | audioThread loops=986 mixed=955
+[22.41s]   t=8138ms ring.written=295168 dropped=0 worklet.frames=292864 blocks=2288 starved=530 fps=38917.1 rms=0.2475 queue=384 | audioThread loops=1179 mixed=1148
+[22.41s]   t=9159ms ring.written=344064 dropped=0 worklet.frames=340992 blocks=2664 starved=530 fps=39985.0 rms=0.2475 queue=256 | audioThread loops=1370 mixed=1339
+[22.41s]   t=10175ms ring.written=392960 dropped=0 worklet.frames=388608 blocks=3036 starved=530 fps=40820.2 rms=0.2475 queue=512 | audioThread loops=1561 mixed=1530
+[22.41s]   t=11177ms ring.written=441088 dropped=0 worklet.frames=437120 blocks=3415 starved=530 fps=41509.2 rms=0.2475 queue=512 | audioThread loops=1749 mixed=1718
+[22.41s]   t=12200ms ring.written=489984 dropped=0 worklet.frames=484608 blocks=3786 starved=531 fps=42056.9 rms=0.2475 queue=512 | audioThread loops=1940 mixed=1909
+[22.41s]   t=13225ms ring.written=539392 dropped=0 worklet.frames=533248 blocks=4166 starved=531 fps=42537.3 rms=0.2475 queue=896 | audioThread loops=2133 mixed=2102
+[22.41s]   t=14244ms ring.written=588288 dropped=0 worklet.frames=580864 blocks=4538 starved=531 fps=42937.9 rms=0.2475 queue=640 | audioThread loops=2324 mixed=2293
+[22.41s]   t=15257ms ring.written=636928 dropped=0 worklet.frames=628992 blocks=4914 starved=531 fps=43287.2 rms=0.2475 queue=768 | audioThread loops=2514 mixed=2483
+[22.41s]   t=16269ms ring.written=685312 dropped=0 worklet.frames=676608 blocks=5286 starved=531 fps=43588.4 rms=0.2475 queue=512 | audioThread loops=2703 mixed=2672
+[22.41s]   t=17281ms ring.written=733952 dropped=0 worklet.frames=725120 blocks=5665 starved=531 fps=43858.1 rms=0.2475 queue=640 | audioThread loops=2893 mixed=2862
+[22.41s]   t=18292ms ring.written=782592 dropped=0 worklet.frames=772736 blocks=6037 starved=531 fps=44092.5 rms=0.2475 queue=640 | audioThread loops=3083 mixed=3052
+[22.41s]   t=19300ms ring.written=830976 dropped=0 worklet.frames=820864 blocks=6413 starved=531 fps=44304.0 rms=0.2475 queue=512 | audioThread loops=3272 mixed=3241
+[22.41s]   t=20307ms ring.written=879360 dropped=0 worklet.frames=868480 blocks=6785 starved=531 fps=44491.8 rms=0.2475 queue=768 | audioThread loops=3461 mixed=3430
+[22.41s]   t=21317ms ring.written=927744 dropped=0 worklet.frames=917120 blocks=7165 starved=531 fps=44664.9 rms=0.2475 queue=512 | audioThread loops=3650 mixed=3619
+[22.41s] worklet final {"ready":true,"error":null,"calls":7880,"blocks":7349,"starved":531,"frames":940672,"seconds":21.023999999999997,"framesPerSec":44742.770167427705,"peakQueueFrames":896,"avgQueueFrames":515.346192893401,"rms":0.24749209184485615,"lastValue":0.3247426748275757,"capacity":16384,"written":941568,"dropped":0,"head":7680,"tail":6784,"sampleRate":48000,"currentTime":21.045333333333332}
+[22.41s] ring final {"written":961024,"dropped":0,"head":10752,"tail":10112,"available":640,"padLen":8}

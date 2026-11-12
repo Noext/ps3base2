@@ -1,0 +1,39 @@
+[0.00s] goto http://127.0.0.1:8115/gpu-clear.html
+[0.02s] console.error Failed to load resource: the server responded with a status of 404 (File not found)
+[0.03s] 'gpu' in navigator === true
+[0.35s] console.warning A valid external Instance reference no longer exists.
+[0.55s] console.log WebGPU adapter {"vendor":"nvidia","architecture":"lovelace","format":"rgba8unorm"}
+[0.65s] FIRST GUEST-DRIVEN RENDER frames=1 guestValue=0x20000 adapter={"vendor":"nvidia","architecture":"lovelace","format":"rgba8unorm"}
+[3.26s] READBACK /tmp/G/shotsM/gpu-000.png 1280x720 format=rgba8unorm guestValue=0x2 labelSeq=18 clearValue=(0.02,0.72,0.25,1)
+[3.35s] compositor screenshot saved (expected black canvas: it cannot see GPU/canvas content here)
+[3.45s] console.error Failed to load resource: the server responded with a status of 404 (File not found)
+[3.55s] console.error Failed to load resource: the server responded with a status of 404 (File not found)
+[3.65s] console.error Failed to load resource: the server responded with a status of 404 (File not found)
+[6.27s] READBACK /tmp/G/shotsM/gpu-001.png 1280x720 format=rgba8unorm guestValue=0x1 labelSeq=4 clearValue=(0.02,0.72,0.5,1)
+[9.76s] READBACK /tmp/G/shotsM/gpu-002.png 1280x720 format=rgba8unorm guestValue=0x2 labelSeq=11 clearValue=(0.02,0.72,0.375,1)
+[12.81s] READBACK /tmp/G/shotsM/gpu-003.png 1280x720 format=rgba8unorm guestValue=0x2 labelSeq=11 clearValue=(0.02,0.72,0.375,1)
+[15.70s] READBACK /tmp/G/shotsM/gpu-004.png 1280x720 format=rgba8unorm guestValue=0x2 labelSeq=11 clearValue=(0.02,0.72,0.375,1)
+[18.90s] READBACK /tmp/G/shotsM/gpu-005.png 1280x720 format=rgba8unorm guestValue=0x2 labelSeq=11 clearValue=(0.02,0.72,0.375,1)
+[22.12s] READBACK /tmp/G/shotsM/gpu-006.png 1280x720 format=rgba8unorm guestValue=0x2 labelSeq=11 clearValue=(0.02,0.72,0.375,1)
+[25.33s] READBACK /tmp/G/shotsM/gpu-007.png 1280x720 format=rgba8unorm guestValue=0x2 labelSeq=11 clearValue=(0.02,0.72,0.375,1)
+[28.49s] READBACK /tmp/G/shotsM/gpu-008.png 1280x720 format=rgba8unorm guestValue=0x2 labelSeq=11 clearValue=(0.02,0.72,0.375,1)
+[31.64s] READBACK /tmp/G/shotsM/gpu-009.png 1280x720 format=rgba8unorm guestValue=0x2 labelSeq=11 clearValue=(0.02,0.72,0.375,1)
+[34.90s] READBACK /tmp/G/shotsM/gpu-010.png 1280x720 format=rgba8unorm guestValue=0x2 labelSeq=11 clearValue=(0.02,0.72,0.375,1)
+[38.05s] READBACK /tmp/G/shotsM/gpu-011.png 1280x720 format=rgba8unorm guestValue=0x2 labelSeq=11 clearValue=(0.02,0.72,0.375,1)
+[40.16s] page state {
+ "g": {
+  "frames": 7,
+  "presented": 2253,
+  "lastValue": 65536,
+  "valueChanges": 7,
+  "lastKey": "2:11",
+  "adapter": {
+   "vendor": "nvidia",
+   "architecture": "lovelace",
+   "format": "rgba8unorm"
+  },
+  "firstFrameAt": 547.5
+ },
+ "hud": "WebGPU render pass — loadOp=clear\nclearValue      r=0.020  g=0.720  b=0.000  a=1.000\nguest label[255] 0x10000  @ guest EA 0x1000ff0\nlabel changes   11   (decoder saw the guest write it)\nreason          guest SEMAPHORE_RELEASE packet wrote label[255] = 0x2 (change #11 in the guest stream)\nguest frames    7   presented 290   guest t=1s\nwalker          methods 4990   label change #11\nguest clock     I   2.860945 [    2] gcmfifo: label[255] <- "
+}
+[40.23s] closed after 40.23s, readbacks=12, firstDraw=0.65s

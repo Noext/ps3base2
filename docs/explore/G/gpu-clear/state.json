@@ -1,0 +1,1 @@
+{"ok":true,"t":42,"labelBase":16777216,"label255":2,"labelSeq":11,"labelHist":[2,1,2,1,2,1,2,1,2,1,2],"methods":5003,"lastMethod":7536,"lastArg":131072,"writes":99,"lastLine":"ps3base-wasm: guest clock +80059120 ticks/s (100.1% of 80MHz realtime)"}
