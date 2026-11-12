@@ -1,5 +1,6 @@
 #include "object.h"
 #include <atomic>
+#include <climits>
 #include "runtime/menu_marker.h"
 
 #include <thread>
@@ -16,6 +17,10 @@ LV2_SYSCALL(41, _sys_ppu_thread_exit) {
 }
 
 LV2_SYSCALL(43, sys_ppu_thread_yield) {
+    /* A yield is a preemption, and a preempted child is one the console lets
+     * its creator resume from (refs/rpcs3 .../sys_ppu_thread.cpp:610-611: "A
+     * preempted thread stays ahead of the caller in the scheduler queue"). */
+    guest::open_start_gate(guest::current());
     std::this_thread::yield();
     return CELL_OK;
 }
@@ -29,6 +34,7 @@ LV2_SYSCALL(44, sys_ppu_thread_join) {
     std::unique_lock lk(t->lock);
     if (!t->joinable || t->joined) return CELL_EINVAL;
     t->joined = true;
+    if (!t->exited) guest::open_start_gate(guest::current());
     t->cv.wait(lk, [&] { return t->exited; });
     if (vptr) vm::write64(vptr, t->exit_value);
     lk.unlock();
@@ -112,7 +118,14 @@ LV2_SYSCALL(52, _sys_ppu_thread_create) {
 LV2_SYSCALL(53, sys_ppu_thread_start) {
     auto t = guest::find(u32arg(ctx, 0));
     if (!t) return CELL_ESRCH;
-    guest::start(t);
+    /* The creator is the caller, and its priority decides whether this start
+     * waits: refs/rpcs3/rpcs3/Emu/Cell/lv2/sys_ppu_thread.cpp:578 makes
+     * is_lower_prio = new.is_lower_priority_than(caller), then :608-622 waits
+     * for the new thread to start and stop running when it is the higher one.
+     * The rule lives in runtime/include/runtime/start_gate.h and is behind the
+     * advanced.ppu_start_gate option. */
+    guest::Thread* me = guest::current();
+    guest::start(t, me ? me->prio : INT32_MIN, me ? me->id : 0);
     return CELL_OK;
 }
 

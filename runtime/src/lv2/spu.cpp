@@ -269,6 +269,7 @@ LV2_SYSCALL(177, sys_spu_thread_group_terminate) {
     }
     g->stop_all();
     std::unique_lock lk(g->m);
+    guest::open_start_gate(guest::current());
     g->cv.wait(lk, [&] { return g->running == 0; });
     return CELL_OK;
 }
@@ -281,6 +282,7 @@ LV2_SYSCALL(178, sys_spu_thread_group_join) {
     if (g->state == 0) return CELL_ESTAT;
     if (g->joining) return CELL_EBUSY;
     g->joining = true;
+    guest::open_start_gate(guest::current());
     g->cv.wait(lk, [&] { return g->state == 1 && g->join_state != 0; });
     g->joining = false;
     if (cause) vm::write32(cause, g->join_state);

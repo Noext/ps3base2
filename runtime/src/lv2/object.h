@@ -57,6 +57,14 @@ inline std::string name_u64(uint64_t v) {
 
 template <class Pred>
 bool wait_for(std::unique_lock<std::mutex>& lk, std::condition_variable& cv, uint64_t timeout_us, Pred pred) {
+    /* The start gate (runtime/include/runtime/start_gate.h) opens at the first
+     * point where the calling thread stops running: a creator that started it
+     * is waiting for exactly this. A predicate that is already true never
+     * blocks, so it does not open the gate -- "acquired without waiting" is not
+     * the same event as "blocked", and the difference is what the console's
+     * creator-side rule keys on (refs/rpcs3 .../sys_ppu_thread.cpp:608-622). */
+    if (pred()) return true;
+    guest::open_start_gate(guest::current());
     if (!timeout_us) {
         cv.wait(lk, pred);
         return true;

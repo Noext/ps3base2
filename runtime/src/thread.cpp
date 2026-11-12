@@ -1,5 +1,6 @@
 #include "runtime/placement.h"
 #include "runtime/host.h"
+#include "runtime/start_gate.h"
 #include "runtime/stacks.h"
 #include "runtime/thread.h"
 #include "runtime/kernel.h"
@@ -47,6 +48,8 @@ void body(std::shared_ptr<Thread> t) {
         }
     }
     LOG_INFO("ppu", "thread 0x%x '%s' start entry opd 0x%08x", t->id, t->name.c_str(), t->entry_opd);
+    /* A thread that starts and immediately exits has stopped running too, so a
+     * creator waiting on it is released rather than parked for the whole budget. */
     uint64_t status = 0;
     try {
         call_opd(t->ctx, vm::g_base, t->entry_opd);
@@ -86,6 +89,7 @@ void body(std::shared_ptr<Thread> t) {
         t->exited = true;
         t->exit_value = status;
     }
+    t->gate_open.store(true, std::memory_order_release);
     t->cv.notify_all();
 }
 
@@ -173,12 +177,47 @@ std::shared_ptr<Thread> create(const std::string& name, uint32_t entry_opd, uint
     return t;
 }
 
-void start(const std::shared_ptr<Thread>& t) {
-    std::lock_guard lk(t->lock);
-    if (t->started) return;
-    t->started = true;
-    t->host = std::thread(body, t);
-    t->host.detach();
+void start(const std::shared_ptr<Thread>& t, int32_t creator_prio, uint32_t creator_id) {
+    {
+        std::lock_guard lk(t->lock);
+        if (t->started) return;
+        t->started = true;
+        /* Arm the gate BEFORE the host thread exists, so the child cannot run
+         * its first syscall before the flag it clears is set. The decision is
+         * made here, once, by the creator: whether this child starts ahead of
+         * it (start_gate::takes_precedence). */
+        if (start_gate::enabled() && start_gate::takes_precedence(t->prio, creator_prio)) {
+            t->gate_armed.store(true, std::memory_order_relaxed);
+            t->gate_creator_prio = creator_prio;
+            t->gate_creator_id = creator_id;
+        }
+        t->host = std::thread(body, t);
+        t->host.detach();
+    }
+    if (!t->gate_armed.load(std::memory_order_acquire)) return;
+    /* The console's rule (refs/rpcs3/rpcs3/Emu/Cell/lv2/sys_ppu_thread.cpp:608):
+     * the creator does not return from sys_ppu_thread_start until the child has
+     * started and then stopped running -- blocked or preempted. Bounded by the
+     * same 5000 us budget RPCS3 uses, and the bound is REPORTED: a silent
+     * timeout here would be indistinguishable from "the child blocked at once",
+     * and the two mean different things about the title. */
+    const bool ok = start_gate::wait_until_ready(
+        [&] {
+            if (t->gate_open.load(std::memory_order_acquire)) return true;
+            std::lock_guard lk(t->lock);
+            return t->exited;
+        },
+        start_gate::clock_us, start_gate::budget_us());
+    static std::atomic<uint64_t> gates{0}, timeouts{0};
+    static const bool trace = std::getenv("PS3BASE_PPU_START_GATE_TRACE") != nullptr;
+    const uint64_t n = gates.fetch_add(1) + 1;
+    if (!ok) timeouts.fetch_add(1);
+    if (trace || !ok) {
+        LOG_INFO("ppu", "start gate: '%s' 0x%x prio %d ahead of creator 0x%x prio %d -> %s (%llu gated, %llu timed out)",
+                 t->name.c_str(), t->id, t->prio, creator_id, creator_prio,
+                 ok ? "child reached a blocking point" : "budget exhausted, creator resumed",
+                 static_cast<unsigned long long>(n), static_cast<unsigned long long>(timeouts.load()));
+    }
 }
 
 std::shared_ptr<Thread> spawn_host(const std::string& name, int32_t prio, uint32_t stack_size, uint32_t tls, std::function<void(Thread&)> fn) {

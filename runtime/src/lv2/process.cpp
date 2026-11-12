@@ -143,11 +143,13 @@ LV2_SYSCALL(141, sys_timer_usleep) {
     }
 #endif
     if (min_us && us < uint64_t(min_us)) us = uint64_t(min_us);
+    guest::open_start_gate(guest::current());
     host::sleep_us(static_cast<uint64_t>(us / ppu::time_scale()));
     return CELL_OK;
 }
 
 LV2_SYSCALL(142, sys_timer_sleep) {
+    guest::open_start_gate(guest::current());
     std::this_thread::sleep_for(std::chrono::seconds(u32arg(ctx, 0)));
     return CELL_OK;
 }

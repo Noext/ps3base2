@@ -5,6 +5,7 @@
 #include "runtime/log.h"
 #include "runtime/memory.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <mutex>
@@ -86,11 +87,18 @@ bool load_image(int index) {
             g_process.tls_filesz = static_cast<uint32_t>(filesz);
             g_process.tls_memsz = static_cast<uint32_t>(memsz);
         } else if (type == 0x60000001 && !im.prx) {
-            const uint8_t* pp = &data[off];
-            g_process.sdk_version = be32(pp + 12);
-            g_process.primary_prio = static_cast<int32_t>(be32(pp + 16));
-            g_process.primary_stacksize = be32(pp + 20);
-            g_process.malloc_pagesize = be32(pp + 24);
+            /* The section is a flat big-endian structure, and its layout is
+             * refs/rpcs3/.../PPUModule.cpp:2185-2192, not a guess. Before this
+             * the prio was read at +16 with no magic check and no range check;
+             * the main thread's priority is what the start gate compares every
+             * child against, so a misparse there silently changes scheduling
+             * for the whole title. */
+            ProcParam pp;
+            if (decode_proc_param(&data[off], static_cast<size_t>(std::min<uint64_t>(filesz, data.size() - off)), pp))
+                apply_proc_param(pp, g_process);
+            else
+                LOG_ERROR("loader", "PT_PROC_PARAM at 0x%llx is %llu bytes, too short to read a size from", static_cast<unsigned long long>(vaddr),
+                          static_cast<unsigned long long>(filesz));
         }
     }
     if (!im.prx) g_process.entry_opd = im.entry;

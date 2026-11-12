@@ -452,6 +452,17 @@ target_compile_options(lwmutex_create PRIVATE ${PS3BASE_ARCH_FLAGS})
 target_link_libraries(lwmutex_create PRIVATE ${CMAKE_DL_LIBS} pthread)
 add_test(NAME lwmutex_create COMMAND lwmutex_create)
 
+# start_gate: the console's start rule (a higher-priority child runs until it
+# blocks, bounded) and PT_PROC_PARAM, the only place a title states its main
+# thread's priority. Both are pure functions, so this links no guest memory, no
+# PPU runtime and no VFS -- the same property the other header-driven suites
+# keep, and the reason it can run on a machine with no game.
+add_executable(start_gate tests/start_gate.cpp runtime/src/start_gate.cpp runtime/src/proc_param.cpp runtime/src/log.cpp runtime/src/host.cpp)
+target_include_directories(start_gate PRIVATE runtime/include "${CMAKE_SOURCE_DIR}/runtime/src")
+target_compile_options(start_gate PRIVATE ${PS3BASE_ARCH_FLAGS})
+target_link_libraries(start_gate PRIVATE ${CMAKE_DL_LIBS} pthread)
+add_test(NAME start_gate COMMAND start_gate)
+
 add_executable(lwmutex_hle tests/lwmutex_hle.cpp runtime/src/memory.cpp runtime/src/regions.cpp runtime/src/mem.cpp runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/backtrace_port.cpp runtime/src/host.cpp runtime/src/log.cpp)
 target_include_directories(lwmutex_hle PRIVATE runtime/include "${CMAKE_SOURCE_DIR}/runtime/src" "${CMAKE_SOURCE_DIR}/runtime/src/hle")
 target_compile_options(lwmutex_hle PRIVATE ${PS3BASE_ARCH_FLAGS})
