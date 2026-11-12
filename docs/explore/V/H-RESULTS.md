@@ -282,27 +282,31 @@ parce que ce ne sont pas les memes blocs.
 
 ## 4. Tableau livre
 
-| piste | annonce | rejoue | resultat |
-|---|---|---|---|
-| V/G (branche `explore/gV`, 664fe67) | « les trois criteres G sont FAUX sur e3b25c3 ; retirer PS3BASE_HLE_OVER_LLE ne corrige rien, ca crashe » | oui — criteres 1/2/3 remesures sur 375f0e5 avec un instrument au meme point que le natif | **CONFIRME, et pire** : 0/40 en-tetes identiques (pas seulement differents : le premier mot n'est pas `00040060`), 0 `_gcm_intr_thread`, `flips=0`, et `0x102` **jamais appele** (p102=0) |
-| Z3 (message orchestrateur) | « deux lecteurs, deux blocs : rsx.cpp 0x00e00000, gcm_fifo 0x01100000, le natif 0x50100000 » | oui — les trois adresses sont dans mes logs bruts | **CONFIRME a la ligne** : mes deux adresses sont exactement celles annoncees ; le natif est a 0x50100000 |
-| Z4 (8df4d6b) | « tests/rsx_fifo_synth 12 PASS / 0 FAIL sur HEAD » | oui — test importe tel quel et lance sur h-V | **VERT** : 12 PASS / 0 FAIL, rc=0 |
-| Z0 (297afdc, ee378c2) | « ni 0xFEAC ni 0xE920 dans le flux ; le flip natif n'est pas dans le ring » | oui — `flips=0` avec `methods=76 499 505` consommees | **CONFIRME** : 76 M de methodes, 0 flip dans le ring, des deux cotes |
-| Z1 | « le wasm lit a put=0x1030 la ou le natif a 0x13a0 » | oui | **CONFIRME** : mes hdr40 portent `put 0x00001030` |
-| natif `tools/regress.sh` | — | oui, serialise, depuis le binaire HEAD | **2 VERTS / 1 ROUGE** : minecraft 6481, gta-sa 6001, rdr abort SPURS a 23,6 s |
+| piste | annonce | rejoue | resultat | fusionnee |
+|---|---|---|---|---|
+| V/G (branche `explore/gV`, 664fe67) | « les trois criteres G sont FAUX sur e3b25c3 ; retirer PS3BASE_HLE_OVER_LLE ne corrige rien, ca crashe » | oui — criteres 1/2/3 remesures sur 375f0e5 avec un instrument au meme point que le natif | **CONFIRME, et pire** : 0/40 en-tetes identiques (le premier mot n'est pas `00040060`), 0 `_gcm_intr_thread`, `flips=0`, et `0x102` **jamais appele** (p102=0) | oui — `235529f..bb84906`, ff-only |
+| Z3 (message orchestrateur) | « deux lecteurs, deux blocs : rsx.cpp 0x00e00000, gcm_fifo 0x01100000, le natif 0x50100000 » | oui — les trois adresses sont dans mes logs bruts | **CONFIRME a la ligne** : mes deux adresses sont exactement celles annoncees ; le natif est a 0x50100000 | oui (constat, pas de code) |
+| Z4 (8df4d6b) | « tests/rsx_fifo_synth 12 PASS / 0 FAIL sur HEAD » | oui — test importe tel quel, lance sur h-V avant ET apres rebase | **VERT deux fois** : 12 PASS / 0 FAIL, rc=0, avant et apres le rebase sur origin/main | oui — les 3 fichiers du test sont sur main |
+| Z0 (297afdc, ee378c2) | « ni 0xFEAC ni 0xE920 dans le flux ; le flip natif n'est pas dans le ring » | oui — `flips=0` avec 59 442 207 methodes consommees | **CONFIRME** : 0 flip dans le ring cote wasm (et 0 ligne 0xFEAC cote natif), des deux cotes | oui (constat) |
+| Z1 | « le wasm lit a put=0x1030 la ou le natif a 0x13a0 » | oui | **CONFIRME** : mes hdr40 portent `put 0x00001030` | oui (constat) |
+| natif `tools/regress.sh` | — | oui, serialise, binaire lie depuis les sources de HEAD | **2 VERTS / 1 ROUGE** : minecraft 6481, gta-sa 6001, rdr abort SPURS 23,6 s (33,9 s binaire independant, 44,5 s headless) | oui (mesure, pas de code) |
+| mes instruments (`hdr40`, `p102`) + le test importe | « mesurer au meme point et au meme format que le natif » | oui, sur `explore/hV` rebase | **livre** : 6 fichiers, +945 lignes, 0 suppression | oui — `235529f..bb84906` |
 
 ---
 
 ## 5. Ce que ce travail etablit, et ce qu'il n'etablit pas
 
-Etabli, chiffre, reproductible :
-1. Les quatre criteres wasm (1, 2, 3, et le fait que 0x102 n'est jamais appele) sont
-   **faux** sur 375f0e5, mesures avec un instrument place au meme point que le natif et
-   au meme format.
-2. Le test synthetique est **vert**, donc le decodeur RSX fonctionne : l'echec n'est pas
-   dans le traitement d'un flux, il est dans la **livraison** du flux.
-3. Le natif est vert sur minecraft et gta-sa ; RDR aborte SPURS a 23,6 s, ce qui est un
-   autre chantier et pas une regression de ce commit.
+Etabli, chiffre, reproductible, apres rebase sur origin/main et fusion ff-only
+(235529f..bb84906, 6 fichiers, +945 lignes, 0 suppression) :
+1. Les criteres 1, 2 et 3 sont **faux** sur 375f0e5, mesures avec un instrument place au
+   meme point et au meme format que le natif. 0/40 en-tetes identiques, 0
+   _gcm_intr_thread, flips=0, et 0x102 jamais appele.
+2. Le test synthetique est **vert** (12 PASS / 0 FAIL), avant ET apres le rebase : le
+   decodeur RSX fonctionne, donc l'echec n'est pas dans le traitement d'un flux, il est
+   dans la **livraison** du flux.
+3. Le natif est vert sur minecraft et gta-sa ; RDR aborte SPURS a 23,6 s (presenter
+   Vulkan), 33,9 s (binaire independant), 44,5 s (headless), ce qui est un autre chantier
+   et pas une regression de ce commit.
 
 Non etabli :
 - La cause exacte pour laquelle le bloc de controle alimente par le guest n'est pas celui
