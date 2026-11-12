@@ -259,3 +259,34 @@ lowest measured value.
 
 Minecraft's 6500 and GTA's 6300 are the same two numbers as before the change,
 only spelled flips=6500 and flips=6300 so the script can read them.
+
+### M8 -- the machine's load moves the flip counts, and that is not a regression
+
+While other agents were building and running, the same committed tree was put
+through the full suite. Measured load average, printed either side of the run:
+
+    $ uptime
+     08:36:04 up 2 days, 12:54,  0 user,  load average: 39.11, 27.12, 17.77
+    $ DISPLAY_NUM=:920 SECONDS_PER_GAME=120 tools/regress.sh
+    regress: 120s per game on display :920
+    minecraft    FAIL  alive           flips=3601   crashes=0   log=/tmp/regress-minecraft.log
+    gta-sa       FAIL  alive           flips=5941   crashes=0   log=/tmp/regress-gta-sa.log
+    rdr          PASS  alive           flips=3361   crashes=0 screen=socialclub@14s abort=none
+
+    regress: 2 game(s) REGRESSED
+    exit=1
+     08:42:06 up 2 days, 13:00,  0 user,  load average: 33.72, 28.91, 21.65
+
+All three titles were alive and had zero crashes; what moved is the rate at
+which they present frames, because the host has 32 cores and was running
+several builds and three other titles at once. The same binaries on an idle
+machine measured 6721 (minecraft, floor 6500) and 6481 (gta-sa, floor 6300) and
+passed. Neither floor was changed to accommodate the loaded run: a floor that
+moves with whoever else is building is not a regression test.
+
+Two things about this run are worth keeping. RDR passed it without any of the
+notice-timing slack being exercised -- notice at 14 s, abort=none at all, the
+title still flipping at the budget -- which is the other side of the criterion
+the earlier runs did not show. And the loaded run is the reason the RDR floor
+is 2000 and not 3000: under this load it still measured 3361, so 2000 leaves
+room for the worst machine this suite is ever run on.
