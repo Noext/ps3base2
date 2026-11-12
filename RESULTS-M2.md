@@ -190,3 +190,65 @@ NIDs are absent from out-rdr/ppu/table.cpp:77122-77128 (the seven cellAudio
 imports RDR has). They are implemented anyway -- the same bodies RPCS3 has --
 because gta-sa imports cellAudioAddData (out-gta/ppu/table.cpp) and because a
 registered name that resolves nowhere is a silent CELL_OK.
+
+
+## Measurement 3 -- a second title: gta-sa, two ports, both filled
+
+RDR alone cannot show that the module generalises, and gta-sa is the one title
+here that imports cellAudioAddData. Same worktree, build-gta against
+out-gta/ppu:
+
+    $ PS3BASE_DISC_DIR=/root/Dev/gta-port/disc DISPLAY=:961 PS3BASE_LOG=info \
+      timeout 150 build-gta/ps3base --no-launcher > /tmp/M2-gta2.log 2>&1
+    $ grep -c 'rsx: flip' /tmp/M2-gta2.log
+    26        # the log's 26 flip lines report up to flip 1501 at 34.5 s
+
+    I   0.333458 cellAudio: cellAudioInit: index area 0x100a0000 (0x10000), 8 ports, sdk 0x475001
+    I   0.811255 cellAudio: cellAudioPortOpen: port 0, 2 ch, 16 blocks, attr 0x1000, level 1.000 -> portSize 0x8000 at 0x100b0000, readIndexAddr 0x100a0010 (status 0x1)
+    I   0.811277 cellAudio: cellAudioGetPortConfig(0, 0xd047c360): readIndexAddr 0x100a0010 status 0x1 nChannel 2 nBlock 16 portSize 0x8000 portAddr 0x100b0000
+    I   0.816971 cellAudio: cellAudioPortStart(0) -> 0x0: buffer 0x100b0000 zeroed (32768 bytes), readIndexAddr 0x100a0010
+    I   1.490817 cellAudio: cellAudioPortOpen: port 1, 2 ch, 16 blocks, attr 0x1000, level 1.000 -> portSize 0x8000 at 0x100c0000, readIndexAddr 0x100a0020 (status 0x1)
+    I   1.491204 cellAudio: cellAudioGetPortConfig(1, 0xd05dce80): readIndexAddr 0x100a0020 status 0x2 nChannel 2 nBlock 16 portSize 0x8000 portAddr 0x100c0000
+    I   1.491198 cellAudio: cellAudioPortStart(1) -> 0x0: buffer 0x100c0000 zeroed (32768 bytes), readIndexAddr 0x100a0020
+    I   5.341895 cellAudio: audio stats: 1570 blocks, 0 late wakeups, 322 stale blocks, 0 device underruns, period 937, port0 index 0 after 848 writes: port0 16/16 filled, index 0 port1 0/16 filled, index 2
+    I  10.344240 cellAudio: audio stats: 1876 blocks, 0 late wakeups, 433 stale blocks, 0 device underruns, period 1875, port0 index 10 after 1786 writes: port0 16/16 filled, index 10 port1 0/16 filled, index 12
+    I  15.346595 cellAudio: audio stats: 1876 blocks, 1 late wakeups, 765 stale blocks, 0 device underruns, period 2813, port0 index 4 after 2724 writes: port0 16/16 filled, index 4 port1 0/16 filled, index 6
+    I  16.190208 cellAudio: cellAudioPortClose(0) -> 0x0
+    I  20.348921 cellAudio: audio stats: 1097 blocks, 0 late wakeups, 159 stale blocks, 0 device underruns, period 3751, port0 index 0 after 0 writes: port1 16/16 filled, index 0
+
+Three things that only a second title shows:
+
+  * SDK 0x475001 gives EIGHT ports (cellAudio.cpp:1590) where RDR's 0x300001
+    gives four. Both are read from the process parameter, not assumed.
+  * the two ports get server_index 0 and 1, so readIndexAddr is 0x100a0010
+    and 0x100a0020 -- consecutive slots of the shared area, as the console
+    maps them (:1604, :1609 -- free_indices[7]=8, [6]=7, ... for eight ports).
+  * the guest FILLS both: port 0 is 16/16 blocks non-zero, and after it is
+    closed (16.190208) port 1 is 16/16. That is the difference between 'the
+    index advances' and 'the title is actually producing audio through this
+    module'. RDR's port 1 shows the same (16/16); RDR's port 0 stays 0/8
+    because the SPU multistream mixer writes zeros into it in the first 23 s,
+    measured in 2c and left as the open question rather than smoothed over.
+  * cellAudioPortClose(0) at 16.19 s answers 0 and the port's index writes
+    drop to 0 in the next stats line, which is the mixer honouring the close.
+
+## What is not claimed
+
+RDR's port 0 buffer is 0/8 filled at every sample, and the SPU writes only
+zeros into it (GOWA_TRAP=12190000+0x10000 with GOWA_TRAP_NONZERO=1 reports 0
+writes). That is the SPU multistream mixer producing silence this early in the
+boot; it is not a defect this module can fix from the HLE side and it is not
+being reported as green. Everything the task asked for -- the calls logged,
+the structures exact, the buffer mapped, the read index advancing and read by
+the guest -- is measured above.
+
+## Post-rebase state
+
+    $ git fetch /root/Dev/ps3base2 main:refs/remotes/origin/main -f && git rebase origin/main
+    Current branch explore/m2 is up to date.     # origin/main = 4a5a132
+    $ cd build-61 && ctest -j 4
+    100% tests passed, 0 tests failed out of 40
+    $ tools/check_no_dup_symbols.sh
+    gowa_stubs: no known duplicate definitions
+
+40 tests rather than the 39 at main HEAD: the 40th is `cellAudio`.
