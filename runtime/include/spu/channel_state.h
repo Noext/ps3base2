@@ -185,4 +185,133 @@ inline uint32_t stopd_signal() { return STOPD_SIGNAL; }
  * A constant 16 tells the guest the queue is always empty. */
 inline uint32_t mfc_queue_count(uint32_t queued) { return queued < 16 ? 16 - queued : 0; }
 
+/* ---- DMA error -------------------------------------------------------- */
+
+/* A DMA that the MFC refuses must not touch memory. The old behaviour
+ * zero-filled the local-store destination of a refused GET, which writes 128
+ * bytes the guest never asked for. On Red Dead Redemption it landed in a
+ * scratch buffer that the SPURS kernel was executing through: the all-zero word
+ * decodes as a stop instruction, and the guest aborted its own workload.
+ *
+ * The refusal is decided BEFORE any translation, from the command alone, so
+ * there is no window in which a partly-executed transfer leaves bytes behind.
+ * This is the pure part, unit-tested in tests/spu_channel_conformance.cpp. */
+
+/* Effective addresses at or above this are the SPU thread window and MMIO,
+ * which the runtime maps separately; everything below it is guest memory. */
+constexpr uint32_t DMA_MMIO_BASE = 0xF0000000u;
+
+/* Why a transfer was refused. */
+enum class DmaRefusal : uint32_t {
+    None = 0,
+    /* MFC_EAL/MFC_Size do not describe a transfer: the size reaches past the
+     * end of the 32-bit effective address space. Hardware refuses these
+     * instead of wrapping or splitting them. */
+    Range = 1,
+};
+
+/* Hardware refuses a transfer that runs off the end of the effective address
+ * space rather than truncating it. 0xFFFFFFC0 + 0x80 ends at 0x100000040, and a
+ * 32-bit wrap would have written 0x00000000..0x00000040 -- the address at which
+ * the failing RDR transfer also pointed, for an unrelated reason. A wrap must
+ * not silently become a legal transfer. */
+inline DmaRefusal dma_check_range(uint32_t ea, uint32_t size) {
+    if (!size) return DmaRefusal::None;
+    if (uint64_t(ea) + size > 0x100000000ull) return DmaRefusal::Range;
+    return DmaRefusal::None;
+}
+
+inline const char* dma_refusal_name(DmaRefusal r) {
+    switch (r) {
+    case DmaRefusal::None: return "none";
+    case DmaRefusal::Range: return "range";
+    }
+    return "?";
+}
+
+/* Whether a transfer reads local store (GET) or writes it (PUT), from the
+ * command byte alone. A list command shares the class of its base command. */
+inline bool dma_is_put(uint32_t cmd) {
+    const uint32_t cls = cmd & 0xF0;
+    return cls == 0x20 || cls == 0x30 || cls == 0xA0;
+}
+
+/* ---- SPU thread-group exception event -------------------------------- */
+
+/* The event source a group's exception queue receives.
+ *
+ * This is SYS_SPU_THREAD_GROUP_EVENT_EXCEPTION_KEY 0xFFFFFFFF53505503
+ * (rpcs3/Emu/Cell/lv2/sys_spu.h:43) and it is the SAME value as
+ * SYS_SPU_THREAD_EVENT_EXCEPTION_KEY 0xFFFFFFFF53505503
+ * (rpcs3/Emu/Cell/lv2/sys_event.h:55) -- the two names differ because one is the
+ * dequeue source and the other the connect type, but the guest compares against
+ * the number. cellSpurs' event helper compares exactly this and nothing else
+ * (rpcs3/Emu/Cell/Modules/cellSpurs.cpp:837):
+ *
+ *     if (event_src == SYS_SPU_THREAD_EVENT_EXCEPTION_KEY) {
+ *         spurs->exception = 1;
+ *         events[0].source = event_src;
+ *         events[0].data1 = event_data1;   // stashed, not interpreted
+ *         events[0].data2 = event_data2;
+ *         events[0].data3 = event_data3;
+ *
+ * so the payload below is ours to define as long as the source matches and the
+ * fields are self-describing. RPCS3 itself never sends this event -- its SPU
+ * access-violation path is a TODO and it pauses instead
+ * (Utilities/Thread.cpp:2202-2205) -- so there is no RPCS3 payload to copy, and
+ * inventing a hardware layout from memory is exactly what AGENTS.md forbids. */
+constexpr uint64_t SPU_EXCEPTION_KEY = 0xFFFFFFFF53505503ull;
+
+/* The cause bits, read out of libsre's own exception dump. The payload in
+ * RESULTS.md M4 was recovered by varying each field and reading the guest's
+ * printout back; this table is that measurement written down.
+ *
+ *   source: "cause: DMA alignment error"        <- bit 0
+ *           "cause: DMA command error"          <- bit 1
+ *           "cause: SPU error"                  <- bit 2
+ *           "cause: MFC FIR"                    <- bit 3
+ *           "cause: MFC segment  MFC_DAR: ..."  <- bit 4
+ *           "cause: MFC storage  MFC_DAR: ..."  <- bit 5
+ *           "cause: Stop break"                 <- bit 6
+ *           "cause: Halt"                       <- bit 7
+ *           "cause: Unknown signal  SPU_Status"  <- bit 8
+ *           "cause: MAT  MFC_DAR: ..."          <- bit 9
+ *           "cause: Unknown exception"          <- no bit set
+ *   rpcs3/Emu/Cell/SPUThread.h:121-127 for the class-0 interrupt equivalents. */
+enum : uint32_t {
+    SPU_EXC_DMA_ALIGNMENT = 1u << 0,
+    SPU_EXC_DMA_COMMAND = 1u << 1,
+    SPU_EXC_SPU_ERROR = 1u << 2,
+    SPU_EXC_MFC_FIR = 1u << 3,
+    SPU_EXC_MFC_SEGMENT = 1u << 4,
+    /* A transfer whose effective address names no storage. This is the cause a
+     * refused DMA raises; it is the one that carries an MFC_DAR, which is the
+     * address the handler needs. */
+    SPU_EXC_MFC_STORAGE = 1u << 5,
+    SPU_EXC_STOP_BREAK = 1u << 6,
+    SPU_EXC_HALT = 1u << 7,
+    SPU_EXC_UNKNOWN_SIGNAL = 1u << 8,
+    SPU_EXC_MAT = 1u << 9,
+};
+
+/* The cause a refused transfer raises. A guest address that is inside the
+ * 32-bit space but not mapped names no storage; a transfer that runs off the
+ * end of the space is the same fault from the handler's point of view, and
+ * reporting it as a different bit would need a cause the guest's table does not
+ * have. */
+inline uint32_t dma_exception_cause(DmaRefusal refusal) {
+    (void)refusal;
+    return SPU_EXC_MFC_STORAGE;
+}
+
+/* data1 is the faulting SPU thread id, printed by the guest as 0x%08x.
+ * data2 is NPC in the high word and the cause bits in the low word; the guest
+ * prints NPC as 0x%05x and selects its cause line from the low word.
+ * data3 is MFC_DAR, the effective address, printed by the causes that have one. */
+inline uint64_t spu_exception_data1(uint32_t thread_id) { return thread_id; }
+inline uint64_t spu_exception_data2(uint32_t npc, uint32_t cause) {
+    return (uint64_t(npc & 0x3FFFC) << 32) | uint64_t(cause);
+}
+inline uint64_t spu_exception_data3(uint32_t ea) { return ea; }
+
 }

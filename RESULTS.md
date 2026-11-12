@@ -164,3 +164,47 @@ $ grep -n 'SPU thread:.*NPC' /tmp/U2-probeD.log
 
 The NPC is 0x06428, the same pc this runtime logs for the refused transfer: the
 guest's report and the runtime's report now agree on the instruction.
+### M5 -- the thread stops on the exception, as hardware stops it
+
+Leaving the thread running after it raised the exception was wrong by
+measurement: it reached its next MFC command and faulted a second time, and the
+guest -- which had already handled the first exception -- aborted.
+`GOWA_SPU_EXCPT_PROBE` removed at this point; the payload is the recovered one.
+
+Before (M3 code, no thread stop):
+```
+E 108.362863 spu: thread 0x200 'SecondaryCellSpursKernel0' DMA GET REFUSED cmd 0x40 (unmapped) ea 0x00000000 size 0x80 lsa 0x1a100 pc 0x06428
+E 108.363012 spu: thread 0x200 'SecondaryCellSpursKernel0' raised SPU exception 0xffffffff53505503 on queue 0x8d006100 -> 0x0
+E 108.363024 spu: thread 0x200 'SecondaryCellSpursKernel0' DMA GET REFUSED cmd 0x40 (unmapped) ea 0x00000000 size 0x80 lsa 0x1a100 pc 0x06510
+E 108.363031 spu: thread 0x200 'SecondaryCellSpursKernel0' raised SPU exception 0xffffffff53505503 on queue 0x8d006100 -> 0x0
+E 108.363093 spu: thread 0x200 unknown stop code 0x0 at 0x3a200
+I 108.370703 process: _sys_process_exit(0x8001000c)
+```
+
+After (`ctx.halted = true` after the event is delivered):
+```
+E 129.149052 [2456185] spu: thread 0x200 'SecondaryCellSpursKernel0' DMA GET REFUSED cmd 0x40 (unmapped) ea 0x00000000 size 0x80 lsa 0x1a100 pc 0x06428
+E 129.149133 [2456185] spu: thread 0x200 'SecondaryCellSpursKernel0' raised SPU exception 0xffffffff53505503 on queue 0x8d006100 -> 0x0
+I 129.152658 [2456183] tty: [0] 	SPU thread: 0x00000200  NPC: 0x06428  cause: MFC storage  MFC_DAR: 0x0
+```
+
+One refusal, one exception, and the guest's report names the same PC the runtime
+does: NPC 0x06428 = the `pc 0x06428` in the runtime's line, and the cause is
+`MFC storage` with `MFC_DAR: 0x0` = the faulting effective address.
+
+```
+$ grep -c 'unknown stop' /tmp/U2-stop.log
+0
+$ grep -oE 'rsx: flip [0-9]+' /tmp/U2-stop.log | tail -1
+rsx: flip 3601
+$ grep -n 'SPURS is' /tmp/U2-stop.log
+2973:I 129.152545 The SPURS is stopped due to the SPU exception.
+3097:I 129.156989 The SPURS is aborted.
+```
+
+`unknown stop code 0x0` is gone: the mechanism that killed the run (a zero-filled
+destination executed as `stop 0`) no longer exists. The guest still ends the
+session, but now **it decides to**: `The SPURS is stopped due to the SPU
+exception` then `The SPURS is aborted` are libsre's own strings, and they are the
+right response to a real, reported DMA fault. It aborts at 129 s instead of 82 s,
+and flip count rises from 2161 to 3601.

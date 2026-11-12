@@ -1019,7 +1019,90 @@ static bool dma_in_range(uint32_t ea, uint32_t size)
     return ea + size > range.first && ea < range.second;
 }
 
-void SpuThread::dma(uint32_t cmd, uint32_t lsa, uint32_t ea, uint32_t size) {
+/* A refused DMA is an MFC error, not a no-op and not a zero-fill.
+ *
+ * What the hardware does, and what RPCS3 does (do_dma_transfer takes the
+ * effective-address pointer unconditionally; an unmapped one faults in the host
+ * and the access-violation handler turns it into an SPU exception -- see
+ * Utilities/Thread.cpp:2192, "SPUThread: Send sys_spu exception event"), is:
+ * the transfer does not happen, the local store is untouched, and the thread
+ * learns about it through its exception path.
+ *
+ * The log line names the program, the SPU pc, the command, LSA, EA, size and,
+ * when the transfer came from a list, the list element. The guest sees the same
+ * event the console would send: an SPU thread-group exception event on the
+ * queue sys_spu_thread_group_connect_event registered for it.
+ *
+ * This runtime performs DMA inline on the SPU's own host thread, so the console's
+ * "raise the exception and stay stopped until the handler runs" cannot be a
+ * longjmp out of the transfer. Instead the fault is latched on the thread, the
+ * thread is parked the way a stopped SPU parks (halted), and the group's
+ * exception event is delivered so the guest's handler runs on the PPU and can
+ * restart, terminate or ignore the group, exactly as it would on hardware. */
+void SpuThread::note_dma_refusal(uint32_t cmd, uint32_t lsa, uint32_t ea, uint32_t size, bool put,
+                                 DmaRefusal refusal, uint32_t list_element, uint32_t list_pos) {
+    dma_fault_count++;
+    /* 32 lines is enough to name every distinct fault in a session and few
+     * enough that a guest retrying a broken pointer cannot flood the log. */
+    const bool should_log = dma_fault_logged < 32;
+    if (should_log) dma_fault_logged++;
+    char elem[64] = "";
+    if (list_element != 0xFFFFFFFFu) {
+        std::snprintf(elem, sizeof elem, " list element %u at 0x%05x", list_element, list_pos & 0x3FFFF);
+    }
+    if (should_log) {
+        LOG_ERROR("spu", "thread 0x%x '%s' DMA %s REFUSED cmd 0x%02x%s ea 0x%08x size 0x%x lsa 0x%05x pc 0x%05x%s",
+                  id, name.c_str(), put ? "PUT" : "GET", cmd, refusal == DmaRefusal::Range ? " (range)" : " (unmapped)",
+                  ea, size, lsa, ctx.pc, elem);
+    }
+    /* Nothing was written: the local store still holds exactly what it held
+     * before the command. That is the whole point -- the destination of a
+     * refused GET is not the MFC's to scribble on. */
+
+    /* The guest's exception handler is registered with
+     * sys_spu_thread_group_connect_event(group, queue, SYS_SPU_THREAD_GROUP_EVENT_EXCEPTION),
+     * which this runtime stores in Group::exception_queue. The SPURS handler
+     * reads source/data1/data2/data3 straight out of that queue
+     * (rpcs3/Emu/Cell/Modules/cellSpurs.cpp:837, comparing source against
+     * SYS_SPU_THREAD_EVENT_EXCEPTION_KEY in sys_event.h:55). */
+    if (group) {
+        uint32_t qid = 0;
+        {
+            std::lock_guard lk(group->m);
+            qid = group->exception_queue;
+        }
+        if (qid) {
+            if (auto queue = lv2::get<lv2::EventQueue>(qid)) {
+                const int64_t rc = lv2::push_event(queue, {SPU_EXCEPTION_KEY, spu_exception_data1(id),
+                                                          spu_exception_data2(ctx.pc, dma_exception_cause(refusal)),
+                                                          spu_exception_data3(ea)});
+                if (should_log) {
+                    LOG_ERROR("spu", "thread 0x%x '%s' raised SPU exception 0x%llx on queue 0x%x -> 0x%llx",
+                              id, name.c_str(), static_cast<unsigned long long>(SPU_EXCEPTION_KEY), qid,
+                              static_cast<long long>(rc));
+                }
+                /* Hardware stops the SPU on an exception; it does not run on.
+                 * Letting it continue is measurably wrong: the thread reaches
+                 * its next command, faults a second time, and the guest -- which
+                 * already handled one exception -- aborts the workload. Measured
+                 * without this: two REFUSED lines at pc 0x06428 and 0x06510, then
+                 * "The SPURS is aborted." and _sys_process_exit(0x8001000c).
+                 * With it: one exception, which is what the console sends. */
+                ctx.halted = true;
+                return;
+            }
+        }
+        /* No handler connected. RPCS3 reaches the same state and says so:
+         * send_exception_event returns CELL_ENOTCONN when ep_exception is unset
+         * (rpcs3/Emu/Cell/lv2/sys_spu.h:345). The fault stays latched and
+         * visible in the log rather than silently swallowed. */
+        if (should_log) {
+            LOG_ERROR("spu", "thread 0x%x '%s' DMA fault with no exception handler connected", id, name.c_str());
+        }
+    }
+}
+
+void SpuThread::dma(uint32_t cmd, uint32_t lsa, uint32_t ea, uint32_t size, uint32_t list_element, uint32_t list_pos) {
     if (!size) return;
     if (dma_in_range(ea, size)) {
         static std::atomic<uint32_t> seen{0};
@@ -1028,34 +1111,32 @@ void SpuThread::dma(uint32_t cmd, uint32_t lsa, uint32_t ea, uint32_t size) {
                      id, name.c_str(), cmd, ea, lsa, size, ctx.pc);
         }
     }
+    lsa &= 0x3FFFF;
+    const bool put = dma_is_put(cmd);
+    /* A refused transfer writes NOTHING, and it must be refused before anything
+     * else in this function can touch the destination. It used to zero-fill the
+     * local-store destination of a refused GET; those 128 zeros landed in a
+     * buffer the SPURS kernel was executing through, the zero word decodes as a
+     * `stop 0` instruction, and the guest aborted its own workload with
+     * CELL_SPURS_TASK_ERROR_FATAL.
+     *
+     * Deciding here means no bytes are written, no local-store epoch is bumped
+     * and no translation happens. What the guest sees is the MFC error. */
+    {
+        const DmaRefusal refusal = dma_check_range(ea, size);
+        const bool unmapped = ea < DMA_MMIO_BASE && (ea < 0x10000 || !vm::is_mapped(ea) || !vm::is_mapped(ea + size - 1));
+        if (refusal != DmaRefusal::None || unmapped) {
+            note_dma_refusal(cmd, lsa, ea, size, put, refusal, list_element, list_pos);
+            return;
+        }
+    }
     if (g_edge_direct && dma_direct(cmd, lsa, ea, size)) return;
     if (size > 0x4000) {
         LOG_ERROR("spu", "thread 0x%x DMA size 0x%x too large", id, size);
         return;
     }
-    lsa &= 0x3FFFF;
-    bool put = (cmd & 0xF0) == 0x20 || (cmd & 0xF0) == 0x30 || (cmd & 0xF0) == 0xA0;
     if (put && edge::gpu::g_active && edge::gpu::on_put(ls, lsa, ea, size)) return;
     if (dma_watched(ea, size)) log_watched_dma(put ? "PUT" : "GET", cmd, ea, lsa, size, put ? ls + lsa : nullptr);
-    if (ea < 0xF0000000u && (ea < 0x10000 || !vm::is_mapped(ea) || !vm::is_mapped(ea + size - 1))) {
-        static std::atomic<int> reported{0};
-        if (reported.fetch_add(1) < 20) {
-            LOG_ERROR("spu", "thread 0x%x '%s' DMA %s cmd 0x%02x unmapped ea 0x%08x size 0x%x lsa 0x%05x pc 0x%05x", id, name.c_str(), put ? "PUT" : "GET", cmd, ea, size, lsa, ctx.pc);
-        }
-        /* A refused GET currently zero-fills its destination. That can overwrite
-         * an SPU instruction the thread is about to execute: the all-zero word
-         * decodes as `stop 0`, which has no handler, and the guest then aborts
-         * its own workload with CELL_SPURS_TASK_ERROR_FATAL.
-         *
-         * GOWA_SPU_DMA_NOZERO=1 leaves the bytes untouched so the two hypotheses
-         * are told apart by measurement. Diagnostic switch, not a fix. */
-        static const bool nozero = std::getenv("GOWA_SPU_DMA_NOZERO") != nullptr;
-        if (!put && !nozero) {
-            std::memset(ls + lsa, 0, size);
-            mark_ls(lsa, size);
-        }
-        return;
-    }
     if (trace::on(trace::DMA)) trace::emit(trace::T_DMA, slot | (uint32_t(put) << 8) | (cmd << 16), ea, lsa, size, ctx.pc, id);
     bool handled;
     uint8_t* p = translate(ea, size, put, handled, lsa);
@@ -1147,6 +1228,7 @@ bool SpuThread::run_list(uint32_t tag, uint32_t cmd, uint32_t lsa, uint32_t list
     uint32_t base_cmd = cmd & ~0xFu;
     uint32_t cur = lsa & 0x3FFF0;
     list &= 0x3FFF8;
+    uint32_t elem_index = 0;
     while (size >= 8) {
         uint8_t* e = ls + list;
         bool stall = (e[0] & 0x80) != 0;
@@ -1154,10 +1236,11 @@ bool SpuThread::run_list(uint32_t tag, uint32_t cmd, uint32_t lsa, uint32_t list
         uint32_t ea;
         std::memcpy(&ea, e + 4, 4);
         ea = __builtin_bswap32(ea);
-        dma(base_cmd, cur | (ea & 0xF), ea, tsize);
+        dma(base_cmd, cur | (ea & 0xF), ea, tsize, elem_index, list);
         cur = (cur + ((tsize + 15) & ~15u)) & 0x3FFF0;
         list = (list + 8) & 0x3FFF8;
         size -= 8;
+        elem_index++;
         if (stall && size >= 8) {
             /* The command is NOT complete: RPCS3 leaves it in mfc_queue with the
              * stall bit set (SPUThread.cpp:3465-3480), which is what makes
