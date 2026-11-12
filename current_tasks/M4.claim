@@ -1,0 +1,4 @@
+M4 -- regress.sh with measured references
+agent: M4
+branch: explore/m4 from 4a5a132
+status: running
