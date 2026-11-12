@@ -311,3 +311,45 @@ addresses and the same shape as the fault. It then asserts, in order:
 
 A walker that decoded ahead of time or cached elements passes every other check
 and fails this one.
+
+### M4 CORRECTION -- the misleading disassembly decode, corrected by measurement
+
+The paragraph below the call site in M4 originally claimed rotqbyi r4,r53,4
+moves word 2 of the entry into r4 and that the EAL therefore came from
+ls32[0x36268]. That is wrong, and the correction matters because it is the
+difference between "the table holds a valid pointer and the runtime lost it"
+and "the table holds zero". SPU rotqbyi n is a rotate LEFT by n bytes:
+result byte i = source byte (i + n) mod 16. Checked against the interpreter's
+own helper (runtime/src/spu/ops_impl.h:330, qrot_bytes(a, n) = pshufb(a, iota-n)):
+
+    $ clang++ -O1 /tmp/rot3.cpp -o /tmp/rot3 && /tmp/rot3
+    rotqbyi  0: element3 (bytes 12..15) = 0x70dd8000
+    rotqbyi  4: element3 (bytes 12..15) = 0x00000000
+    rotqbyi  8: element3 (bytes 12..15) = 0x00000000
+    rotqbyi 12: element3 (bytes 12..15) = 0x70dc9000
+
+wrch reads GPR element 3, so rotqbyi r4,r53,4 yields the entry's word 0,
+ls32[0x36260] -- which in the dump at the fault is:
+
+    0x36260: 0x00000000 0x00000000 0x70dc9000 0x70dd8000
+
+That is 0x00000000, exactly the r4 the trap measured. The decode is consistent
+with the register, and there is no lost pointer: the table entry the guest read
+held zero.
+
+### M5 -- the table entry is zero, and no code in the image writes it
+
+Nothing in the 26 KB disassembly of the thread's local storage stores to
+0x3626x:
+
+    $ grep -nE 'stqr .*0x362|stqd .*0x362|stqa .*0x362' /tmp/U1-dis.txt
+    (no output)
+
+and no list element writes there either (the trace records every element's
+destination lsa, and none is in that range):
+
+    $ grep -c 'lsa 0x362' /tmp/U1-list.log
+    0
+
+So 0x36260 is filled by a transfer the list trace does not cover: a single GET
+or an SPU-to-SPU PUT. The next measurement targets exactly that.
