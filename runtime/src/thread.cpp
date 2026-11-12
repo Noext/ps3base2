@@ -24,6 +24,7 @@ void profile_thread(void* native, const char* name);
 namespace lv2 {
 void lwmutex_debug(uint32_t id);
 void lwmutex_probe_report(const char* where);
+void syscall_error_report(const char* where);
 }
 
 namespace guest {
@@ -70,6 +71,11 @@ void body(std::shared_ptr<Thread> t) {
         LOG_INFO("ppu", "process exit %d from thread 0x%x lr=0x%08x %s", e.status, t->id,
                  static_cast<uint32_t>(t->ctx.lr),
                  lv2::describe_address(static_cast<uint32_t>(t->ctx.lr)).c_str());
+        /* quick_exit runs at_quick_exit handlers, NOT atexit ones, so the
+         * lwmutex totals have to be printed here or a run that ends by
+         * stopping (which is most of them) reports nothing. */
+        lv2::lwmutex_probe_report("process exit");
+        lv2::syscall_error_report("process exit");
         std::fflush(nullptr);
         std::quick_exit(e.status);
     }
@@ -90,6 +96,7 @@ Thread* current() { return t_current; }
 void status_dump() {
     stacks::dump();
     lv2::lwmutex_probe_report("status dump");
+    lv2::syscall_error_report("status dump");
     std::lock_guard lk(g_lock);
     for (auto& [id, t] : g_threads) {
         if (t->exited) continue;

@@ -3,6 +3,7 @@
 #include "runtime/syncwatch.h"
 
 #include <atomic>
+#include <vector>
 #include <cstdlib>
 #include <cstdio>
 
@@ -144,6 +145,16 @@ void probe_fail(int op, uint32_t id, int64_t rc, const ppu::Context& ctx) {
     }
 }
 
+/* Counters other lv2 modules feed, so the report covers the WHOLE LV2 surface
+ * and not just this file. The task asks for "the ESRCH/EPERM count"; the honest
+ * answer needs every source of those two codes, not one module's. */
+std::atomic<uint64_t>& shared_counter(int idx) {
+    static std::atomic<uint64_t> c[16];
+    return c[idx];
+}
+
+void bump_shared(int idx) { shared_counter(idx).fetch_add(1, std::memory_order_relaxed); }
+
 /* The totals, printed at exit and at every process/thread status dump. */
 void probe_report_impl(const char* where) {
     uint64_t t[LW_F_MAX];
@@ -164,6 +175,60 @@ void probe_report_impl(const char* where) {
 }  // namespace
 
 void lwmutex_probe_report(const char* where) { probe_report_impl(where); }
+
+/* The dispatcher's ESRCH/EPERM tally, so the report covers every LV2 handler and
+ * not only this file. Name and number both, because the number alone is opaque
+ * and the name alone is ambiguous across modules. */
+namespace {
+
+struct ErrEntry {
+    uint32_t num;
+    int32_t code;
+    uint64_t n;
+};
+
+std::mutex& err_lock() {
+    static std::mutex m;
+    return m;
+}
+
+std::vector<ErrEntry>& err_table() {
+    static std::vector<ErrEntry> v;
+    return v;
+}
+
+}  // namespace
+
+void syscall_error_note(uint32_t number, int32_t code) {
+    static const bool on = std::getenv("PS3BASE_SYSCALL_ERRORS") != nullptr;
+    if (!on) return;
+    if (code != static_cast<int32_t>(CELL_ESRCH) && code != static_cast<int32_t>(CELL_EPERM)) return;
+    std::lock_guard lk(err_lock());
+    for (auto& e : err_table()) {
+        if (e.num == number && e.code == code) { e.n++; return; }
+    }
+    err_table().push_back({number, code, 1});
+}
+
+void syscall_error_report(const char* where) {
+    if (!std::getenv("PS3BASE_SYSCALL_ERRORS")) return;
+    std::lock_guard lk(err_lock());
+    if (err_table().empty()) {
+        LOG_INFO("syserr", "at %s: no syscall returned ESRCH or EPERM", where);
+        return;
+    }
+    uint64_t total = 0;
+    for (auto& e : err_table()) total += e.n;
+    LOG_WARN("syserr", "at %s: %llu ESRCH/EPERM answers across %zu (syscall, code) pairs",
+             where, static_cast<unsigned long long>(total), err_table().size());
+    for (auto& e : err_table()) {
+        const char* spec = spec_name(e.num);
+        LOG_WARN("syserr", "  %u (%s) -> 0x%08x x%llu", e.num, spec ? spec : "?",
+                 static_cast<uint32_t>(e.code), static_cast<unsigned long long>(e.n));
+    }
+}
+
+
 
 /* An atexit report is the one that survives a run that is killed by timeout:
  * main() returns normally after the guest exits, and a SIGINT path still runs
@@ -207,20 +272,38 @@ void lwmutex_debug(uint32_t id) {
 }
 
 LV2_SYSCALL(95, _sys_lwmutex_create) {
-    uint32_t out = u32arg(ctx, 0);
+    const uint32_t out = u32arg(ctx, 0);
     const uint32_t protocol = u32arg(ctx, 1);
     const uint32_t control = u32arg(ctx, 2);
+    const int32_t has_name = s32arg(ctx, 3);
+
+    /* refs/rpcs3/rpcs3/Emu/Cell/lv2/sys_lwmutex.cpp:31. The console refuses an
+     * unknown protocol with CELL_EINVAL instead of minting an object. Returning
+     * CELL_OK for one told the caller its mutex existed when nothing would ever
+     * honour the scheduling policy it asked for.
+     * SYS_SYNC_FIFO 0x1, SYS_SYNC_PRIORITY 0x2, SYS_SYNC_RETRY 0x4
+     * (refs/.../lv2/sys_sync.h:11). */
+    if (protocol != 0x1 && protocol != 0x2 && protocol != 0x4) {
+        LOG_WARN("lv2", "_sys_lwmutex_create: unknown protocol 0x%x, returning CELL_EINVAL", protocol);
+        return CELL_EINVAL;
+    }
+
     auto m = std::make_shared<LwMutex>();
     m->protocol = protocol;
     m->control = control;
-    if (s32arg(ctx, 3)) m->name = name_u64(u64arg(ctx, 4));
+    /* refs/.../sys_lwmutex.cpp:41: "if (!(has_name < 0)) name = 0;" -- the name
+     * is kept only when has_name is NEGATIVE. Our old "if (s32arg(ctx,3))" kept
+     * it for every non-zero value, which is the opposite for the positive case
+     * and matches for the negative one. Measured: RDR passes 0x80000001, which
+     * is negative, so the name was kept by accident and the bug was invisible. */
+    if (has_name < 0) m->name = name_u64(u64arg(ctx, 4));
     const uint32_t id = add_object(0x95000000, m);
     vm::write32(out, id);
     if (probe_on()) {
         char extra[200];
         std::snprintf(extra, sizeof extra,
                       "id=0x%08x protocol=0x%x control=0x%08x has_name=%d name=0x%llx lr=0x%08x tid=0x%x",
-                      id, protocol, control, s32arg(ctx, 3),
+                      id, protocol, control, has_name,
                       static_cast<unsigned long long>(u64arg(ctx, 4)),
                       static_cast<uint32_t>(ctx.cia), current_thread_id());
         probe_dump_struct("create-control", control, extra);

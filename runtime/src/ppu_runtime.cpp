@@ -913,6 +913,12 @@ void syscall(Context& ctx, uint8_t* base) {
         }
         if (t) t->in_syscall.store(0, std::memory_order_relaxed);
         if (cp0) critpath::syscall_done(n, cp0, static_cast<uint32_t>(ctx.lr), cp_arg, static_cast<uint32_t>(ctx.gpr[1]));
+        /* How often each syscall answers ESRCH or EPERM. The task asks for "the
+         * ESRCH/EPERM count"; the only honest denominator is the dispatcher,
+         * because those codes come from many handlers and a per-module count
+         * silently omits the rest. Defined and reported by lv2/lwmutex.cpp,
+         * where the report that prints it already lives. */
+        lv2::syscall_error_note(n, static_cast<int32_t>(ctx.gpr[3]));
         return;
     }
     /* A syscall nobody implemented returns ENOSYS, named, once. It does NOT

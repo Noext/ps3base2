@@ -88,6 +88,12 @@ const char* syscall_name(uint32_t number);
  * implemented. Null when the number is not in the table at all. */
 const char* spec_name(uint32_t number);
 
+/* Fed by the syscall dispatcher: one increment per syscall answer that is
+ * CELL_ESRCH or CELL_EPERM, keyed by number and code. Defined in
+ * runtime/src/lv2/lwmutex.cpp with the report that prints it. */
+void syscall_error_note(uint32_t number, int32_t code);
+void syscall_error_report(const char* where);
+
 }
 
 #define LV2_SYSCALL(num, name) \

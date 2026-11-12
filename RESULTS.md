@@ -1372,3 +1372,70 @@ sys_lwmutex_t. The brief's mechanism -- "our create never writes control+16, so 
 guest passes the structure address as the id" -- does not hold: the id passed is 0,
 not 0x0165afc8, and +16 is written, by the guest wrapper, at 0.844.
 
+## Measurement 2 -- the ESRCH/EPERM total, from the dispatcher, not from one module
+
+The task asks for "the ESRCH/EPERM count remaining (target zero)". A per-module
+count cannot answer it: the codes come from every LV2 handler. So the dispatcher
+now feeds a tally keyed by (syscall number, code), printed at process exit and at
+every status dump.
+
+    nohup setsid env DISPLAY=:950 PS3BASE_DISC_DIR=/root/Dev/rdr-port/vfs/dev_bdvd \
+      PS3BASE_LOG=info PS3BASE_LWMUX_PROBE=1 PS3BASE_SYSCALL_ERRORS=1 timeout 120 \
+      /root/Dev/wt-L1/build-50/ps3base --no-launcher > /tmp/L1-r3.log 2>&1 &
+
+    W  41.853537 syserr: at process exit: 881 ESRCH/EPERM answers across 1 (syscall, code) pairs
+    W  41.853548 syserr:   97 (_sys_lwmutex_lock) -> 0x80010005 x881
+
+and the same total from inside the module:
+
+    W  41.853525 lwprobe: counts at process exit: lock-ESRCH=881 unlock-ESRCH=0
+       trylock-ESRCH=0 unlock2-ESRCH=0 destroy-ESRCH=0 unlock-EPERM=0
+
+So:
+
+| quantity | value |
+|---|---|
+| ESRCH, total, every LV2 syscall | **881** |
+| EPERM, total, every LV2 syscall | **0** |
+| ESRCH from `_sys_lwmutex_lock` | 881 (100%) |
+| ESRCH from create/destroy/unlock/trylock/unlock2 | 0 |
+| run result | reaches the SAME stop, 841 flips, `_sys_process_exit(0x8001000c)` at 41.8 s |
+
+The run did NOT regress: 841 flips and the same process-exit status as the probe
+run before any change (which was 800 lock-ESRCH in a 120 s window; the totals
+differ only because the sample window and the logging cost differ).
+
+### The 881 are not 881 bugs: they are one loop on one uncreated mutex
+
+    I   0.598176 lwprobe: lock ea=0x00000000 ... count=1  cia=0x300054ec
+    I   0.623770 lwprobe: lock ea=0x00000000 ... count=800 cia=0x300054ec
+    I   0.667860 lwprobe: create-control ea=0x0165afc8 ... id=0x95022100
+
+The whole burst is 25 ms wide, on thread 0x1000000, from one call site
+(cia 0x300054ec), and it is over BEFORE the structure is created at 0.668 s. The
+create then succeeds and the wrapper writes +16. Nothing retries the failed
+locks: the count stops at 881 and never rises again for the remaining 41 s.
+
+### Why "make the ESRCH zero" is the wrong target here
+
+The guest is doing something legal and the runtime is answering correctly. At
+0.598 s, `0x0165afc8` is BSS zero-fill (confirmed above: PT_LOAD 1 covers
+0x1330000+0x1c014 file bytes, so 0x165afc8 lies past the file image and is zero by
+construction). Its +16 is therefore 0, and the firmware wrapper dutifully passes
+that 0 to `_sys_lwmutex_lock`:
+
+    300054e0  lwz r3, 0x10(r30)   <- lwmutex->sleep_queue, which is 0
+    300054e8  li r11, 0x61
+    300054ec  sc
+
+RPCS3 answers this identically. `idm::check` on id 0 finds nothing, and
+`refs/rpcs3/rpcs3/Emu/Cell/lv2/sys_lwmutex.cpp:191` returns:
+
+    if (lwmutex_id >> 24 == lv2_lwmutex::id_base >> 24)  // 0 >> 24 != 0x95
+        return { CELL_ESRCH, lwmutex_id };
+    return { CELL_ESRCH, "Invalid ID" };                 // <- this branch, id 0
+
+CELL_ESRCH is the console's answer too. Suppressing it would be the "fake
+success" AGENTS.md forbids: the guest would be told a mutex it never created is
+held. The fix belongs in whatever creates the mutex EARLIER, not in this handler.
+
