@@ -353,3 +353,55 @@ destination lsa, and none is in that range):
 
 So 0x36260 is filled by a transfer the list trace does not cover: a single GET
 or an SPU-to-SPU PUT. The next measurement targets exactly that.
+
+### M7 -- the LS table entry is a faithful copy of guest memory, and guest memory holds zero
+
+PS3BASE_SPU_LS_WATCH=<hex> logs every transfer whose LS destination overlays a
+watched local address, which is what names the filler of the table:
+
+    $ grep 'overlays 0x36260' /tmp/U1-lsw.log | head -6
+    E   5.178269 [2320934] spu: thread 0x200 pc 0x025d0 PUT cmd 0x20 ea 0x017b2e00 -> lsa 0x33000 size 0x4000 overlays 0x36260
+    E   5.189750 [2320934] spu: thread 0x200 pc 0x025d0 GET cmd 0x40 ea 0x017b2e00 -> lsa 0x33000 size 0x4000 overlays 0x36260
+    E   5.189804 [2320934] spu: thread 0x200 pc 0x076c4 GET cmd 0x40 ea 0x0177cc00 -> lsa 0x36200 size 0x90 overlays 0x36260
+    E   5.192338 [2320934] spu: thread 0x200 pc 0x025d0 PUT cmd 0x20 ea 0x017b2e00 -> lsa 0x33000 size 0x4000 overlays 0x36260
+    E   5.198962 [2320934] spu: thread 0x200 pc 0x076c4 GET cmd 0x40 ea 0x0177cc00 -> lsa 0x36200 size 0x90 overlays 0x36260
+
+The entry is copied by a plain GET: `pc 0x076c4 GET cmd 0x40 ea 0x0177cc00 ->
+lsa 0x36200 size 0x90`. LS 0x36260 is at offset 0x60 into that 0x90-byte copy,
+so the EAL comes from guest memory at 0x0177cc60. Dumped at the fault (the
+fault handler now prints both sides):
+
+    E 142.726969 [2330803] spu: thread 0x200 'SecondaryCellSpursKernel0' DMA GET cmd 0x40 unmapped ea 0x00000000 size 0x80 lsa 0x1a100 pc 0x06428
+    E 142.727385 [2330803] spu:   guest 0x0177cc00: 70ccfa80 017bfe80 00000060 70c6de00  00000000 70d68f80 70c89400 70d68b80
+    E 142.727393 [2330803] spu:   guest 0x0177cc60: 00000000 00000000 70dc9000 70dd8000
+    E 142.727411 [2330803] spu: thread 0x200 'SecondaryCellSpursKernel0' DMA GET cmd 0x40 unmapped ea 0x00000000 size 0x80 lsa 0x1a100 pc 0x06510
+    E 142.727419 [2330803] spu:   guest 0x0177cc00: 70ccfa80 017bfe80 00000060 70c6de00  00000000 70d68f80 70c89400 70d68b80
+    E 142.727425 [2330803] spu:   guest 0x0177cc60: 00000000 00000000 70dc9000 70dd8000
+
+Guest memory at 0x0177cc60 is 00000000 00000000 70dc9000 70dd8000 -- the same
+as the local-storage copy, so the copy is faithful and nothing is lost in
+transit. Word 0 of that guest entry is 0x00000000, and rotqbyi r4,r53,4 puts
+word 0 into r4 (M4 correction). The null really is the guest's own table
+entry.
+
+The neighbours in that table are valid (0x70ccfa80, 0x017bfe80, 0x70c6de00,
+0x70d68f80, 0x70c89400, 0x70d68b80), so the entry is not uninitialised garbage:
+it is a specific slot the guest left zero. Whether the guest should have filled
+it before this read is a different question from the DMA list walker, and the
+evidence here does not support answering it from the list path.
+
+### M8 -- the two list fixes change no measured behaviour on this title
+
+Final build, both fixes in, no instrumentation switches:
+
+    $ ./build-20/spu_dma_list
+    64 checks, 0 failure(s)
+    $ ./build-20/spu_channel_conformance
+    spu_channel_conformance: 64 checks, 0 failures
+
+and the run reaches the same point as the unmodified HEAD build (M1: 3301
+flips, no fault inside 120 s; the fault at 95-143 s depending on the added
+inline cost of whichever diagnostic is enabled). The list fixes are
+correctness fixes for a path this title does not take, which is exactly why
+M2's zero notify-bit count matters: they cannot be the cause of the abort, and
+they cannot be its cure either.

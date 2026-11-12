@@ -1081,6 +1081,36 @@ void SpuThread::dma(uint32_t cmd, uint32_t lsa, uint32_t ea, uint32_t size) {
     bool put = (cmd & 0xF0) == 0x20 || (cmd & 0xF0) == 0x30 || (cmd & 0xF0) == 0xA0;
     if (put && edge::gpu::g_active && edge::gpu::on_put(ls, lsa, ea, size)) return;
     if (dma_watched(ea, size)) log_watched_dma(put ? "PUT" : "GET", cmd, ea, lsa, size, put ? ls + lsa : nullptr);
+    /* PS3BASE_SPU_LS_WATCH=<hex>[,<hex>...]: log every transfer whose LS
+     * destination overlays a watched local address. The question "who fills
+     * this LS table entry" is not answerable from the EA watch, because the
+     * writer may be a PUT whose LSA lands here from any thread. */
+    {
+        static const std::vector<std::pair<uint32_t,uint32_t>> ls_watch = [] {
+            std::vector<std::pair<uint32_t,uint32_t>> v;
+            if (const char* e = std::getenv("PS3BASE_SPU_LS_WATCH")) {
+                std::string list = e; size_t pos = 0;
+                while (pos < list.size()) {
+                    size_t end = list.find(',', pos);
+                    if (end == std::string::npos) end = list.size();
+                    v.push_back({static_cast<uint32_t>(std::strtoul(list.substr(pos, end - pos).c_str(), nullptr, 16)), 1});
+                    pos = end + 1;
+                }
+            }
+            return v;
+        }();
+        if (!ls_watch.empty()) {
+            const uint32_t dlsa = lsa & 0x3FFFFu;
+            for (auto& w : ls_watch) {
+                if (dlsa < w.first + 16 && dlsa + size > w.first) {
+                    static std::atomic<int> lw{0};
+                    if (lw.fetch_add(1) < 40)
+                        LOG_ERROR("spu", "thread 0x%x pc 0x%05x %s cmd 0x%02x ea 0x%08x -> lsa 0x%05x size 0x%x overlays 0x%05x",
+                                  id, ctx.pc, put ? "PUT" : "GET", cmd, ea, dlsa, size, w.first);
+                }
+            }
+        }
+    }
     if (ea < 0xF0000000u && (ea < 0x10000 || !vm::is_mapped(ea) || !vm::is_mapped(ea + size - 1))) {
         static std::atomic<int> reported{0};
         if (reported.fetch_add(1) < 20) {
@@ -1098,6 +1128,21 @@ void SpuThread::dma(uint32_t cmd, uint32_t lsa, uint32_t ea, uint32_t size) {
                         std::fclose(f);
                     }
                 }
+            }
+            /* The table entry the caller read is a COPY of guest memory: the
+             * GET at pc 0x076c4 fills LS 0x36200..0x36290 from EA 0x0177cc00.
+             * So the value at fault is whatever the guest holds at 0x0177cc60. */
+            if (vm::is_mapped(0x0177cc00u)) {
+                LOG_ERROR("spu", "  guest 0x0177cc00: %08x %08x %08x %08x  %08x %08x %08x %08x",
+                          vm::read32(0x0177cc00u), vm::read32(0x0177cc04u), vm::read32(0x0177cc08u), vm::read32(0x0177cc0cu),
+                          vm::read32(0x0177cc10u), vm::read32(0x0177cc14u), vm::read32(0x0177cc18u), vm::read32(0x0177cc1cu));
+                LOG_ERROR("spu", "  guest 0x0177cc60: %08x %08x %08x %08x",
+                          vm::read32(0x0177cc60u), vm::read32(0x0177cc64u), vm::read32(0x0177cc68u), vm::read32(0x0177cc6cu));
+                LOG_ERROR("spu", "  ls  0x36260:   %08x %08x %08x %08x",
+                          __builtin_bswap32(*reinterpret_cast<uint32_t*>(ls + 0x36260)),
+                          __builtin_bswap32(*reinterpret_cast<uint32_t*>(ls + 0x36264)),
+                          __builtin_bswap32(*reinterpret_cast<uint32_t*>(ls + 0x36268)),
+                          __builtin_bswap32(*reinterpret_cast<uint32_t*>(ls + 0x3626c)));
             }
             for (uint32_t k = 0; k < 16 && k < trap_ring_i; k++) {
                 const TrapRec& t = trap_ring[(trap_ring_i - 1 - k) % 16];
