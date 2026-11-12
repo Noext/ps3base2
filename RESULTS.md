@@ -1280,3 +1280,14 @@ store size when the caller passes none, which is what the lifted stwcx/putllc do
 `write_paths` asserts on the label the code actually emits, so it follows the
 implementation rather than pinning a spelling, and it passed unchanged after that
 rename was accounted for.
+
+---
+
+# L1 -- the ghost lock: _sys_lwmutex_create never writes control+16
+
+Task: read the guest sys_lwmutex_t at 0x165afc8 at the first CELL_ESRCH, raw hex;
+prove which path created it and what was written where; compare create/lock/unlock/
+destroy against RPCS3 sys_lwmutex_.cpp + lv2/sys_lwmutex.cpp; fix; unit test; then
+report the ESRCH/EPERM count (target zero) and the +0x60 field value.
+
+Status: work started. Measurements are appended below as they are taken.
