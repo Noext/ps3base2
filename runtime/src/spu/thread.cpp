@@ -1038,7 +1038,15 @@ void SpuThread::dma(uint32_t cmd, uint32_t lsa, uint32_t ea, uint32_t size) {
         if (reported.fetch_add(1) < 20) {
             LOG_ERROR("spu", "thread 0x%x '%s' DMA %s cmd 0x%02x unmapped ea 0x%08x size 0x%x lsa 0x%05x pc 0x%05x", id, name.c_str(), put ? "PUT" : "GET", cmd, ea, size, lsa, ctx.pc);
         }
-        if (!put) {
+        /* A refused GET currently zero-fills its destination. That can overwrite
+         * an SPU instruction the thread is about to execute: the all-zero word
+         * decodes as `stop 0`, which has no handler, and the guest then aborts
+         * its own workload with CELL_SPURS_TASK_ERROR_FATAL.
+         *
+         * GOWA_SPU_DMA_NOZERO=1 leaves the bytes untouched so the two hypotheses
+         * are told apart by measurement. Diagnostic switch, not a fix. */
+        static const bool nozero = std::getenv("GOWA_SPU_DMA_NOZERO") != nullptr;
+        if (!put && !nozero) {
             std::memset(ls + lsa, 0, size);
             mark_ls(lsa, size);
         }
