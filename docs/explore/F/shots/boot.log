@@ -1,0 +1,16 @@
+[0.002s] goto http://127.0.0.1:8106/game.html
+[0.038s] domcontentloaded
+[0.047s] worker created http://127.0.0.1:8106/worker.js
+[0.048s] gpu in navigator === true
+[0.081s] worker created http://127.0.0.1:8106/game.js
+[0.082s] worker created http://127.0.0.1:8106/game.js
+[0.083s] worker created http://127.0.0.1:8106/game.js
+[0.084s] worker created http://127.0.0.1:8106/game.js
+[5.087s] console.error Failed to load resource: the server responded with a status of 404 (File not found)
+[10.064s] shot docs/explore/F/shots/boot-00.png
+[20.114s] shot docs/explore/F/shots/boot-01.png
+[30.552s] shot docs/explore/F/shots/boot-02.png
+[40.166s] shot docs/explore/F/shots/boot-03.png
+[45.130s] FIRST RUNTIME LOG LINE {"at":"0.051s","text":"worker started"}
+[45.140s] resources [{"n":"worker.js","respEnd":35,"dur":-8,"bytes":2264}]
+[46.205s] closed after 46.20s
