@@ -81,3 +81,53 @@ d290fda : module 45 405 029 o, 4 tests verts, jeu 152 s, exit 124, boucle usleep
 Le natif franchit la boucle de label et fait des flips. Le wasm s'y bloque. La difference n'est ni le
 navigateur (F le prouve) ni le manque de modules (verifie). C'est que **notre stub GPU n'ecrit pas le
 label** la ou le vrai GPU le fait en reponse aux releases du FIFO.
+
+---
+
+# Mise a jour apres les pistes B et I
+
+## L'oracle natif est complet (piste I)
+
+`docs/explore/I/menu-trace.txt` : trace native jusqu'au menu, 204 341 lignes de log brut, 7 508 octets
+d'extraits non reformules. Points mesures :
+
+    swapchain 1280x720, 4 images, Vulkan presenter on NVIDIA GeForce RTX 4060
+    rsx: flip 1 a t=12,85 s, puis 60 Hz
+    (4J) GetFriendsThreadProc        t=54,974166 s
+    thread_readSaveCacheFile         t=54,974385 s
+    thread_getSavesInfo              t=54,986473 s
+
+**Le menu est atteint a t=54,97 s en natif**, apres la sequence de pad cross, cross, down, down, down, cross.
+
+### Une fausse porte dans notre propre harnais
+
+`runtime/src/wasm_entry.cpp` exige `g_menu_thread_creations > 0` ET `g_ui_thread_creations >= 2`, en comptant
+`thread_options_load` parmi les threads d'interface. Le natif cree ce thread a **t=12,16 s**, soit **42 s
+avant le menu** : il ne corrobore rien. Un boot qui n'atteint jamais le menu peut satisfaire `ui >= 2`.
+
+Les deux vrais corroborateurs sont `thread_readSaveCacheFile` et `thread_getSavesInfo`.
+
+## La consigne '16 octets' etait fausse (piste B)
+
+J'avais ecrit dans les consignes : « ecriture de 16 octets des releases (valeur puis zeros) ». Refute :
+
+| ce que RPCS3 fait | ligne | octets |
+|---|---|---|
+| `write_gcm_label` (toute release) | `refs/rpcs3/rpcs3/Emu/RSX/NV47/HW/nv47_sync.hpp:62` | **4** |
+| remise a zero du semaphore de flip | `rsx_methods.cpp:61`, `sys_rsx.cpp:1168` | **16** (zeros seuls) |
+
+Les 16 octets sont **exclusivement** le flip, et ce sont **seize zeros**. Une release a 16 octets n'existe
+pas dans RPCS3. Si notre stub ecrivait 16 octets, il ecraserait `label[1]` a `label[3]` — precisement les
+labels voisins que le jeu peut attendre.
+
+Autres ecarts releves par B : offset non aligne sur 4 (406E) ou 16 (4097) doit etre refuse ; la release
+back-end 4097 **permute** la valeur ; une valeur deja egale est un no-op ; le TDR d'acquire vaut
+1 000 000 us par defaut.
+
+## Ce que cela change pour la suite
+
+Le blocage n'est pas « le stub n'ecrit rien ». C'est « le stub n'ecrit pas **la bonne chose au bon moment** » :
+4 octets, valeur eventuellement permutee, no-op si deja egale, et le flip remet 16 zeros a `label+0x10`.
+
+La piste A doit maintenant implementer la lecture du FIFO avec ces semantiques, et la piste B a ecrit le
+test `rsx_sync` qui verrouille les deux comptes.

@@ -1,0 +1,113 @@
+# PISTE I -- trace native jusqu'au MENU PRINCIPAL (oracle pour la piste E)
+# binaire : /root/Dev/ps3base2/build/ps3base (RelWithDebInfo, 258467968 octets, 12 Nov 00:02)
+# commande : cd /root/Dev/ps3base2 && DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/0 \
+#   PS3BASE_DISC_DIR=/root/Dev/mc-port/disc PS3BASE_LOG=info \
+#   PS3BASE_INPUT_CMD=/tmp/I/menu/input.cmd PS3BASE_CENSUS=1 PS3BASE_CENSUS_AT=25 \
+#   PS3BASE_SYSCALL_LOG=200000 PS3BASE_DUMP_FRAMES=150 \
+#   PS3BASE_FRAME_DIR=/tmp/I/menu/frames timeout -s INT 130 ./build/ps3base --no-launcher
+# pad script: cross, cross, down, down, down, cross (the sequence the captures proved)
+# log brut complet : log tampon de ce run = 204341 lignes ; extraits ci-dessous, non reformules.
+
+== 1. TITRE ET RENDU ==
+I   0.080871 [2012694] vfs: disc /root/Dev/mc-port/disc (BLES01976 01.00), patch  ()
+I   0.412772 [2012692] gpu: swapchain 1280x720, 4 images, present mode 2
+I   0.413337 [2012692] gpu: Vulkan presenter on NVIDIA GeForce RTX 4060 Laptop GPU, swapchain 1280x720
+I   0.413367 [2012692] main: GOWA-pc: 9 images, 23302 functions, 590 imports, 781 exports, root .
+I   0.433937 [2012692] loader: loaded mc (bin/mc/mc.elf) text 0x00010200-0x008af1ec toc 0x00bd7998 entry 0x00bbe520
+I  12.787614 [2012751] gpu: swapchain 1280x720, 4 images, present mode 2
+
+== 2. PREMIERE IMAGE PRESENTEE ==
+I  12.850776 [2012751] rsx: flip 1 (buffer 0) worst 0.0 ms, >50ms 0, >100ms 0
+I  13.851838 [2012751] rsx: flip 61 (buffer 0) worst 18.9 ms, >50ms 0, >100ms 0
+
+== 3. CREATIONS DE THREADS PPU, DANS L'ORDRE, AVEC L'HEURE ==
+0.481570 _sys_ppu_thread_create 'MinecraftSpursHdlr1' entry 0x320313a4 arg 0x40028500 prio 2 stack 0x8000 flags 0x1 -> 0x1000001
+0.481737 _sys_ppu_thread_create 'MinecraftSpursHdlr0' entry 0x320312dc arg 0x40028500 prio 2 stack 0x4000 flags 0x1 -> 0x1000002
+0.503195 _sys_ppu_thread_create '_gcm_intr_thread' entry 0x3300be54 arg 0x0 prio 1 stack 0x4000 flags 0x1 -> 0x1000003
+9.266056 _sys_ppu_thread_create 'trophy_init_thread' entry 0x00bbe5f8 arg 0xcfeed0 prio 1002 stack 0x1000 flags 0x1 -> 0x1000004
+9.273692 _sys_ppu_thread_create 'trophy_event_thread' entry 0x00bbe600 arg 0xcfeed0 prio 1002 stack 0x1000 flags 0x1 -> 0x1000005
+9.340708 _sys_ppu_thread_create '(4J) Tile update' entry 0x00bc4820 arg 0x435f3ea0 prio 1002 stack 0x20000 flags 0x0 -> 0x1000006
+10.850910 _sys_ppu_thread_create 'MSSAsync' entry 0x00bbec10 arg 0xd659c8 prio 1001 stack 0x4000 flags 0x1 -> 0x1000007
+10.853610 _sys_ppu_thread_create 'MSSTimer' entry 0x00bbec10 arg 0xd5940c prio 1001 stack 0x14000 flags 0x1 -> 0x1000008
+11.503126 _sys_ppu_thread_create '(4J) Chunk update' entry 0x00bc4820 arg 0x43b2bfa0 prio 1000 stack 0x20000 flags 0x0 -> 0x1000009
+12.163045 _sys_ppu_thread_create '(4J) Basic Event Handler' entry 0x00bc4820 arg 0x43dd5c50 prio 1002 stack 0x20000 flags 0x0 -> 0x100000a
+12.164279 _sys_ppu_thread_create 'thread_options_load' entry 0x00bbe768 arg 0x0 prio 1002 stack 0x10000 flags 0x0 -> 0x100000b
+12.182445 _sys_ppu_thread_create '(4J) OpenStreamThreadProc' entry 0x00bc4820 arg 0x43df16e0 prio 1002 stack 0x20000 flags 0x0 -> 0x100000c
+54.974166 _sys_ppu_thread_create '(4J) GetFriendsThreadProc' entry 0x00bc4820 arg 0x4511f860 prio 1002 stack 0x20000 flags 0x0 -> 0x100000d
+54.974385 _sys_ppu_thread_create 'thread_readSaveCacheFile' entry 0x00bbe828 arg 0x0 prio 1002 stack 0x10000 flags 0x0 -> 0x100000e
+54.986473 _sys_ppu_thread_create 'thread_getSavesInfo' entry 0x00bbe6e8 arg 0x0 prio 1002 stack 0x10000 flags 0x0 -> 0x100000f
+84.975374 _sys_ppu_thread_create '(4J) GetFriendsThreadProc' entry 0x00bc4820 arg 0x44e21dc0 prio 1002 stack 0x20000 flags 0x0 -> 0x1000010
+114.976212 _sys_ppu_thread_create '(4J) GetFriendsThreadProc' entry 0x00bc4820 arg 0x451225a0 prio 1002 stack 0x20000 flags 0x0 -> 0x1000011
+129.057940 _sys_ppu_thread_create '(4J) OpenStreamThreadProc' entry 0x00bc4820 arg 0x44e21dc0 prio 1002 stack 0x20000 flags 0x0 -> 0x1000012
+
+== 4. LES TROIS THREADS D'INTERFACE DU MENU (marqueurs utilises par wasm_entry.cpp) ==
+I  12.164279 [2012738] ppu: _sys_ppu_thread_create 'thread_options_load' entry 0x00bbe768 arg 0x0 prio 1002 stack 0x10000 flags 0x0 -> 0x100000b
+I  54.974166 [2012738] ppu: _sys_ppu_thread_create '(4J) GetFriendsThreadProc' entry 0x00bc4820 arg 0x4511f860 prio 1002 stack 0x20000 flags 0x0 -> 0x100000d
+I  54.974385 [2012738] ppu: _sys_ppu_thread_create 'thread_readSaveCacheFile' entry 0x00bbe828 arg 0x0 prio 1002 stack 0x10000 flags 0x0 -> 0x100000e
+I  54.986473 [2012738] ppu: _sys_ppu_thread_create 'thread_getSavesInfo' entry 0x00bbe6e8 arg 0x0 prio 1002 stack 0x10000 flags 0x0 -> 0x100000f
+I  84.975374 [2012738] ppu: _sys_ppu_thread_create '(4J) GetFriendsThreadProc' entry 0x00bc4820 arg 0x44e21dc0 prio 1002 stack 0x20000 flags 0x0 -> 0x1000010
+I 114.976212 [2012738] ppu: _sys_ppu_thread_create '(4J) GetFriendsThreadProc' entry 0x00bc4820 arg 0x451225a0 prio 1002 stack 0x20000 flags 0x0 -> 0x1000011
+
+== 5. HORODATAGE DE LA PREMIERE APPARITION DE CHAQUE MARQUEUR ==
+GetFriendsThreadProc     : premiere creation t=54.974166, 3 creations sur le run
+thread_readSaveCacheFile : premiere creation t=54.974385, 1 creation
+thread_getSavesInfo     : premiere creation t=54.986473, 1 creation
+thread_options_load      : premiere creation t=12.164279, 1 creation (AVANT le menu : ne peut pas servir de marqueur)
+
+NOTE POUR LA PISTE E : thread_options_load est cree a t=12 s, donc tres en amont du menu ;
+il ne corrobore pas l'arrivee au menu. Les trois marqueurs reellement simultanes sont
+GetFriendsThreadProc, thread_readSaveCacheFile et thread_getSavesInfo, tous a t=54.97 s,
+soit ~42 s apres la premiere image presentee et ~40 s APRES que l'ecran TERMS OF USE a
+accepte le premier cross.
+
+== 6. HISTOGRAMME DES SYSCALLS SUR LES 200000 PREMIERES LIGNES TRACEES ==
+ 111582 sys_timer_usleep
+  40968 sys_semaphore_wait
+  27810 sys_time_get_current_time
+   6920 sys_fs_read
+   3831 sys_event_queue_receive
+   1470 _sys_lwmutex_lock
+   1469 _sys_lwmutex_unlock
+   1270 _sys_lwmutex_create
+   1157 sys_fs_lseek
+   1155 _sys_lwmutex_destroy
+    511 sys_semaphore_post
+    419 sys_fs_open
+    419 sys_fs_close
+    250 sys_fs_fcntl
+    205 sys_fs_stat
+     70 sys_semaphore_create
+     60 sys_memory_allocate
+     60 _sys_prx_start_module
+     47 sys_fs_fstat
+     41 sys_semaphore_trywait
+     35 _sys_lwmutex_trylock
+     24 sys_mutex_unlock
+     24 sys_mutex_lock
+     23 _sys_prx_load_module
+     18 sys_time_get_timebase_frequency
+     16 sys_ppu_thread_start
+     16 _sys_ppu_thread_create
+     12 sys_rsx_context_attribute
+     11 sys_event_flag_create
+      9 sys_event_queue_create
+      7 sys_spu_thread_group_connect_event_all_threads
+      7 sys_event_port_create
+      7 sys_event_port_connect_local
+      7 _sys_ppu_thread_exit
+      6 sys_process_getpid
+      5 sys_spu_thread_initialize
+      5 sys_process_get_sdk_version
+      5 sys_ppu_thread_get_priority
+      5 sys_mutex_create
+      4 sys_event_flag_set
+
+== 7. IMPORTS APPELES (census periodique t=25 s, extrait non trie) ==
+I  25.435555 [2012739] census: === import inventory (periodic) t=25.0 ===
+I  50.438401 [2012739] census: === import inventory (periodic) t=50.0 ===
+I  75.442747 [2012739] census: === import inventory (periodic) t=75.0 ===
+(inventaire complet dans le log brut ; les imports cites dans RESULTS.md sont extraits tels quels)
+
+== 8. ETAT A LA FIN (le run est tue par timeout, exit 124) ==
+I 129.140685 [2012751] rsx: flip 5941 (buffer 0) worst 32.3 ms, >50ms 0, >100ms 0
+exit=124 (timeout, processus vivant)
