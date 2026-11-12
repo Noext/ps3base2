@@ -90,6 +90,9 @@ std::atomic<uint64_t> g_drains{0}, g_methods{0}, g_draws{0}, g_clears{0};
 std::atomic<uint64_t> g_releases{0}, g_references{0}, g_flips{0}, g_packets{0};
 /* GCM_FLIP_HEAD (0xE920/0xE924) is which head is next, NOT a flip (gcm_enums.h:826). */
 std::atomic<uint64_t> g_flip_heads{0};
+/* Z-DUMP: distribution of the get pointer, to see whether the reader revisits a
+ * small set of offsets (a sub-routine cycle) or walks the whole ring. */
+std::atomic<uint32_t> g_get_hist[65536]{};
 /* The decisive measurement for Z1: WHICH method numbers does this decoder actually
  * see? The native flips at 60 Hz on GCM_FLIP_COMMAND (0xFEAC >> 2). If that number
  * never appears here, the decoder is reading a different stream than the title
@@ -391,6 +394,17 @@ void drain() {
     for (;;) {
         const uint32_t put = ctrl_put();
         uint32_t get = ctrl_get();
+        {
+            /* Z-DUMP: the raw put/get/ref at the first 10 drains, as read. */
+            static std::atomic<int> cn{0};
+            const int k = cn.fetch_add(1, std::memory_order_relaxed);
+            if (k < 10)
+                LOG_INFO("ctrl10", "n=%d put=0x%08x get=0x%08x ref=0x%08x raw@ctrl=%08x %08x %08x",
+                         k, put, get, vm::read32(g_ctx + kControlOffset + 8),
+                         vm::read32(g_ctx + kControlOffset + 0),
+                         vm::read32(g_ctx + kControlOffset + 4),
+                         vm::read32(g_ctx + kControlOffset + 8));
+        }
         /* The command processor OWNS get; the guest never writes it. A get below
          * the ring's start therefore means the block was just (re)initialised to
          * zero, and reading there is reading 4 KB of zeros the guest never wrote
@@ -422,6 +436,13 @@ void drain() {
             return;
         }
         const uint32_t cmd = vm::read32(ea);
+
+        {
+            /* Z-DUMP: histogram of the 20 most frequent get offsets over the run. */
+            static std::atomic<int> gn{0};
+            if (gn.fetch_add(1, std::memory_order_relaxed) < 200000)
+                g_get_hist[(get >> 2) & 65535].fetch_add(1, std::memory_order_relaxed);
+        }
         if (cmd == 0 && get != put) {
             /* A zero header cannot be a packet: stop rather than interpret it,
              * and say where, because that is a producer bug. */
@@ -466,6 +487,20 @@ void drain() {
         const uint32_t count = (cmd >> 18) & 0x7FFu;
         const uint32_t method0 = cmd & 0xFFFCu;
         const bool noninc = (cmd & 0xE0030003u) == 0x40000000u;
+        {
+            /* Z-DUMP: the first 200 headers exactly as the loop will consume them. */
+            static std::atomic<int> hn{0};
+            const int k = hn.fetch_add(1, std::memory_order_relaxed);
+            if (k < 200) {
+                uint32_t a0 = 0, a1 = 0, a2 = 0;
+                if (count > 0) a0 = vm::read32(ea + 4);
+                if (count > 1) a1 = vm::read32(ea + 8);
+                if (count > 2) a2 = vm::read32(ea + 12);
+                LOG_INFO("hdr200",
+                         "get=0x%08x raw=0x%08x reg=0x%04x count=%u args=%08x %08x %08x",
+                         get, cmd, method0, count, a0, a1, a2);
+            }
+        }
         for (uint32_t i = 0; i < count; i++) {
             const uint32_t reg = noninc ? method0 : (method0 + i * 4u);
             const uint32_t arg = vm::read32(ea + 4 + i * 4);
@@ -495,6 +530,24 @@ void dump_method_hist() {
                              v[i].second << 2, static_cast<unsigned long long>(v[i].first));
     }
     LOG_INFO("gcmfifo", "[methods] distinct=%zu top: %s", v.size(), line);
+    {
+        /* Z-DUMP: the 20 most frequent get offsets over the whole run. */
+        std::vector<std::pair<uint32_t, uint32_t>> g;
+        for (uint32_t i = 0; i < 65536; i++) {
+            const uint32_t n2 = g_get_hist[i].load(std::memory_order_relaxed);
+            if (n2) g.push_back({n2, i << 2});
+        }
+        std::sort(g.rbegin(), g.rend());
+        char gl[512] = {0};
+        size_t gp = 0;
+        for (size_t i = 0; i < g.size() && i < 20 && gp < sizeof(gl) - 24; i++)
+            gp += std::snprintf(gl + gp, sizeof(gl) - gp, "0x%08x:%u ",
+                                g[i].second, g[i].first);
+        LOG_INFO("gcmfifo", "[gethist] distinct=%zu top20: %s", g.size(), gl);
+        LOG_INFO("gcmfifo", "[ctrl] first reads: put=0x%08x get=0x%08x ref=0x%08x",
+                 vm::read32(g_ctx + kControlOffset + 0), vm::read32(g_ctx + kControlOffset + 4),
+                 vm::read32(g_ctx + kControlOffset + 8));
+    }
     LOG_INFO("gcmfifo", "[methods] FLIP_COMMAND 0xFEAC seen: %llu   FLIP_HEAD 0xE920: %llu",
              static_cast<unsigned long long>(g_method_hist[(0xFEAC >> 2) & 2047].load()),
              static_cast<unsigned long long>(g_method_hist[(0xE920 >> 2) & 2047].load()));
