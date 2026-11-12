@@ -1,9 +1,44 @@
+/* ps3base -- cellAudio (libaudio) HLE, for Red Dead Redemption (BLES00680).
+ *
+ * The title imports seven functions (out-rdr/ppu/table.cpp:77122-77128); gta-sa
+ * imports cellAudioAddData on top of them. The behaviour and every return code
+ * below is refs/rpcs3/rpcs3/Emu/Cell/Modules/cellAudio.cpp, named per function.
+ * The state machine -- argument order, output structures, port size arithmetic,
+ * the read index, the notify events -- lives in audio_hle.h so tests/cellAudio
+ * drives exactly the code the import runs.
+ *
+ * What this module must get right, because the guest acts on it:
+ *
+ *   - CellAudioPortConfig is 32 bytes with readIndexAddr at 0 and status at 4
+ *     (vm pointers are 32-bit, refs/.../vm_ptr.h:20). portSize is the EXACT
+ *     size ch*blocks*256*4, and portAddr is the real mapped guest buffer.
+ *   - The read index at readIndexAddr is a big-endian u64 that ADVANCES once
+ *     per 5.333 ms period while the port is started. A title that polls it to
+ *     find the block to fill stalls if it never moves.
+ *   - Port start zeroes the whole port buffer, as RPCS3 does (:1850).
+ *
+ * Deviations, and why they cannot change an answer the console gives:
+ *
+ *  1. RPCS3 waits (lv2_sleep) inside PortOpen and PortStart for VSH; there is
+ *     no VSH here and the wait changes no value the caller can observe, so it is
+ *     not reproduced. The handlers are still called on the guest's thread.
+ *  2. RPCS3 dereferences guest pointers unchecked. A null or unmapped pointer
+ *     there faults the emulator; here it is refused with the code the function
+ *     returns for a bad argument, and the deviation is logged.
+ *  3. The real mixer (below) mixes into an audio device when one exists. Its
+ *     period counter is the state machine's, so the index and the events the
+ *     guest sees are the ones the console's mixer produces, device or no device.
+ */
+#include "common.h"
+#include "audio_hle.h"
+
+#include "runtime/loader.h"
 #include "runtime/placement.h"
 #include "runtime/host.h"
-#include "ppu/ops.h"
 #include "runtime/hostsleep.h"
 #include "runtime/session.h"
-#include "common.h"
+#include "../lv2/event.h"
+#include "../lv2/object.h"
 
 #include <atomic>
 #include <chrono>
@@ -32,20 +67,18 @@ namespace hle {
 
 namespace {
 
-struct Port {
-    bool open = false;
-    bool running = false;
-    uint32_t channels = 0;
-    uint32_t blocks = 0;
-    uint32_t addr = 0;
-    uint32_t size = 0;
-    uint64_t index = 0;
-};
+using namespace hle::audio;
 
 std::mutex g_lock;
-Port g_ports[8];
-uint32_t g_index_area = 0;
-std::atomic<bool> g_init{false};
+Manager g_mgr;
+std::atomic<bool> g_thread_live{false};
+
+/* One period of the audio clock, 256 samples at 48 kHz. This is the number
+ * cellAudioGetPortTimestamp multiplies a tag delta by (RPCS3 cellAudio.cpp:1006)
+ * and the interval the mixer thread wakes at. */
+constexpr uint32_t AUDIO_BLOCK_PERIOD_US = 5333;
+static_assert(BLOCK_SAMPLES * 1000000u / 48000u == AUDIO_BLOCK_PERIOD_US,
+              "the block period is AUDIO_BLOCK_SAMPLES * 1e6 / sample rate (cellAudio.cpp:1006)");
 
 #ifdef _WIN32
 struct Output {
@@ -172,6 +205,9 @@ struct Output {
 };
 #endif
 
+/* Guest floats are big-endian IEEE-754, which is what ppu::ldf32 and stf32 use
+ * (runtime/src/ppu_ops.cpp). Port buffers are guest memory, so every read and
+ * write here goes through the byte swap. */
 float be_float(const uint8_t* p) {
     uint32_t v;
     std::memcpy(&v, p, 4);
@@ -181,26 +217,38 @@ float be_float(const uint8_t* p) {
     return f;
 }
 
+/* Mixes one 256-sample block of a port into the stereo output. The channel map
+ * is RPCS3's (:1380-1420): 2ch is L/R, 8ch is L + 0.707*(C + rear L + side L). */
 void mix_block(const Port& p, uint64_t block, float* stereo) {
-    const uint8_t* src = vm::ptr(p.addr) + size_t(block) * p.channels * 256 * 4;
+    const uint8_t* src = vm::ptr(p.addr) + size_t(block) * p.num_channels * BLOCK_BYTES_PER_CHANNEL;
     const float c = 0.7071f;
-    for (uint32_t s = 0; s < 256; s++) {
-        const uint8_t* f = src + size_t(s) * p.channels * 4;
+    for (uint32_t s = 0; s < BLOCK_SAMPLES; s++) {
+        const uint8_t* f = src + size_t(s) * p.num_channels * 4;
         float l = 0.0f, r = 0.0f;
-        if (p.channels == 1) {
+        if (p.num_channels == 1) {
             l = r = be_float(f);
-        } else if (p.channels == 2) {
+        } else if (p.num_channels == 2) {
             l = be_float(f);
             r = be_float(f + 4);
         } else {
             float fl = be_float(f), fr = be_float(f + 4), fc = be_float(f + 8);
             float bl = be_float(f + 16), br = be_float(f + 20);
-            float sl = p.channels >= 8 ? be_float(f + 24) : 0.0f, sr = p.channels >= 8 ? be_float(f + 28) : 0.0f;
+            float sl = p.num_channels >= 8 ? be_float(f + 24) : 0.0f, sr = p.num_channels >= 8 ? be_float(f + 28) : 0.0f;
             l = fl + c * fc + c * bl + c * sl;
             r = fr + c * fc + c * br + c * sr;
         }
         stereo[s * 2] += l;
         stereo[s * 2 + 1] += r;
+    }
+}
+
+/* The delivery function audio::step calls once per registered notify queue. */
+void deliver(uint64_t key, uint64_t source, uint64_t d1, uint64_t d2, uint64_t d3) {
+    if (!lv2::send_event_by_key(key, source, d1, d2, d3)) {
+        static std::atomic<int> warned{0};
+        if (warned.fetch_add(1) < 4)
+            LOG_WARN("cellAudio", "notify event for key 0x%llx went nowhere (the queue was destroyed)",
+                     static_cast<unsigned long long>(key));
     }
 }
 
@@ -210,13 +258,13 @@ void audio_thread() {
     Output out;
     out.open();
     auto next = std::chrono::steady_clock::now();
-    const auto period = std::chrono::microseconds(5333);
-    std::vector<float> stereo(512);
+    const auto period = std::chrono::microseconds(AUDIO_BLOCK_PERIOD_US);
+    std::vector<float> stereo(2 * BLOCK_SAMPLES);
     uint64_t late = 0, stale = 0, blocks = 0;
-    uint64_t block_hash[8][32] = {};
+    uint64_t block_hash[PORT_COUNT][32] = {};
     const bool every_second = session::active();
     auto stats_at = std::chrono::steady_clock::now() + std::chrono::seconds(every_second ? 1 : 5);
-    while (g_init) {
+    while (g_thread_live) {
         next += std::chrono::microseconds(static_cast<int64_t>(period.count() / ppu::time_scale()));
         host::sleep_until_ns(std::chrono::duration_cast<std::chrono::nanoseconds>(next.time_since_epoch()).count());
         auto woke = std::chrono::steady_clock::now();
@@ -229,125 +277,423 @@ void audio_thread() {
             uint64_t underruns = out.underruns;
             out.underruns = 0;
 #endif
+            /* Every started port's buffer, measured rather than assumed: how
+             * many of its blocks hold a byte the guest wrote. A mixer that runs
+             * while the title never fills a block reports 0 here, which is the
+             * difference between 'audio is wired up' and 'audio is silent'. */
+            char fill[192] = {};
+            uint64_t index_writes = 0, index_last = 0;
+            {
+                std::lock_guard lk(g_lock);
+                size_t used = 0;
+                for (const Port& mp : g_mgr.ports) {
+                    if (mp.state != PortState::started || !mp.addr || !mp.size) continue;
+                    if (!vm::range_mapped(mp.addr, mp.size)) continue;
+                    const uint32_t block_bytes = mp.num_channels * BLOCK_BYTES_PER_CHANNEL;
+                    uint32_t filled = 0;
+                    for (uint32_t b = 0; b < mp.num_blocks && (b + 1) * block_bytes <= mp.size; b++) {
+                        for (uint32_t i = 0; i < block_bytes; i++) {
+                            if (vm::ptr(mp.addr)[b * block_bytes + i]) { filled++; break; }
+                        }
+                    }
+                    if (used < sizeof fill)
+                        used += static_cast<size_t>(std::snprintf(fill + used, sizeof fill - used,
+                                                                  " port%u %u/%u filled, index %llu",
+                                                                  mp.number, filled, mp.num_blocks,
+                                                                  static_cast<unsigned long long>(mp.index_last)));
+                }
+                index_writes = 0;
+                index_last = 0;
+                if (g_mgr.ports[0].state == PortState::started) {
+                    index_writes = g_mgr.ports[0].index_writes;
+                    index_last = g_mgr.ports[0].index_last;
+                }
+            }
             if (every_second || late || stale || underruns)
-                LOG_INFO("cellAudio", "audio stats: %llu blocks, %llu late wakeups, %llu stale blocks, %llu device underruns", static_cast<unsigned long long>(blocks),
-                         static_cast<unsigned long long>(late), static_cast<unsigned long long>(stale), static_cast<unsigned long long>(underruns));
+                LOG_INFO("cellAudio", "audio stats: %llu blocks, %llu late wakeups, %llu stale blocks, %llu device underruns, "
+                         "period %llu, port0 index %llu after %llu writes:%s",
+                         static_cast<unsigned long long>(blocks), static_cast<unsigned long long>(late),
+                         static_cast<unsigned long long>(stale), static_cast<unsigned long long>(underruns),
+                         static_cast<unsigned long long>(g_mgr.counter),
+                         static_cast<unsigned long long>(index_last), static_cast<unsigned long long>(index_writes),
+                         fill);
             late = stale = blocks = 0;
         }
         std::fill(stereo.begin(), stereo.end(), 0.0f);
         bool any = false;
         {
             std::lock_guard lk(g_lock);
-            for (uint32_t i = 0; i < 8; i++) {
-                Port& p = g_ports[i];
-                if (!p.open || !p.running || !p.blocks) continue;
+            for (Port& p : g_mgr.ports) {
+                if (p.state != PortState::started || !p.num_blocks) continue;
                 if (p.addr && vm::range_mapped(p.addr, p.size)) {
-                    mix_block(p, p.index, stereo.data());
+                    mix_block(p, p.cur_pos, stereo.data());
                     any = true;
-                    const uint8_t* src = vm::ptr(p.addr) + size_t(p.index) * p.channels * 256 * 4;
+                    const uint8_t* src = vm::ptr(p.addr) + size_t(p.cur_pos) * p.num_channels * BLOCK_BYTES_PER_CHANNEL;
                     uint64_t h = 1469598103934665603ull;
                     bool silent = true;
-                    for (uint32_t k = 0; k + 8 <= p.channels * 256 * 4; k += 8) {
+                    for (uint32_t k = 0; k + 8 <= p.num_channels * BLOCK_BYTES_PER_CHANNEL; k += 8) {
                         uint64_t w;
                         std::memcpy(&w, src + k, 8);
                         silent = silent && !w;
                         h = (h ^ w) * 1099511628211ull;
                     }
-                    if (!silent && p.index < 32 && block_hash[i][p.index] == h) stale++;
-                    if (p.index < 32) block_hash[i][p.index] = h;
+                    if (!silent && p.cur_pos < 32 && block_hash[p.number][p.cur_pos] == h) stale++;
+                    if (p.cur_pos < 32) block_hash[p.number][p.cur_pos] = h;
                     blocks++;
                 }
-                p.index = (p.index + 1) % p.blocks;
-                vm::write64(g_index_area + i * 8, p.index);
             }
+            /* One mixer period: advance cur_pos, publish every read index, and
+             * send one CELL_AUDIO_EVENT_MIX per registered queue. This is the
+             * same function the unit test drives. */
+            audio::step(g_mgr, deliver);
         }
         if (any && ppu::time_scale() == 1.0) {
             for (float& v : stereo) v = std::clamp(v * 0.7f, -1.0f, 1.0f);
-            out.write(stereo.data(), 256);
+            out.write(stereo.data(), BLOCK_SAMPLES);
             static FILE* dump = std::getenv("GOWA_AUDIO_DUMP") ? std::fopen(std::getenv("GOWA_AUDIO_DUMP"), "wb") : nullptr;
             if (dump) std::fwrite(stereo.data(), 4, stereo.size(), dump);
         }
     }
 }
 
+}  // namespace
+
+/* --- the calls into the host, audio_hle.h's interface --------------------- */
+
+namespace audio {
+
+uint32_t alloc_index_area(uint32_t bytes) {
+    /* RPCS3 maps 0x40000-aligned shared memory of 0x10000 (cellAudio.cpp:1531),
+     * and the index slots are 16 bytes each (:1604). */
+    return vm::alloc(vm::Region::User64K, bytes, 0x10000);
 }
 
+void free_index_area(uint32_t addr) {
+    if (addr) vm::dealloc(addr);
+}
+
+uint32_t alloc_port_buffer(uint32_t bytes) {
+    const uint32_t size = mapped_size_for(bytes);
+    return vm::alloc(vm::Region::User64K, size, 0x10000);
+}
+
+void free_port_buffer(uint32_t addr) {
+    if (addr) vm::dealloc(addr);
+}
+
+void write_index(uint32_t index_addr, uint64_t value) {
+    if (index_addr) vm::write64(index_addr, value);
+}
+
+uint64_t guest_time_us() {
+    /* The guest clock, and the one cellAudioGetPortTimestamp reports
+     * (RPCS3 get_guest_system_time, cellAudio.cpp:1964). */
+    return lv2::system_time_us();
+}
+
+uint32_t queue_create(uint64_t key, uint32_t depth, const char* name) {
+    return lv2::create_queue_by_key(key, depth, name);
+}
+
+bool queue_send(uint64_t key, uint64_t source, uint64_t d1, uint64_t d2, uint64_t d3) {
+    return lv2::send_event_by_key(key, source, d1, d2, d3);
+}
+
+bool queue_exists(uint64_t key) {
+    return lv2::queue_by_key(key) != nullptr;
+}
+
+uint32_t process_pid() {
+    /* sys_process_getpid is 1 (runtime/src/lv2/process.cpp:20). */
+    return 1;
+}
+
+uint32_t sdk_version() {
+    return loader::g_process.sdk_version;
+}
+
+}  // namespace audio
+
+/* --- the imports ---------------------------------------------------------- */
+
+/* cellAudioInit() -- refs/.../cellAudio.cpp:1520-1616. */
 HLE_FUNC(cellAudio, cellAudioInit) {
-    if (g_init.exchange(true)) return ret(ctx, static_cast<int32_t>(0x80310701));
-    g_index_area = vm::alloc(vm::Region::User64K, 0x10000, 0x10000);
+    std::lock_guard lk(g_lock);
+    const int32_t rc = audio::init(g_mgr);
+    if (rc) {
+        LOG_WARN("cellAudio", "cellAudioInit() -> 0x%08x", static_cast<uint32_t>(rc));
+        return ret(ctx, static_cast<int64_t>(rc));
+    }
+    LOG_INFO("cellAudio", "cellAudioInit: index area 0x%08x (0x%x), %u ports, sdk 0x%x", g_mgr.index_area,
+             g_mgr.index_area_size, g_mgr.free_count, loader::g_process.sdk_version);
+    g_thread_live = true;
     std::thread(audio_thread).detach();
-    LOG_INFO("cellAudio", "cellAudioInit");
     ret(ctx, 0);
 }
 
+/* cellAudioQuit() -- refs/.../cellAudio.cpp:1617-1651. */
 HLE_FUNC(cellAudio, cellAudioQuit) {
-    g_init = false;
-    ret(ctx, 0);
+    std::lock_guard lk(g_lock);
+    const int32_t rc = audio::quit(g_mgr);
+    g_thread_live = false;
+    LOG_INFO("cellAudio", "cellAudioQuit() -> 0x%08x", static_cast<uint32_t>(rc));
+    ret(ctx, static_cast<int64_t>(rc));
 }
 
+/* cellAudioPortOpen(portParam, portNum) -- refs/.../cellAudio.cpp:1652-1776. */
 HLE_FUNC(cellAudio, cellAudioPortOpen) {
-    uint32_t param = a32(ctx, 0), out = a32(ctx, 1);
-    if (!g_init) return ret(ctx, static_cast<int32_t>(0x80310702));
-    if (!param || !out) return ret(ctx, static_cast<int32_t>(0x80310703));
-    uint64_t ch = vm::read64(param), blocks = vm::read64(param + 8);
-    if (!(ch == 1 || ch == 2 || ch == 6 || ch == 8) || !(blocks == 2 || blocks == 4 || blocks == 8 || blocks == 16 || blocks == 32)) {
-        return ret(ctx, static_cast<int32_t>(0x80310703));
+    const uint32_t param = a32(ctx, 0), out = a32(ctx, 1);
+    std::lock_guard lk(g_lock);
+    uint64_t attr = 0;
+    float level = 0.0f;
+    uint32_t size = 0;
+    const int32_t rc = audio::port_open(g_mgr, param, out, &attr, &level, &size);
+    if (rc) {
+        LOG_WARN("cellAudio", "cellAudioPortOpen(param=0x%08x, portNum=*0x%08x) -> 0x%08x", param, out,
+                 static_cast<uint32_t>(rc));
+        return ret(ctx, static_cast<int64_t>(rc));
     }
-    std::lock_guard lk(g_lock);
-    for (uint32_t i = 0; i < 8; i++) {
-        Port& p = g_ports[i];
-        if (p.open) continue;
-        p = Port{};
-        p.open = true;
-        p.channels = static_cast<uint32_t>(ch);
-        p.blocks = static_cast<uint32_t>(blocks);
-        p.size = p.channels * p.blocks * 256 * 4;
-        p.addr = vm::alloc(vm::Region::User64K, p.size, 0x10000);
-        vm::write64(g_index_area + i * 8, 0);
-        vm::write32(out, i);
-        LOG_INFO("cellAudio", "port %u open: %u ch, %u blocks at 0x%08x", i, p.channels, p.blocks, p.addr);
-        return ret(ctx, 0);
-    }
-    ret(ctx, static_cast<int32_t>(0x80310705));
-}
-
-HLE_FUNC(cellAudio, cellAudioGetPortConfig) {
-    uint32_t n = a32(ctx, 0), out = a32(ctx, 1);
-    if (n >= 8 || !out) return ret(ctx, static_cast<int32_t>(0x80310703));
-    std::lock_guard lk(g_lock);
-    Port& p = g_ports[n];
-    vm::write32(out, g_index_area + n * 8);
-    vm::write32(out + 4, !p.open ? 0x1010 : p.running ? 2 : 1);
-    vm::write64(out + 8, p.channels);
-    vm::write64(out + 16, p.blocks);
-    vm::write32(out + 24, p.size);
-    vm::write32(out + 28, p.addr);
+    const uint32_t num = vm::read32(out);
+    const Port& p = g_mgr.ports[num];
+    LOG_INFO("cellAudio", "cellAudioPortOpen: port %u, %u ch, %u blocks, attr 0x%llx, level %.3f -> "
+             "portSize 0x%x at 0x%08x, readIndexAddr 0x%08x (status 0x%x)",
+             num, p.num_channels, p.num_blocks, static_cast<unsigned long long>(attr), static_cast<double>(level),
+             p.size, p.addr, p.index, STATUS_READY);
     ret(ctx, 0);
 }
 
-HLE_FUNC(cellAudio, cellAudioPortStart) {
-    uint32_t n = a32(ctx, 0);
-    if (n >= 8) return ret(ctx, static_cast<int32_t>(0x80310703));
-    std::lock_guard lk(g_lock);
-    if (!g_ports[n].open) return ret(ctx, static_cast<int32_t>(0x80310704));
-    g_ports[n].running = true;
-    ret(ctx, 0);
-}
-
-HLE_FUNC(cellAudio, cellAudioPortStop) {
-    uint32_t n = a32(ctx, 0);
-    if (n >= 8) return ret(ctx, static_cast<int32_t>(0x80310703));
-    std::lock_guard lk(g_lock);
-    g_ports[n].running = false;
-    ret(ctx, 0);
-}
-
+/* cellAudioPortClose(portNum) -- refs/.../cellAudio.cpp:1863-1898. */
 HLE_FUNC(cellAudio, cellAudioPortClose) {
-    uint32_t n = a32(ctx, 0);
-    if (n >= 8) return ret(ctx, static_cast<int32_t>(0x80310703));
+    const uint32_t num = a32(ctx, 0);
     std::lock_guard lk(g_lock);
-    if (g_ports[n].addr) vm::dealloc(g_ports[n].addr);
-    g_ports[n] = Port{};
+    const int32_t rc = audio::port_close(g_mgr, num);
+    if (rc) LOG_WARN("cellAudio", "cellAudioPortClose(%u) -> 0x%08x", num, static_cast<uint32_t>(rc));
+    else LOG_INFO("cellAudio", "cellAudioPortClose(%u) -> 0x0", num);
+    ret(ctx, static_cast<int64_t>(rc));
+}
+
+/* cellAudioPortStop(portNum) -- refs/.../cellAudio.cpp:1900-1927. */
+HLE_FUNC(cellAudio, cellAudioPortStop) {
+    const uint32_t num = a32(ctx, 0);
+    std::lock_guard lk(g_lock);
+    const int32_t rc = audio::port_stop(g_mgr, num);
+    if (rc) LOG_WARN("cellAudio", "cellAudioPortStop(%u) -> 0x%08x", num, static_cast<uint32_t>(rc));
+    else LOG_INFO("cellAudio", "cellAudioPortStop(%u) -> 0x0", num);
+    ret(ctx, static_cast<int64_t>(rc));
+}
+
+/* cellAudioGetPortConfig(portNum, portConfig) -- refs/.../cellAudio.cpp:1778-1821. */
+HLE_FUNC(cellAudio, cellAudioGetPortConfig) {
+    const uint32_t num = a32(ctx, 0), out = a32(ctx, 1);
+    std::lock_guard lk(g_lock);
+    const int32_t rc = audio::get_port_config(g_mgr, num, out);
+    if (rc) {
+        LOG_WARN("cellAudio", "cellAudioGetPortConfig(%u, 0x%08x) -> 0x%08x", num, out, static_cast<uint32_t>(rc));
+        return ret(ctx, static_cast<int64_t>(rc));
+    }
+    const Port& p = g_mgr.ports[num];
+    LOG_INFO("cellAudio", "cellAudioGetPortConfig(%u, 0x%08x): readIndexAddr 0x%08x status 0x%x nChannel %u nBlock %u "
+             "portSize 0x%x portAddr 0x%08x",
+             num, out, p.index, num < PORT_COUNT ? (p.state == PortState::started ? STATUS_RUN : p.state == PortState::opened ? STATUS_READY : STATUS_CLOSE) : 0,
+             p.num_channels, p.num_blocks, p.size, p.addr);
+    ret(ctx, 0);
+}
+
+/* cellAudioPortStart(portNum) -- refs/.../cellAudio.cpp:1823-1861. */
+HLE_FUNC(cellAudio, cellAudioPortStart) {
+    const uint32_t num = a32(ctx, 0);
+    std::lock_guard lk(g_lock);
+    const int32_t rc = audio::port_start(g_mgr, num);
+    if (rc) LOG_WARN("cellAudio", "cellAudioPortStart(%u) -> 0x%08x", num, static_cast<uint32_t>(rc));
+    else LOG_INFO("cellAudio", "cellAudioPortStart(%u) -> 0x0: buffer 0x%08x zeroed (%u bytes), readIndexAddr 0x%08x",
+                  num, g_mgr.ports[num].addr, g_mgr.ports[num].size, g_mgr.ports[num].index);
+    ret(ctx, static_cast<int64_t>(rc));
+}
+
+/* cellAudioGetPortTimestamp(portNum, tag, stamp) -- refs/.../cellAudio.cpp:1929-1968. */
+HLE_FUNC(cellAudio, cellAudioGetPortTimestamp) {
+    const uint32_t num = a32(ctx, 0), stamp = a32(ctx, 2);
+    const uint64_t tag = a64(ctx, 1);
+    std::lock_guard lk(g_lock);
+    const int32_t rc = audio::get_port_timestamp(g_mgr, num, tag, stamp);
+    LOG_INFO("cellAudio", "cellAudioGetPortTimestamp(%u, tag 0x%llx) -> 0x%08x, stamp 0x%llx", num,
+             static_cast<unsigned long long>(tag), static_cast<uint32_t>(rc),
+             static_cast<unsigned long long>(stamp && vm::range_mapped(stamp, 8) ? vm::read64(stamp) : 0));
+    ret(ctx, static_cast<int64_t>(rc));
+}
+
+/* cellAudioGetPortBlockTag(portNum, blockNo, tag) -- refs/.../cellAudio.cpp:1970-2004. */
+HLE_FUNC(cellAudio, cellAudioGetPortBlockTag) {
+    const uint32_t num = a32(ctx, 0), tag_ea = a32(ctx, 2);
+    const uint64_t block_no = a64(ctx, 1);
+    std::lock_guard lk(g_lock);
+    const int32_t rc = audio::get_port_block_tag(g_mgr, num, block_no, tag_ea);
+    LOG_INFO("cellAudio", "cellAudioGetPortBlockTag(%u, block 0x%llx) -> 0x%08x, tag 0x%llx", num,
+             static_cast<unsigned long long>(block_no), static_cast<uint32_t>(rc),
+             static_cast<unsigned long long>(tag_ea && vm::range_mapped(tag_ea, 8) ? vm::read64(tag_ea) : 0));
+    ret(ctx, static_cast<int64_t>(rc));
+}
+
+/* cellAudioCreateNotifyEventQueue(id, key) -- refs/.../cellAudio.cpp:2076-2083. */
+HLE_FUNC(cellAudio, cellAudioCreateNotifyEventQueue) {
+    const uint32_t id_ea = a32(ctx, 0), key_ea = a32(ctx, 1);
+    std::lock_guard lk(g_lock);
+    const int32_t rc = audio::create_notify_event_queue(g_mgr, id_ea, key_ea, 0);
+    if (rc) LOG_WARN("cellAudio", "cellAudioCreateNotifyEventQueue(id=0x%08x, key=0x%08x) -> 0x%08x", id_ea, key_ea,
+                     static_cast<uint32_t>(rc));
+    else LOG_INFO("cellAudio", "cellAudioCreateNotifyEventQueue: id 0x%08x key 0x%llx", vm::read32(id_ea),
+                  static_cast<unsigned long long>(vm::read64(key_ea)));
+    ret(ctx, static_cast<int64_t>(rc));
+}
+
+/* cellAudioCreateNotifyEventQueueEx(id, key, iFlags) -- refs/.../cellAudio.cpp:2083-2105. */
+HLE_FUNC(cellAudio, cellAudioCreateNotifyEventQueueEx) {
+    const uint32_t id_ea = a32(ctx, 0), key_ea = a32(ctx, 1), flags = a32(ctx, 2);
+    std::lock_guard lk(g_lock);
+    const int32_t rc = audio::create_notify_event_queue(g_mgr, id_ea, key_ea, flags);
+    LOG_INFO("cellAudio", "cellAudioCreateNotifyEventQueueEx(id=0x%08x, key=0x%08x, iFlags=0x%x) -> 0x%08x", id_ea,
+             key_ea, flags, static_cast<uint32_t>(rc));
+    ret(ctx, static_cast<int64_t>(rc));
+}
+
+/* cellAudioSetNotifyEventQueue(key) / Ex -- refs/.../cellAudio.cpp:2206-2249. */
+HLE_FUNC(cellAudio, cellAudioSetNotifyEventQueue) {
+    const uint64_t key = a64(ctx, 0);
+    std::lock_guard lk(g_lock);
+    const int32_t rc = audio::set_notify_event_queue(g_mgr, key, 0);
+    if (rc) LOG_WARN("cellAudio", "cellAudioSetNotifyEventQueue(0x%llx) -> 0x%08x",
+                     static_cast<unsigned long long>(key), static_cast<uint32_t>(rc));
+    else LOG_INFO("cellAudio", "cellAudioSetNotifyEventQueue(0x%llx) -> 0x0", static_cast<unsigned long long>(key));
+    ret(ctx, static_cast<int64_t>(rc));
+}
+
+HLE_FUNC(cellAudio, cellAudioSetNotifyEventQueueEx) {
+    const uint64_t key = a64(ctx, 0);
+    const uint32_t flags = a32(ctx, 1);
+    std::lock_guard lk(g_lock);
+    const int32_t rc = audio::set_notify_event_queue(g_mgr, key, flags);
+    LOG_INFO("cellAudio", "cellAudioSetNotifyEventQueueEx(0x%llx, 0x%x) -> 0x%08x",
+             static_cast<unsigned long long>(key), flags, static_cast<uint32_t>(rc));
+    ret(ctx, static_cast<int64_t>(rc));
+}
+
+/* cellAudioRemoveNotifyEventQueue(key) / Ex -- refs/.../cellAudio.cpp:2258-2293. */
+HLE_FUNC(cellAudio, cellAudioRemoveNotifyEventQueue) {
+    const uint64_t key = a64(ctx, 0);
+    std::lock_guard lk(g_lock);
+    const int32_t rc = audio::remove_notify_event_queue(g_mgr, key, 0);
+    LOG_INFO("cellAudio", "cellAudioRemoveNotifyEventQueue(0x%llx) -> 0x%08x",
+             static_cast<unsigned long long>(key), static_cast<uint32_t>(rc));
+    ret(ctx, static_cast<int64_t>(rc));
+}
+
+HLE_FUNC(cellAudio, cellAudioRemoveNotifyEventQueueEx) {
+    const uint64_t key = a64(ctx, 0);
+    const uint32_t flags = a32(ctx, 1);
+    std::lock_guard lk(g_lock);
+    const int32_t rc = audio::remove_notify_event_queue(g_mgr, key, flags);
+    LOG_INFO("cellAudio", "cellAudioRemoveNotifyEventQueueEx(0x%llx, 0x%x) -> 0x%08x",
+             static_cast<unsigned long long>(key), flags, static_cast<uint32_t>(rc));
+    ret(ctx, static_cast<int64_t>(rc));
+}
+
+/* cellAudioSetPortLevel(portNum, level) -- refs/.../cellAudio.cpp:2006-2044. */
+HLE_FUNC(cellAudio, cellAudioSetPortLevel) {
+    const uint32_t num = a32(ctx, 0);
+    float level = 0.0f;
+    const uint32_t raw = static_cast<uint32_t>(a64(ctx, 1));
+    std::memcpy(&level, &raw, 4);
+    std::lock_guard lk(g_lock);
+    const int32_t rc = audio::set_port_level(g_mgr, num, level);
+    LOG_INFO("cellAudio", "cellAudioSetPortLevel(%u, %.3f) -> 0x%08x", num, static_cast<double>(level),
+             static_cast<uint32_t>(rc));
+    ret(ctx, static_cast<int64_t>(rc));
+}
+
+/* cellAudioAddData(portNum, src, samples, volume) -- refs/.../cellAudio.cpp:2287-2318.
+ * Only gta-sa imports this of the three titles here; before this it resolved
+ * nowhere and the dispatcher answered a silent 0. */
+HLE_FUNC(cellAudio, cellAudioAddData) {
+    const uint32_t num = a32(ctx, 0), src = a32(ctx, 1), samples = a32(ctx, 2);
+    float volume = 0.0f;
+    const uint32_t raw = static_cast<uint32_t>(a64(ctx, 3));
+    std::memcpy(&volume, &raw, 4);
+    std::lock_guard lk(g_lock);
+    const int32_t rc = audio::add_data(g_mgr, num, src, samples, volume);
+    if (rc) LOG_WARN("cellAudio", "cellAudioAddData(%u, 0x%08x, %u, %.3f) -> 0x%08x", num, src, samples,
+                     static_cast<double>(volume), static_cast<uint32_t>(rc));
+    ret(ctx, static_cast<int64_t>(rc));
+}
+
+/* cellAudioAdd2chData(portNum, src, samples, volume) -- refs/.../cellAudio.cpp:2320-2380. */
+HLE_FUNC(cellAudio, cellAudioAdd2chData) {
+    const uint32_t num = a32(ctx, 0), src = a32(ctx, 1), samples = a32(ctx, 2);
+    float volume = 0.0f;
+    const uint32_t raw = static_cast<uint32_t>(a64(ctx, 3));
+    std::memcpy(&volume, &raw, 4);
+    std::lock_guard lk(g_lock);
+    const int32_t rc = audio::add_2ch_data(g_mgr, num, src, samples, volume);
+    if (rc) LOG_WARN("cellAudio", "cellAudioAdd2chData(%u, 0x%08x, %u, %.3f) -> 0x%08x", num, src, samples,
+                     static_cast<double>(volume), static_cast<uint32_t>(rc));
+    ret(ctx, static_cast<int64_t>(rc));
+}
+
+/* cellAudioAdd6chData(portNum, src, volume) -- refs/.../cellAudio.cpp:2382-2430. */
+HLE_FUNC(cellAudio, cellAudioAdd6chData) {
+    const uint32_t num = a32(ctx, 0), src = a32(ctx, 1);
+    float volume = 0.0f;
+    const uint32_t raw = static_cast<uint32_t>(a64(ctx, 2));
+    std::memcpy(&volume, &raw, 4);
+    std::lock_guard lk(g_lock);
+    const int32_t rc = audio::add_6ch_data(g_mgr, num, src, volume);
+    if (rc) LOG_WARN("cellAudio", "cellAudioAdd6chData(%u, 0x%08x, %.3f) -> 0x%08x", num, src,
+                     static_cast<double>(volume), static_cast<uint32_t>(rc));
+    ret(ctx, static_cast<int64_t>(rc));
+}
+
+/* cellAudioSendAck(data3) -- refs/.../cellAudio.cpp:2446-2472: the ack is
+ * recorded against the source word and always answers OK once initialised. */
+HLE_FUNC(cellAudio, cellAudioSendAck) {
+    const uint64_t data3 = a64(ctx, 0);
+    std::lock_guard lk(g_lock);
+    if (!g_mgr.is_init) return ret(ctx, static_cast<int64_t>(ERR_NOT_INIT));
+    for (KeyInfo& k : g_mgr.keys) {
+        if (k.source == data3) {
+            k.ack_timestamp = lv2::system_time_us();
+            break;
+        }
+    }
+    LOG_INFO("cellAudio", "cellAudioSendAck(0x%llx)", static_cast<unsigned long long>(data3));
+    ret(ctx, 0);
+}
+
+/* cellAudioMiscSetAccessoryVolume(devNum, volume) -- refs/...:2432-2444. */
+HLE_FUNC(cellAudio, cellAudioMiscSetAccessoryVolume) {
+    std::lock_guard lk(g_lock);
+    if (!g_mgr.is_init) return ret(ctx, static_cast<int64_t>(ERR_NOT_INIT));
+    LOG_INFO("cellAudio", "cellAudioMiscSetAccessoryVolume(%u, %.3f)", a32(ctx, 0),
+             static_cast<double>(*reinterpret_cast<const float*>(&ctx.gpr[4])));
+    ret(ctx, 0);
+}
+
+/* cellAudioSetPersonalDevice / Unset -- refs/.../cellAudio.cpp:2474-2520. */
+HLE_FUNC(cellAudio, cellAudioSetPersonalDevice) {
+    const int32_t stream = s32(ctx, 0), device = s32(ctx, 1);
+    std::lock_guard lk(g_lock);
+    if (!g_mgr.is_init) return ret(ctx, static_cast<int64_t>(ERR_NOT_INIT));
+    if (stream < 0 || stream >= 4 || (device != 0x8000 && (device < 0 || device >= 5))) {
+        return ret(ctx, static_cast<int64_t>(ERR_PARAM));
+    }
+    LOG_INFO("cellAudio", "cellAudioSetPersonalDevice(%d, %d)", stream, device);
+    ret(ctx, 0);
+}
+
+HLE_FUNC(cellAudio, cellAudioUnsetPersonalDevice) {
+    const int32_t stream = s32(ctx, 0);
+    std::lock_guard lk(g_lock);
+    if (!g_mgr.is_init) return ret(ctx, static_cast<int64_t>(ERR_NOT_INIT));
+    if (stream < 0 || stream >= 4) return ret(ctx, static_cast<int64_t>(ERR_PARAM));
+    LOG_INFO("cellAudio", "cellAudioUnsetPersonalDevice(%d)", stream);
     ret(ctx, 0);
 }
 

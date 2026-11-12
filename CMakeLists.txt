@@ -667,6 +667,20 @@ target_compile_options(voice PRIVATE ${PS3BASE_ARCH_FLAGS})
 target_link_libraries(voice PRIVATE ${CMAKE_DL_LIBS} pthread)
 add_test(NAME voice COMMAND voice)
 
+# cellAudio: libaudio against refs/.../Modules/cellAudio.cpp. Drives the state
+# machine (runtime/src/hle/audio_hle.h) with real guest memory and a stub queue,
+# so the layout of CellAudioPortConfig, the exact portSize, the advancing read
+# index and the per-period CELL_AUDIO_EVENT_MIX events are all measured, without
+# a game, a GPU or an audio device.
+add_executable(cellAudio tests/cellAudio.cpp
+    runtime/src/memory.cpp runtime/src/regions.cpp runtime/src/mem.cpp
+    runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/backtrace_port.cpp
+    runtime/src/host.cpp runtime/src/log.cpp)
+target_include_directories(cellAudio PRIVATE runtime/include "${CMAKE_SOURCE_DIR}/runtime/src" "${CMAKE_SOURCE_DIR}/runtime/src/hle")
+target_compile_options(cellAudio PRIVATE ${PS3BASE_ARCH_FLAGS})
+target_link_libraries(cellAudio PRIVATE ${CMAKE_DL_LIBS} pthread)
+add_test(NAME cellAudio COMMAND cellAudio)
+
 if(EXISTS "${CMAKE_SOURCE_DIR}/out/conformance/tests.cpp")
     add_executable(ppu_conformance tests/ppu_conformance/harness.cpp "${CMAKE_SOURCE_DIR}/out/conformance/tests.cpp")
     target_include_directories(ppu_conformance PRIVATE tests/ppu_conformance)
