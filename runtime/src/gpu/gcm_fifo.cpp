@@ -443,6 +443,25 @@ void drain() {
             if (gn.fetch_add(1, std::memory_order_relaxed) < 200000)
                 g_get_hist[(get >> 2) & 65535].fetch_add(1, std::memory_order_relaxed);
         }
+        {
+            /* V-H: the 40 first raw headers, NATIVE format and NATIVE position:
+             * /root/Dev/ps3base2/runtime/src/lv2/rsx.cpp:619 dumps BEFORE the
+             * jump/call/return classification, so a packet that one side calls a
+             * jump and the other a method appears on BOTH sides as two lines with
+             * the same get and the same cmd. Same field list, same argument count:
+             * ea, raw <cmd> <+4> <+8> <+12>, count, method, noninc, put. */
+            static std::atomic<int> hn40{0};
+            const int k40 = hn40.fetch_add(1, std::memory_order_relaxed);
+            if (k40 < 40) {
+                const uint32_t c40 = (cmd >> 18) & 0x7FFu;
+                const uint32_t m40 = cmd & 0xFFFCu;
+                const bool n40 = (cmd & 0xE0030003u) == 0x40000000u;
+                LOG_INFO("hdr40", "rsxb: ea 0x%08x raw %08x %08x %08x %08x count %u method 0x%04x noninc %d put 0x%08x",
+                         ea, cmd,
+                         vm::read32(ea + 4), vm::read32(ea + 8), vm::read32(ea + 12),
+                         c40, m40, n40 ? 1 : 0, put);
+            }
+        }
         if (cmd == 0 && get != put) {
             /* A zero header cannot be a packet: stop rather than interpret it,
              * and say where, because that is a producer bug. */
@@ -487,22 +506,6 @@ void drain() {
         const uint32_t count = (cmd >> 18) & 0x7FFu;
         const uint32_t method0 = cmd & 0xFFFCu;
         const bool noninc = (cmd & 0xE0030003u) == 0x40000000u;
-        {
-            /* V-H: the 40 first raw headers, NATIVE format (rsxb words, count,
-             * method, noninc, put) so the two logs are comparable field by field
-             * without a byte-swap step. Printed BEFORE classification, at the same
-             * point as /root/Dev/ps3base2/runtime/src/lv2/rsx.cpp:619. */
-            static std::atomic<int> hn40{0};
-            const int k40 = hn40.fetch_add(1, std::memory_order_relaxed);
-            if (k40 < 40) {
-                /* Exactly the native field list and argument count:
-                 *   ea, raw <cmd> <+4> <+8> <+12>, count, method, noninc, put. */
-                LOG_INFO("hdr40", "rsxb: ea 0x%08x raw %08x %08x %08x %08x count %u method 0x%04x noninc %d put 0x%08x",
-                         ea, cmd,
-                         vm::read32(ea + 4), vm::read32(ea + 8), vm::read32(ea + 12),
-                         count, method0, noninc ? 1 : 0, put);
-            }
-        }
         {
             /* Z-DUMP: the first 200 headers exactly as the loop will consume them. */
             static std::atomic<int> hn{0};

@@ -37,8 +37,10 @@ $ cd /root/Dev/h-V && git rev-parse HEAD
 
 Instrumentation ajoutee (logs seulement, aucun changement de comportement) :
 
-1. `runtime/src/gpu/gcm_fifo.cpp`, dans `drain()`, AU MEME POINT que le natif (avant
-   jump/call/return), tag `hdr40`, 40 premiers en-tetes au format natif exact.
+1. `runtime/src/gpu/gcm_fifo.cpp`, dans `drain()`, AU MEME POINT que le natif — AVANT le
+   decoupage jump/call/return et avant le test `cmd == 0`, exactement comme
+   `rsx.cpp:619` — tag `hdr40`, 40 premiers en-tetes au format natif exact
+   (`ea raw x4 count method noninc put`, 9 conversions, 9 arguments).
 2. `runtime/src/lv2/rsx.cpp`, en tete de `case 0x102:` de `context_attribute`, compteur
    `p102` (5 premiers puis 1 sur 120). Sans lui, un zero de flips ne distingue pas
    « 0x102 jamais appele » de « 0x102 appele mais sans effet ».
@@ -83,16 +85,30 @@ Lecture mecanique :
   premier mot (0x00041d6c au lieu de 0x00040060), et la sequence des offsets ne
   correspond plus a partir de idx2 : les deux lecteurs ne voient pas le meme flux.
 
-L'instrument `hdr40` lui-meme est correct : il imprime exactement les 9 champs du natif.
-Une premiere version imprimait 10 arguments pour 9 conversions ; elle a ete corrigee et
-le module a ete reconstruit avant la mesure ci-dessus (le log cité est `/tmp/hV-run2.log`,
-produit apres le correctif).
+L'instrument `hdr40` a ete corrige deux fois avant la mesure retenue :
+1. sa premiere version passait 10 arguments pour 9 conversions (le `put` affichait 0) ;
+2. sa deuxieme version dumpait APRES la classification, alors que le natif dumpe AVANT :
+   le meme paquet pouvait donc apparaitre comme un appel d'un cote et une methode de
+   l'autre, ce qui rend la comparaison deloyale.
+
+La mesure retenue est `/tmp/hV-run3.log` (60 s), produite apres les deux correctifs, avec
+l'instrument a la position native. Contre-epreuve : ses 40 en-tetes sont **identiques ligne
+pour ligne** a ceux de `/tmp/hV-run2.log` (90 s, instrument apres classification) :
+
+```
+$ diff <(grep -a hdr40 /tmp/hV-run2.log | sed 's/^.*hdr40: //') \
+       <(grep -a hdr40 /tmp/hV-run3.log | sed 's/^.*hdr40: //') && echo SAME
+SAME
+```
+
+Le defaut mesure n'est donc ni dans l'instrument ni dans la position du dump : il est dans
+le contenu du bloc de controle que le wasm lit.
 
 ### Critere 2 — `_gcm_intr_thread` present dans le run wasm : **FAUX**
 
 ```
-wasm (grep -ac '''_gcm_intr_thread''' /tmp/hV-run2.log) : 0
-natif (grep -ac '''_gcm_intr_thread''' /tmp/hV-native-cmdump.log) : 3
+wasm (grep -ac '_gcm_intr_thread' /tmp/hV-run3.log) : 0
+natif (grep -ac '_gcm_intr_thread' /tmp/hV-native-cmdump.log) : 3
 ```
 
 Les trois lignes natives sont la creation complete du thread (stack, create, start) ; le
@@ -103,12 +119,12 @@ wasm n'en a aucune. Les seuls threads crees cote wasm sont les deux handlers SPU
 Regle compteurs : valeur lue, pas comptage de mot.
 
 ```
-$ grep -aoE '''flips=[0-9]+''' /tmp/hV-run2.log | tail -1
+$ grep -aoE 'flips=[0-9]+' /tmp/hV-run3.log | tail -1
 flips=0
-$ grep -ac '''p102''' /tmp/hV-run2.log
+$ grep -ac 'p102' /tmp/hV-run3.log
 0
-$ grep -a '''gcmfifo: methods=''' /tmp/hV-run2.log | tail -1
-gcmfifo: methods=76499505 packets=33999781 draws=849993 clears=0 releases=566665 references=283331 flips=0 heads=0 drains=21 label255=0x00000002
+$ grep -a 'gcmfifo: methods=' /tmp/hV-run3.log | tail -1
+gcmfifo: methods=59442207 packets=26418763 draws=660468 clears=0 releases=440315 references=220156 flips=0 heads=0 drains=18 label255=0x00000002
 ```
 
 Deux zeros, et ils disent des choses differentes :
@@ -184,15 +200,30 @@ notice Social Club + « pas d'abort SPURS avant 60 s ». L'abort arrive a **23,6
 c'est bien le critere d'abort qui echoue, pas le compteur de flips (601 est en dessous
 de 2000 aussi, mais l'abort est la cause premiere : le run s'arrete la).
 
-**Ce que ce rouge est et n'est pas.** Le binaire RDR n'est PAS celui de HEAD : il date
-de 19:08 et a ete reconstruit pendant mon travail par un autre agent dans le checkout
-partage (son `main.cpp.o` et `rsx.cpp.o` sont plus recents que le mien). Sa corruption
-possible est donc a exclure avant de declarer HEAD rouge. Le log du run precedent, sur
-un binaire de 15:32 du meme checkout, montrait `flips=601` a 25 s et le meme arret — et
-le `docs/regress-baseline.md` documente que l'abort RDR « at 78-91 s » etait deja un
-probleme de milestone, tolere par le critere au-dela de 60 s. Les deux ensembles de
-mesures disent donc : RDR aborte SPURS dans la vingtaine de secondes sur ce checkout,
-a la charge de la piste SPURS, pas de ce verificateur.
+**Ce que ce rouge est et n'est pas.** Premiere hypothese : un artefact de binaire. Le
+`build-rdr/ps3base` du checkout a ete reconstruit a 19:08 par un autre agent pendant mon
+travail, donc j'ai rejoue RDR sur un binaire INDEPENDANT, bati a 18:29 dans
+`/root/Dev/wt-L2` depuis la meme ligne `da6866a` :
+
+```
+$ cd /root/Dev/wt-L2 && DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/0 \
+    PS3BASE_DISC_DIR=/root/Dev/rdr-port/vfs/dev_bdvd PS3BASE_LOG=info \
+    timeout 60 build-rdr/ps3base --no-launcher
+exit=12
+I  28.047993 rsx: flip 481 (buffer 0) worst 863.6 ms, >50ms 44, >100ms 41
+1  <- occurrences de "SPURS is aborted"
+E  33.904989 spu: thread 0x200 'SecondaryCellSpursKernel0' DMA GET REFUSED cmd 0x40 (unmapped) ea 0x00000000 size 0x80 lsa 0x1a100 pc 0x06428
+```
+
+Meme faute, meme `pc 0x06428`, meme `ea 0x00000000`, sur deux binaires distincts. Le
+rouge RDR n'est donc pas un artefact du binaire reconstruit : c'est l'etat de la ligne
+`da6866a` pour ce titre, et il appartient a la piste SPURS, pas a ce verificateur. Le
+critere 5 tel qu'enonce (« les 3 jeux verts ») est neanmoins **FAUX** et je le declare tel.
+
+Honnetete sur les deux verts : `minecraft` a tourne sur le binaire que J'AI lie depuis les
+sources de HEAD (`/tmp/ps3base-H`, installe dans `build/ps3base`) ; `gta-sa` a tourne sur
+`build-gta/ps3base` date de 09:32, donc sur un arbre anterieur a `da6866a`. Le vert gta-sa
+est un vert de NON-REGRESSION, pas une preuve d'equivalence avec HEAD.
 
 ---
 
@@ -203,7 +234,7 @@ correctement un flux ecrit dans **son** bloc de controle. Ce que j'ai mesure en 
 c'est que le flux du JEU n'arrive pas dans ce bloc :
 
 ```
-$ grep -aE '''rsx: context|reader armed''' /tmp/hV-run2.log
+$ grep -aE 'rsx: context|reader armed' /tmp/hV-run3.log
 I   1.458207 rsx: context at 0x00e00000 (hle init)
 I   1.460600 gcmfifo: reader armed: context=0x01100000 control=0x01100040 ring=0x40100000 size=0xfa000 put=get=0x1000
 ```
@@ -211,14 +242,14 @@ I   1.460600 gcmfifo: reader armed: context=0x01100000 control=0x01100040 ring=0
 et cote natif :
 
 ```
-$ grep -a '''rsx: context''' /tmp/hV-native-cmdump.log
+$ grep -a 'rsx: context' /tmp/hV-native-cmdump.log
 I   1.089138 rsx: context at 0x50100000 (driver 0x50200000 reports 0x50300000 queue 0x8d009e00)
 ```
 
 Le natif ne passe pas par notre HLE (0 ligne `gcmstub`, 0 ligne `imp119`), le wasm oui :
 
 ```
-$ grep -ac '''imp119''' /tmp/hV-run2.log ; grep -ac '''gcmstub''' /tmp/hV-run2.log
+$ grep -ac 'imp119' /tmp/hV-run3.log ; grep -ac 'gcmstub' /tmp/hV-run3.log
 1
 1
 ```
@@ -269,7 +300,8 @@ Non etabli :
 | `runtime/src/gpu/gcm_fifo.cpp` | instrument `hdr40` (format natif exact), 40 en-tetes |
 | `runtime/src/lv2/rsx.cpp` | compteur `p102` sur `context_attribute(0x102)` |
 | `tests/rsx_fifo_synth.{sh,cpp}`, `_support.cpp` | importes de 8df4d6b, inchanges |
-| `/tmp/hV-run2.log` | run wasm instrumente, 90 s, 43 Mo (hdr40=40, p102=0, intr=0, flips=0) |
+| `/tmp/hV-run3.log` | run wasm RETENU, instrument a la position native (hdr40=40, p102=0, intr=0, flips=0) |
+| `/tmp/hV-run2.log` | run intermediaire (instrument apres classification) : memes 40 en-tetes, defaut hors instrument |
 | `/tmp/hV-native-cmdump.log` | run natif HEAD, 45 s, GOWA_FIFO_CMDUMP=500 (intr=3) |
 | `/tmp/hV-synth.log` | `tests/rsx_fifo_synth.sh` vert : 12 PASS / 0 FAIL |
 | `/tmp/out-V` | cache d'objets + module de reference (137 Mo) |
