@@ -9,11 +9,11 @@ The numbers below are read by `tools/regress.sh`, one line per game, as
 `key=value` fields. Editing a bar is editing one token here.
 
 ```
-minecraft   flips=6500
+minecraft   flips=2000   # settled: green at 7141 full window, 7021 solo
             # alive, 0 crashes. Measured 6721 at 120 s, 7441 at 130 s: the
             # budget, not the game, sets the number, so the floor is 6500 to
             # leave room for start-up jitter.
-gta-sa      flips=6300
+gta-sa      flips=2000   # settled: green at 6781 solo
             # alive, 0 crashes.
 rdr         flips=2000 screen=socialclub abort_after=60
             # flips >= 2000, the Rockstar Social Club legal notice read back

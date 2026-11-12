@@ -137,6 +137,21 @@ run_one() {
         return 2
     fi
 
+    # A previous game can leave its guest running: the sampler kills the shell,
+    # not the child, and a stray ps3base keeps burning every core while the next
+    # title is being measured. That is not a regression of the title, so it is
+    # removed and the load is reported, rather than silently lowering the flips.
+    for p in /proc/[0-9]*; do
+        c=$(tr "\0" " " < "$p/cmdline" 2>/dev/null) || continue
+        case "$c" in
+            *ps3base*--no-launcher*)
+                [ "$(cat "$p/comm" 2>/dev/null)" != "tmux: server" ] && kill -9 "${p#/proc/}" 2>/dev/null
+                ;;
+        esac
+    done 2>/dev/null
+
+    load=$(cut -d" " -f1 /proc/loadavg)
+    printf "%-12s (load %s before the run)\n" "$name" "$load"
     # Bounded because this run is measured, not watched. The title is started in
     # the background so the frame sampler can read the display while it runs;
     # the sampler stops as soon as the marker is seen.
