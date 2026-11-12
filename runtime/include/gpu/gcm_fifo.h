@@ -64,5 +64,8 @@ struct Stats {
 };
 void stats(Stats* out);
 
+/* Top method numbers seen, printed once: does the flip command appear at all? */
+void dump_method_hist();
+
 }  // namespace gcm
 }  // namespace gpu

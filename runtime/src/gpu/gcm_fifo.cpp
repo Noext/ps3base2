@@ -5,7 +5,11 @@
 #include "runtime/regions.h"
 #include "runtime/reservation.h"
 
+#include <algorithm>
 #include <atomic>
+#include <cstdio>
+#include <utility>
+#include <vector>
 #include <cstdint>
 #include <cstring>
 
@@ -84,6 +88,15 @@ Regs g_regs;
 
 std::atomic<uint64_t> g_drains{0}, g_methods{0}, g_draws{0}, g_clears{0};
 std::atomic<uint64_t> g_releases{0}, g_references{0}, g_flips{0}, g_packets{0};
+/* GCM_FLIP_HEAD (0xE920/0xE924) is which head is next, NOT a flip (gcm_enums.h:826). */
+std::atomic<uint64_t> g_flip_heads{0};
+/* The decisive measurement for Z1: WHICH method numbers does this decoder actually
+ * see? The native flips at 60 Hz on GCM_FLIP_COMMAND (0xFEAC >> 2). If that number
+ * never appears here, the decoder is reading a different stream than the title
+ * writes, and no amount of counting will produce a flip. */
+std::atomic<uint64_t> g_method_hist[2048]{};
+/* Self-jumps are the guest's idle marker, NOT the end of the ring (track X4). */
+std::atomic<uint64_t> g_idle_selfjumps{0};
 std::atomic<uint32_t> g_sema_timeouts{0};
 std::atomic<uint32_t> g_unmapped_stops{0};
 std::atomic<bool> g_logged_first_release{false};
@@ -187,6 +200,9 @@ void write_release(uint32_t addr, uint32_t value, const char* what) {
  * the drawing methods need a GPU and their effect is exactly what this build
  * omits. */
 void execute(uint32_t method, uint32_t arg) {
+    /* Record the method number BEFORE dispatching, so the histogram is the stream
+     * as decoded, not as classified. */
+    g_method_hist[(method >> 2) & 2047].fetch_add(1, std::memory_order_relaxed);
     switch (method) {
     case 0x0050: /* NV406E_SET_REFERENCE */
         g_regs.last_reference = arg;
@@ -241,8 +257,18 @@ void execute(uint32_t method, uint32_t arg) {
         g_draws.fetch_add(1, std::memory_order_relaxed);
         return;
     case 0x1D94: g_clears.fetch_add(1, std::memory_order_relaxed); return;
+    /* refs/rpcs3/rpcs3/Emu/RSX/gcm_enums.h:826-829:
+     *   GCM_FLIP_HEAD    = 0x0000E920 >> 2   // 0xE920:0xE924, flip head 0 or 1
+     *   GCM_FLIP_COMMAND = 0x0000FEAC >> 2   // <- THIS is the flip, bound to
+     *                                         //    flip_command in rsx_methods.cpp:1773
+     * Counting 0xE920/0xE924 counted FLIP_HEAD (which head is next), not the flip
+     * itself. That is why flips stayed 0 while the stream was full of activity. */
+    case 0xFEAC:
+        g_flips.fetch_add(1, std::memory_order_relaxed);
+        g_method_hist[(0xFEAC >> 2) & 2047].fetch_add(1, std::memory_order_relaxed);
+        return;
     case 0xE920:
-    case 0xE924: g_flips.fetch_add(1, std::memory_order_relaxed); return;
+    case 0xE924: g_flip_heads.fetch_add(1, std::memory_order_relaxed); return;
     default: return;
     }
 }
@@ -260,12 +286,15 @@ void report() {
      * report is keyed to the packet count instead. */
     if (n - last < 2000) return;
     last = n;
-    LOG_INFO("gcmfifo", "methods=%llu packets=%llu draws=%llu clears=%llu releases=%llu references=%llu flips=%llu drains=%llu label255=0x%08x",
+    LOG_INFO("gcmfifo", "methods=%llu packets=%llu draws=%llu clears=%llu releases=%llu references=%llu flips=%llu heads=%llu drains=%llu label255=0x%08x",
              (unsigned long long)n, (unsigned long long)g_packets.load(),
              (unsigned long long)g_draws.load(), (unsigned long long)g_clears.load(),
              (unsigned long long)g_releases.load(), (unsigned long long)g_references.load(),
-             (unsigned long long)g_flips.load(), (unsigned long long)g_drains.load(),
-             label_base() ? vm::read32(label_base() + 0x10 * 255) : 0);
+             (unsigned long long)g_flips.load(), (unsigned long long)g_flip_heads.load(), (unsigned long long)g_drains.load(),
+                      label_base() ? vm::read32(label_base() + 0x10 * 255) : 0);
+    /* Once, at the 40th report, print which method numbers the decoder actually saw. */
+    static std::atomic<int> once{0};
+    if (once.fetch_add(1, std::memory_order_relaxed) == 40) dump_method_hist();
 }
 
 void init(uint32_t context_ea, uint32_t fifo_ea, uint32_t fifo_size) {
@@ -311,11 +340,6 @@ uint32_t label_address(uint32_t index) { return label_base() + 0x10 * index; }
 int32_t ea_to_io(uint32_t ea, uint32_t* io) { return ea_to_io_impl(ea, io); }
 
 uint32_t io_to_ea(uint32_t io) { return io_to_ea_impl(io); }
-
-/* Self-jumps are the guest's idle marker, NOT the end of the ring. Counted
- * separately so the two are never confused again: track X4 measured 48 stalls per
- * run where get never reached put because this returned instead of continuing. */
-static std::atomic<uint64_t> g_idle_selfjumps{0};
 
 void drain() {
     if (!g_ctx) return;
@@ -453,6 +477,27 @@ void drain() {
         if (next == get) return;
         ctrl_set_get(next);
     }
+}
+
+/* Top method numbers seen, printed once at the end of a run: the measurement Z1 asks
+ * for -- does GCM_FLIP_COMMAND (0xFEAC >> 2 = 14955) appear in this stream at all? */
+void dump_method_hist() {
+    std::vector<std::pair<uint64_t, uint32_t>> v;
+    for (uint32_t i = 0; i < 2048; i++) {
+        const uint64_t n = g_method_hist[i].load(std::memory_order_relaxed);
+        if (n) v.push_back({n, i});
+    }
+    std::sort(v.rbegin(), v.rend());
+    char line[512] = {0};
+    size_t pos = 0;
+    for (size_t i = 0; i < v.size() && i < 24 && pos < sizeof(line) - 24; i++) {
+        pos += std::snprintf(line + pos, sizeof(line) - pos, "0x%04x:%llu ",
+                             v[i].second << 2, static_cast<unsigned long long>(v[i].first));
+    }
+    LOG_INFO("gcmfifo", "[methods] distinct=%zu top: %s", v.size(), line);
+    LOG_INFO("gcmfifo", "[methods] FLIP_COMMAND 0xFEAC seen: %llu   FLIP_HEAD 0xE920: %llu",
+             static_cast<unsigned long long>(g_method_hist[(0xFEAC >> 2) & 2047].load()),
+             static_cast<unsigned long long>(g_method_hist[(0xE920 >> 2) & 2047].load()));
 }
 
 void stats(Stats* out) {
