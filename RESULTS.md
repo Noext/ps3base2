@@ -142,7 +142,111 @@ That is the lost update, silent, and it is the same version the SPU path uses fo
 every one of its waits (`spu/thread.cpp:279 rsv::lost`, `:418 rsv::wait_parked`),
 so a raw memset also makes the writer of a watched field invisible.
 
+## Measurement 2 -- the funnel on the real title (RDR, 180 s window)
+
+Rebuilt after rebasing onto main da6866a (which is L2's line-granular
+reservation; see "Interaction with L2" below).
+
+    cd /root/Dev/wt-L3 && ulimit -s unlimited
+    nohup setsid env DISPLAY=:952 XDG_RUNTIME_DIR=/run/user/0 \
+      PS3BASE_DISC_DIR=/root/Dev/rdr-port/vfs/dev_bdvd PS3BASE_LOG=info \
+      timeout 180 ./build-52/ps3base --no-launcher > /tmp/L3.log 2>&1 < /dev/null &
+
+    I  30.088542 [3445720] main: pgw: 3344 host writes, 25944447 bytes, 0 staged for overlap
+    ...
+    I  30.599869 [3445771] process: _sys_process_exit(0x8001000c)
+    The SPU exception occurred on the task#0, NPC=0x6428
+
+Read: the funnel is on the path the title actually takes -- 3 344 host writes,
+25.9 MB, by t=30 s. Zero staged for overlap means the RSX blit rows did not hit
+the aliasing branch in this run, which is expected: that branch is the overlap
+case and this run's copies did not overlap.
+
+The abort at 30.6 s is the pre-existing libspurs exit measured by the
+orchestrator (0x8001000c, NPC 0x6428, "The SPU exception occurred on task#0"),
+not a consequence of this change: same failure, same NPC, before and after.
+
+### Interaction with L2, which landed on main while this was running
+
+L2's own commit message names this task's sites:
+
+    The version counter alone cannot see the last of those: 81 sites in this
+    tree write vm::ptr directly (runtime/src/loader.cpp:80, the HLE handlers,
+    the RSX uploader) and never reach rsv::, so no version bump happens. The
+    snapshot is therefore the full line and commit_if compares it byte for byte
+    against what the line holds now.
+
+So L2 closes the correctness hole by comparing the whole 128-byte line, which
+catches a bypass write by its DATA. The funnel is still required, for three
+measured reasons:
+
+1. L2's comparison is a data comparison. An A-B-A bypass write -- write, then
+   write the original bytes back -- is invisible to it and is exactly what
+   tests/host_write_invalidation.cpp measures: the raw form COMMITS, the funnel
+   makes the store fail.
+2. L2's fix covers rsv::commit_if only. The SPU wait paths
+   (spu/thread.cpp:279 rsv::lost, :418 rsv::wait_parked) read the version, not a
+   line snapshot, so a bypass write still fails to wake a parked SPU waiter.
+3. The watches (block/line/code) are fed only from rsv::, so a bypass write was
+   and still is invisible to them. That is the "invisible host writes" this task
+   is named for.
+
+## Measurement 3 -- the read watch on the orchestrator's guard word
+
+    PS3BASE_GUARD=0x0177caa8-0x0177cac0 PS3BASE_GUARD_MAX=24 timeout 45 ./build-52/ps3base --no-launcher
+
+    I   0.021092 [3457075] vm: guard 0x0177caa8-0x0177cac0 armed
+    I   8.799824 [3457096] guard: write 0x0177caa8 by main_thread
+    I   8.921492 [3457096] guard:    <- libc.so.6+0x188ddb <- rsv::store_range(unsigned int, unsigned char const*, unsigned int)+0x5d0 <- exe+0x63b640c <- exe+0x48a9597 <- exe+0x48aaa48 <- exe+0x48ae146 <- exe+0x48d63c2 <- exe+0x48d7972 <- exe+0x48d96ed <- exe+0x7fec568 <- exe+0x1acef47 <- ppu::call_indirect(ppu::Context&, unsigned char*, unsigned int)+0x953
+
+(the same stack again with +0x63b67e5 instead of +0x63b640c -- two distinct
+ guest sites, both entering through rsv::store_range)
+
+    I   9.119164 [3457096] guard: read 0x0177caa8 by main_thread
+    I   9.180025 [3457096] guard:    <- exe+0x63b65e6 <- exe+0x48a9597 <- exe+0x48aaa48 <- exe+0x48ae146 <- exe+0x48d63c2 <- exe+0x48d7972 <- exe+0x48d96ed <- exe+0x7fec568 <- exe+0x1acef47 <- ppu::call_indirect(ppu::Context&, unsigned char*, unsigned int)+0x953 <- exe+0x1ac2c3c <- ppu::call_indirect(ppu::Context&, unsigned char*, unsigned int)+0x953
+
+    counts in the same run, by address and direction:
+          4 guard: write 0x0177caa8
+          4 guard: write 0x0177caa4
+          2 guard: read  0x0177c920
+          2 guard: read  0x0177c91c
+          ... (each of 0x0177c904..0x0177c920 twice, the lock table the guest scans)
+
+Read: the guard word 0x0177caa8 is written AND read by main_thread, and the READ
+has a different host stack from the write -- the reader is at exe+0x63b65e6 with
+no rsv::store_range frame, i.e. the guest's own load path, while the writer
+enters through rsv::store_range from exe+0x63b640c / exe+0x63b67e5. That is the
+first measurement in this campaign that distinguishes the reader of 0x0177caa8
+from its writer, which is what a read watch exists for.
+
+The guard also proves it is non-fatal: the run continued past every hit to the
+45 s timeout and reached 301 flips, where a fatal fault on a page the title uses
+would have killed it at t=8.8 s.
+
+## Test and build state after the rebase
+
+    cd /root/Dev/wt-L3/build-52 && ctest --output-on-failure -j 4
+    100% tests passed, 0 tests failed out of 36
+    Total Test time (real) =   3.28 sec
+
+36 tests is main's 35 plus tests/host_write_invalidation.cpp (20 checks).
+
+The funnel is HEADER-ONLY (runtime/include/runtime/pgwrite.h). That is a measured
+corrective: the first version was a .cpp in ps3base_ppu_ops and it broke 20 test
+links, because each of those binaries names the runtime sources it links
+explicitly and would each have needed runtime/src/pgwrite.cpp on its own line:
+
+    /usr/bin/ld: CMakeFiles/mmapper_conformance.dir/tests/mmapper_conformance.cpp.o:
+      in function lv2::(anonymous namespace)::search_and_map(...):
+      runtime/src/lv2/mmapper.cpp:340: undefined reference to
+      pgw::write(unsigned int, void const*, unsigned int)
+
+A header-only funnel is one definition-complete header every one of those
+binaries already includes through memory.h.
+
 ## Status
 
-running. Next: the same measurement in the full RDR run, and the fleet's tests
-after the rebase.
+done. Funnel (97 sites -> 3 entry points), read watch, non-fatal page guard, and
+the invalidation measurement are all in; 36/36 ctest after the rebase onto
+da6866a; the funnel measured live on RDR at 3 344 host writes / 25.9 MB by t=30 s.
+
