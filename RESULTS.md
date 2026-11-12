@@ -129,3 +129,97 @@ The frame the script itself captured and matched at 13 s is kept as
 
     For details, official rules, or to opt-out of certain Social Club features visit
     http:/www.rockstargames.com/socialclub/privacy
+
+### M4 -- negative controls: the criterion can fail
+
+A test that cannot fail is not a criterion. Two runs with the bar deliberately
+moved prove each half of it is load-bearing. Neither edit is kept.
+
+**Marker removed** (screen=ZZNOTONSCREEN, everything else unchanged):
+
+    $ sed -i 's/screen=socialclub/screen=ZZNOTONSCREEN/' docs/regress-baseline.md
+    $ DISPLAY_NUM=:920 SECONDS_PER_GAME=120 tools/regress.sh rdr
+    regress: 120s per game on display :920
+    rdr          FAIL  SPURS abort     flips=2341   crashes=0   screen=MISSING abort=at 85s log=/tmp/regress-rdr.log
+
+    regress: 1 game(s) REGRESSED
+    exit=1
+
+The flips and the timing are identical to the passing run; only the frame check
+decides, and it fails. That is the point of reading the pixels: a high flip
+count alone is what used to pass a black screen.
+
+**Deadline moved past the abort** (abort_after=200, everything else unchanged):
+
+    $ sed -i 's/abort_after=60/abort_after=200/' docs/regress-baseline.md
+    $ DISPLAY_NUM=:920 SECONDS_PER_GAME=120 tools/regress.sh rdr
+    regress: 120s per game on display :920
+    rdr          FAIL  SPURS abort     flips=2641   crashes=0   screen=socialclub@14s abort=at 98s log=/tmp/regress-rdr.log
+
+    regress: 1 game(s) REGRESSED
+    exit=1
+
+The notice is read at 14 s and the flip floor is met, but the abort at 98 s is
+before the 200 s deadline, so the run fails. The deadline half is measured too,
+and "no abort before 60 s" is enforced rather than assumed.
+
+### M5 -- Minecraft and GTA under the same script
+
+The change is additive: minecraft and gta-sa keep expectation kind 'alive' and
+their floors of 6500 and 6300 come from the same file, now as flips=6500 and
+flips=6300 instead of the old "flips >= N" prose. Measured with the new script,
+on this machine:
+
+    $ cd /root/Dev/wt-T5 && DISPLAY_NUM=:920 SECONDS_PER_GAME=120 tools/regress.sh
+    regress: 120s per game on display :920
+    minecraft    FAIL  alive           flips=5761   crashes=0   log=/tmp/regress-minecraft.log
+    gta-sa       PASS  alive           flips=6301   crashes=0
+    rdr          PASS  SPURS abort     flips=2641   crashes=0 screen=socialclub@14s abort=at 97s
+
+    regress: 1 game(s) REGRESSED
+    exit=1
+
+That minecraft line is load, not the script: the shared machine was at load
+average 18.01 at the time (other agents' builds and runs). Re-run alone once the
+load fell, with no code change in between:
+
+    $ uptime
+     07:54:13 up 2 days, 12:12,  0 user,  load average: 2.37, 7.02, 9.38
+    $ DISPLAY_NUM=:920 SECONDS_PER_GAME=120 tools/regress.sh minecraft
+    regress: 120s per game on display :920
+    minecraft    PASS  alive           flips=6721   crashes=0
+
+    regress: all present games passed (0 skipped)
+    exit=0
+
+and GTA alone, at load 2.91:
+
+    $ DISPLAY_NUM=:920 SECONDS_PER_GAME=120 tools/regress.sh gta-sa
+    regress: 120s per game on display :920
+    gta-sa       PASS  alive           flips=6481   crashes=0
+
+    regress: all present games passed (0 skipped)
+    exit=0
+
+So minecraft 6500 and gta-sa 6300 are unchanged as floors and both still pass
+when the machine is not oversubscribed; 6721 and 6481 flips are the measured
+values against them.
+
+### M6 -- how the bar is raised from here
+
+The RDR bar is one line in docs/regress-baseline.md, and the script has no RDR
+numbers in it:
+
+    rdr         flips=2000 screen=socialclub abort_after=60
+
+Each later milestone is one edit to that line plus a History row:
+
+| milestone | edit |
+|---|---|
+| press Start accepted, main menu drawn | screen=<marker read from that frame>, abort_after=120 |
+| a rendered scene rather than a menu | screen=<marker read from that frame>, flips raised to the measured value |
+| no abort at all in the budget | abort_after=9999, so only the notice and the flips decide |
+
+The measurement that will set each number is the same one used here: capture the
+frame, read it, count the flips, and note the second at which the first SPURS
+assertion appears.
