@@ -1,1 +1,1 @@
-{"status":"running","agent":"U1","task":"DMA lists GETL/PUTL conformance"}
+{"status":"done","agent":"U1","task":"DMA lists GETL/PUTL conformance","result":"refuted: fault is MFC_GET 0x40, 0 notify bits in 122478 elements; 2 real list defects fixed; 64-check unit test including post-stall element fill"}
