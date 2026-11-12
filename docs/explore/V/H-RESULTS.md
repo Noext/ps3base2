@@ -292,6 +292,34 @@ parce que ce ne sont pas les memes blocs.
 | natif `tools/regress.sh` | — | oui, serialise, binaire lie depuis les sources de HEAD | **2 VERTS / 1 ROUGE** : minecraft 6481, gta-sa 6001, rdr abort SPURS 23,6 s (33,9 s binaire independant, 44,5 s headless) | oui (mesure, pas de code) |
 | mes instruments (`hdr40`, `p102`) + le test importe | « mesurer au meme point et au meme format que le natif » | oui, sur `explore/hV` rebase | **livre** : 6 fichiers, +945 lignes, 0 suppression | oui — `235529f..bb84906` |
 
+### 4.1 La fusion
+
+`explore/hV` a ete rebase sur `origin/main` juste avant de conclure, puis poussee en
+ff-only et serialisee :
+
+```
+$ git merge-base --is-ancestor origin/main HEAD && echo FF-POSSIBLE
+FF-POSSIBLE
+$ git push origin HEAD:main
+   235529f..b9d7510  HEAD -> main
+$ git ls-remote origin refs/heads/main
+b9d75103ccbcd1d976bc6260af8cd065a43b8d1a  refs/heads/main
+```
+
+Controle de forme demande par la file de fusion, mesure APRES la fusion :
+
+```
+suppressions introduites par le push (235529f..origin/main) : 0
+fichiers de MON diff (375f0e5..HEAD)                        : 6, tous ajoutes ou modifies
+V/RESULTS.md sur main apres fusion                          : 488 lignes, exactement l'original
+hdr40 dans runtime/src/gpu/gcm_fifo.cpp sur main            : present
+p102  dans runtime/src/lv2/rsx.cpp sur main                 : present
+```
+
+Le push a avance `main` de 341 commits. Cinq sont les miens ; les 336 autres sont la
+ligne trunk wasm (375f0e5 et ses ancetres) que `wasm-base` portait deja et que `main`
+n'avait pas encore. Ils ne sont pas de moi et ne modifient aucune de mes mesures.
+
 ---
 
 ## 5. Ce que ce travail etablit, et ce qu'il n'etablit pas
