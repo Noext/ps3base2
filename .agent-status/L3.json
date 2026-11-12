@@ -1,0 +1,9 @@
+{
+  "status": "running",
+  "agent": "L3",
+  "task": "invisible host writes: funnel pgwrite, read watch, non-fatal page guard",
+  "branch": "explore/l3",
+  "worktree": "/root/Dev/wt-L3",
+  "results": "/root/Dev/wt-L3/RESULTS.md",
+  "started": "2026-11-12T17:52:00Z"
+}
