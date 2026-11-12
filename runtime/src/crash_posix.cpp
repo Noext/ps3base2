@@ -288,8 +288,10 @@ bool trap_fault(uint32_t g, bool is_write, ucontext_t* uc) {
         const Trap& t = g_traps[i];
         if (uint64_t(g) + 16 <= t.addr || uint64_t(g) >= uint64_t(t.addr) + t.len) continue;
         if (!is_write && !t.reads) continue;
-        PendingHit h{i, g, is_write, 0, 0, 0, {}, {}, 0};
-        h.thread[0] = 0;
+        PendingHit h{};
+        h.trap = i;
+        h.fault = g;
+        h.write = is_write;
         h.self_read = self_read;
         guest::Thread* th = guest::current();
         if (th) {
