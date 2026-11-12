@@ -201,7 +201,11 @@ void log_change(uint32_t line, uint32_t offset, const uint8_t* data, uint32_t si
     if (n) LOG_INFO("rsv", "%s line 0x%08x:%s", how, line, buf);
 }
 
-bool commit_if(uint32_t line, uint64_t rtime, const uint8_t* expected, const uint8_t* data, uint32_t offset, uint32_t size, bool data_only) {
+bool commit_if(uint32_t line, uint64_t rtime, const uint8_t* expected, const uint8_t* data, uint32_t offset, uint32_t size, bool data_only, const char* how, uint32_t write_offset, uint32_t write_size) {
+    if (write_offset == UINT32_MAX) {
+        write_offset = offset;
+        write_size = size;
+    }
     Entry& e = entry(line);
     static const bool strict = std::getenv("GOWA_RSV_STRICT") != nullptr;
     if ((strict || !data_only) && e.ver.load(std::memory_order_acquire) != rtime) {
@@ -222,8 +226,9 @@ bool commit_if(uint32_t line, uint64_t rtime, const uint8_t* expected, const uin
     }
     rlog("commit_ok", line, "offset=%u size=%u rtime=%llu", offset, size,
          static_cast<unsigned long long>(rtime));
-    if (g_logged) log_change(line, offset, data, size, size == 128 ? "putllc" : "stcx");
-    cw::block_store(line + offset, size, data, size == 128 ? "rsv::commit_if putllc" : "rsv::commit_if stcx");
+    const char* label = how ? how : (size == 128 ? "putllc" : "stcx");
+    if (g_logged) log_change(line, offset, data, size, label);
+    cw::block_store(line + write_offset, write_size, data + write_offset, label);
     uint8_t* dst = vm::ptr(line + offset);
     for (uint32_t i = 0; i < size; i += 8) {
         uint64_t want, was;

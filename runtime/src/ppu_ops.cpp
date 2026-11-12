@@ -77,15 +77,27 @@ double time_scale() {
 
 namespace {
 
-void reserve(Context& ctx, uint8_t* base, uint32_t blk) {
-    auto& ver = rsv::version(blk);
+/* A reservation is the whole 128-byte line, as on Cell: lwarx at line+0x10
+ * reserves line+0x00..line+0x7f, and ANY agent that writes the line in between
+ * cancels it -- a PPU store, an SPU put, or a host write straight into the
+ * mapping.
+ *
+ * The version counter alone cannot see the last of those: 81 sites in this tree
+ * write vm::ptr directly (runtime/src/loader.cpp:80, the HLE handlers, the RSX
+ * uploader) and never reach rsv::, so no version bump happens. The snapshot is
+ * therefore the full line and commit_if compares it byte for byte against what
+ * the line holds now, which is what makes a bypass write visible. RPCS3 does the
+ * same thing in ppu_store_reservation: it rejects the store when
+ * \`old_data != data\` OR the version moved. */
+void reserve(Context& ctx, uint8_t* base, uint32_t line) {
+    auto& ver = rsv::version(line);
     for (;;) {
         uint64_t v1 = ver.load(std::memory_order_acquire);
         if (v1 & 64) {
             _mm_pause();
             continue;
         }
-        std::memcpy(ctx.rdata, base + blk, 8);
+        std::memcpy(ctx.rdata, base + line, 128);
         std::atomic_thread_fence(std::memory_order_acquire);
         if (ver.load(std::memory_order_acquire) == v1) {
             ctx.rtime = v1;
@@ -97,36 +109,39 @@ void reserve(Context& ctx, uint8_t* base, uint32_t blk) {
 }
 
 uint32_t lwarx(Context& ctx, uint8_t* base, uint32_t ea) {
-    uint32_t blk = ea & ~7u;
-    reserve(ctx, base, blk);
+    reserve(ctx, base, ea & ~127u);
     ctx.raddr = ea | 1;
     uint32_t v;
-    std::memcpy(&v, ctx.rdata + (ea & 7u), 4);
+    std::memcpy(&v, ctx.rdata + (ea & 127u), 4);
     return __builtin_bswap32(v);
 }
 
 uint64_t ldarx(Context& ctx, uint8_t* base, uint32_t ea) {
-    uint32_t blk = ea & ~7u;
-    reserve(ctx, base, blk);
+    reserve(ctx, base, ea & ~127u);
     ctx.raddr = ea | 1;
     uint64_t v;
-    std::memcpy(&v, ctx.rdata, 8);
+    std::memcpy(&v, ctx.rdata + (ea & 127u), 8);
     return __builtin_bswap64(v);
 }
 
 namespace {
 
 bool store_conditional(Context& ctx, uint8_t* base, uint32_t ea, const void* bytes, uint32_t size) {
-    if (!(ctx.raddr & 1) || ((ctx.raddr & ~7u) != (ea & ~7u))) {
+    /* The store may target any word of the reserved line, but it must not cross
+     * the line and it must land inside the line that was reserved. */
+    const uint32_t line = ea & ~127u;
+    const uint32_t off = ea & 127u;
+    if (!(ctx.raddr & 1) || ((ctx.raddr & ~127u) != line) || off + size > 128) {
         ctx.raddr = 0;
         return false;
     }
     ctx.raddr = 0;
-    uint32_t blk = ea & ~7u;
-    uint8_t data[8];
-    std::memcpy(data, ctx.rdata, 8);
-    std::memcpy(data + (ea - blk), bytes, size);
-    return rsv::commit_if(blk & ~127u, ctx.rtime, ctx.rdata, data, blk & 127u, 8);
+    uint8_t data[128];
+    std::memcpy(data, ctx.rdata, 128);
+    std::memcpy(data + off, bytes, size);
+    /* expected is the full line as it was at lwarx; commit_if fails if anything
+     * wrote any byte of it since, including a write that never touched rsv::. */
+    return rsv::commit_if(line, ctx.rtime, ctx.rdata, data, 0, 128, false, size == 8 ? "stdcx" : "stwcx", off, size);
 }
 
 }

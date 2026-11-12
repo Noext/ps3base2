@@ -58,3 +58,44 @@ Three separate defects, all from the same 8-byte granule:
    comparison has to be against the line's actual bytes, not only the version.
 
 
+## Measurement 3 -- the fix: the reservation is the line, and the comparison is the line's bytes
+
+runtime/src/ppu_ops.cpp: reserve() now snapshots the whole 128-byte line at
+`ea & ~127`, lwarx/ldarx read their value out of that snapshot at `ea & 127`,
+store_conditional() accepts a target anywhere inside the reserved line (refusing
+only an unaligned reservation, a different line, or a store that would cross the
+line), and commits with `commit_if(line, rtime, rdata, data, 0, 128)` -- expected
+and data both the full line.
+
+commit_if already had the property that matters: it re-reads the version AND
+compares `expected` byte for byte against what the line holds now
+(`memcmp(vm::ptr(line + offset), expected, size)`). With expected = the full line
+that comparison is now a full-line comparison, so a write that never bumped the
+version -- the 81 direct vm::ptr writers -- is visible. That is the same test
+RPCS3's ppu_store_reservation makes (`old_data != data || rtime != (res & -128)`).
+
+    $ ./build-51/reservation_line; echo EXIT=$?
+      lwarx  [0x10000090] = 0x11111111, then a bypass store to 0x100000a0 (same line)
+      stwcx. -> failed (correct)
+      stwcx. after a write to a different line -> success (correct)
+      lwarx at 0x10000090 then stwcx. at 0x100000a0 (same line) -> success (correct)
+      ldarx then a bypass store to the same line -> stdcx. failed (correct)
+      lwarx then vm::write32 to the same line -> stwcx. failed (correct)
+      clean lwarx/stwcx.: ok=1 counter=0x00000011
+    6 checks, 0 failures
+    EXIT=0
+
+## Measurement 4 -- the existing reservation tests still pass
+
+    $ for t in reservation_line reservation_increment reservation_xproc lock_counter guest_spinlock; do printf '%-22s ' $t; ./build-51/$t 2>/dev/null | tail -1; done
+    reservation_line       6 checks, 0 failures
+    reservation_increment  8 checks, 0 failures
+    reservation_xproc      4 checks, 0 failures
+    lock_counter           3 checks, 0 failures
+    guest_spinlock         3 checks, 0 failures
+
+reservation_increment is the one that would catch a fix that lost updates: 4
+threads x 1e6 lock-free lwarx/stwcx increments, successes and counter both
+4,000,000.
+
+

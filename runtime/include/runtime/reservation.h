@@ -21,7 +21,11 @@ std::atomic<uint64_t>& version(uint32_t addr);
 void set_hard_relax(bool on);
 extern std::atomic<uint64_t> g_hard_waits;
 uint64_t snapshot(uint32_t line, uint8_t* out);
-bool commit_if(uint32_t line, uint64_t rtime, const uint8_t* expected, const uint8_t* data, uint32_t offset, uint32_t size, bool data_only = false);
+/* expected/data cover the whole transaction granule (offset..offset+size);
+ * write_offset/write_size name the bytes the caller is actually storing, so a
+ * 4-byte stwcx. is not reported to the write watchdogs as a 128-byte write.
+ * They default to offset/size. */
+bool commit_if(uint32_t line, uint64_t rtime, const uint8_t* expected, const uint8_t* data, uint32_t offset, uint32_t size, bool data_only = false, const char* how = nullptr, uint32_t write_offset = UINT32_MAX, uint32_t write_size = 0);
 void store_unconditional(uint32_t line, const uint8_t* data);
 void store_locked(uint32_t addr, const void* data, uint32_t size);
 void store_range(uint32_t addr, const uint8_t* data, uint32_t size);
