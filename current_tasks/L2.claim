@@ -1,0 +1,6 @@
+agent L2
+branch explore/l2
+worktree /root/Dev/wt-L2
+task lwarx/ldarx must reserve the whole 128-byte line; any write into the line by
+another agent (PPU store, SPU put, host write) must cancel the reservation.
+results /root/Dev/wt-L2/RESULTS-L2.md
