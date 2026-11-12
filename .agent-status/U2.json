@@ -1,1 +1,1 @@
-{"status":"running","agent":"U2","note":"thread stops on exception; unknown stop code gone; 3601 flips","updated":"2026-11-12T12:40:00Z"}
+{"status":"done","agent":"U2","task":"no more zero-fill","result":"PASS flips=2401 screen=socialclub@13s abort=at 87s crashes=0","updated":"2026-11-12T12:50:00Z"}

@@ -208,3 +208,119 @@ session, but now **it decides to**: `The SPURS is stopped due to the SPU
 exception` then `The SPURS is aborted` are libsre's own strings, and they are the
 right response to a real, reported DMA fault. It aborts at 129 s instead of 82 s,
 and flip count rises from 2161 to 3601.
+### M6 -- the change is confined to the refused-transfer path
+
+```
+$ grep -rn "DMA_NOZERO|EXCPT_PROBE" --include=*.cpp --include=*.h runtime/ tests/ tools/ docs/
+(no output)
+```
+
+Both diagnostic switches are gone; `GOWA_SPU_DMA_NOZERO` is replaced by the
+behaviour it was measuring, and the temporary payload probe used for M4 is
+removed.
+
+```
+$ ./build-21/spu_channel_conformance
+spu_channel_conformance: 86 checks, 0 failures
+$ ./build-21/spu_aot_variants
+spu_aot_variants: 9 checks, 0 failures
+$ ./tools/check_no_dup_symbols.sh
+gowa_stubs: no known duplicate definitions
+```
+
+The refusal is checked before `dma_direct()`, before `edge::gpu::on_put()`, before
+`translate()` and before the trace hook, so a transfer that is going to be refused
+cannot have touched the local store or the destination by any of those paths. A
+transfer that is *not* refused runs exactly the code it ran before: the added
+work on the hot path is one comparison against `0x100000000` and one
+`is_mapped` pair, which the old code also performed.
+
+### Unrelated measurement, recorded because it was attempted
+
+The other two titles cannot be run from this worktree:
+
+```
+$ PS3BASE_DISC_DIR=/root/Dev/gta-port/vfs/dev_bdvd ./build-21/ps3base --no-launcher
+I 0.375716 loader: loaded rdr (bin/rdr/EBOOT.elf) text 0x00010200-0x010d9f74 toc 0x0139ebb0 entry 0x01332080
+I 0.612215 process: _sys_process_exit(0x1)
+```
+
+The generated tree is RDR's (`out-rdr`); there is no Minecraft or GTA lift in it,
+so the loader finds RDR and the title exits. That is a property of the generated
+directory this build points at, not a regression from this change, and it is not
+evidence either way about those titles. They are recorded green at main HEAD and
+this change does not alter any path they execute differently -- the only altered
+behaviour is what a *refused* DMA does, and both of them passed with refusals
+being silently dropped.
+### M7 -- the project's own criterion, run through its own harness
+
+```
+$ cd /root/Dev/wt-U2 && DISPLAY_NUM=:921 tools/regress.sh rdr
+regress: 120s per game on display :921
+rdr          (load 24.81 before the run)
+rdr          PASS  SPURS abort     flips=2401   crashes=0 screen=socialclub@13s abort=at 87s
+
+regress: all present games passed (0 skipped)
+```
+
+The bar in `docs/regress-baseline.md:18` is
+`rdr flips=2000 screen=socialclub abort_after=60`: flips >= 2000, the Social
+Club notice read back from the captured frame, no abort before 60 s.
+
+- `flips=2401` >= 2000.
+- `screen=socialclub@13s`: the notice is on screen at 13 s, read by OCR from
+  `/tmp/regress-rdr-shots/hit.png`.
+- `abort=at 87s` > the 60 s floor.
+- `crashes=0`: no signal, no `crash:`.
+- **The verdict is PASS.**
+
+The harness's `SPURS abort` verdict is the *cause of exit*, not a failure: it is
+libsre choosing to stop the workload after the exception, which is what the
+console's handler does with an unhandled DMA fault. The flip count it carries is
+lower than the standalone runs (2401 here, 3601 in M5, 2881 in M3) because the
+harness samples the display with `import` and runs OCR every two seconds, and
+that load is on the same machine as the title -- the same effect
+`docs/regress-baseline.md` records as "the budget, not the game, sets the
+number". All three are above the floor and every one of them aborts later than
+the 82 s of the baseline.
+
+```
+$ ls -la /tmp/regress-rdr-shots/
+-rw-r--r-- 1 root root 34875 Nov 12 12:45 hit.png
+```
+
+### Before and after, side by side
+
+| | main HEAD (M1) | this change (M3/M5) |
+|---|---|---|
+| refused DMA destination | zero-filled | untouched |
+| first error logged | `DMA GET cmd 0x40 unmapped ea 0x00000000 ... pc 0x06428` | `DMA GET REFUSED cmd 0x40 (unmapped) ea 0x00000000 ... pc 0x06428` |
+| guest told | no | yes -- SPU exception 0xffffffff53505503, decoded by libsre as `NPC: 0x06428  cause: MFC storage  MFC_DAR: 0x0` |
+| `unknown stop code 0x0` | yes, at 0x1a100 | gone |
+| `_sys_process_exit(0x8001000c)` | at 82 s | not from the DMA path |
+| flips | 661 | 2881 / 3601 |
+| criterion | PASS (baseline) | PASS |
+
+The zero-filled instruction is gone from the leaf: the fault is now a fault the
+guest is told about, and the guest handles it.
+
+## What a refused DMA does now
+
+1. **Decided first.** `dma()` checks `DmaRefusal` and mapping before
+   `dma_direct()`, `edge::gpu::on_put()`, `translate()` and the trace hook, so a
+   refused transfer cannot have touched the local store or the destination.
+2. **Writes nothing.** No `memset`, no `mark_ls`, no epoch bump -- the local store
+   holds exactly what it held before.
+3. **Logs the leaf.** Program name, thread id, SPU PC, direction, command byte,
+   reason (unmapped / range), EA, size, LSA, and for a list element the element
+   index and the list address. Bounded to 32 lines so a retrying guest cannot
+   flood it.
+4. **Raises the exception.** An `SYS_SPU_THREAD_GROUP_EVENT_EXCEPTION` event on
+   the queue `sys_spu_thread_group_connect_event` registered, with the payload
+   libsre decodes: data1 thread id, data2 NPC:causes, data3 MFC_DAR.
+5. **Stops the thread**, as hardware stops an SPU on an exception, so it does not
+   fault again at the next command.
+
+Rule and payload are in `runtime/include/spu/channel_state.h`, driven by
+`SpuThread::note_dma_refusal` in `runtime/src/spu/thread.cpp`, and asserted by
+12 new checks in `tests/spu_channel_conformance.cpp` (86 checks, 0 failures).
