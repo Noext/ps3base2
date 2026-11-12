@@ -159,3 +159,39 @@ Scripts (in the worktree, reproducible verbatim):
     /tmp/m5/W-P/f/      every recorded frame of arm P
     /tmp/m5/W-N/f/      every recorded frame of arm N
 
+
+## Measurement 4 -- post-rebase confirmation on 123c925
+
+Rebased onto origin/main 123c925 (M1/M2/M3 landed cellAudio changes) and rebuilt
+build-64 from the shared generated dirs. Same two-arm procedure, same display, same
+minute, fresh binary:
+
+    $ /tmp/m5/POST.sh
+    == P fill=yes frames=1448 padframes=588 abort=23.142482
+    == N fill=no  frames=1442 padframes=0   abort=23.049409
+
+    arm P: title frames video i=1405..1408, t=23.42..23.47, non-black 2130, dark-red
+           72817 -- four consecutive samples, START in every pad poll (588 of them)
+           then i=1409 t=23.48 non-black 60, dark-red 0, window gone
+    arm N: no dark-red frame in this run; the intro fade runs down to non-black 1186 at
+           t=23.08 and the window is gone at t=23.40
+
+Raw post-rebase escape (the pad bytes, verbatim):
+
+    $ grep -ac 'pad: frame' /tmp/m5/POST-P/game.log
+    588
+    $ grep -a 'aborted' /tmp/m5/POST-P/game.log | tail -1
+    I  23.142482 ... tty: [0] The SPURS is aborted.
+
+The conclusion is unchanged on the rebased tree: with START held for 588 consecutive
+cellPadGetData calls the title is on screen for 0.067 s and the process exits into the
+SPURS abort; with no input it is 0 to 0.117 s in the runs measured (W-N: 7 frames,
+F-N: 8 frames, POST-N: 0). The spread is the abort landing inside the title's fade-in,
+not an effect of the press.
+
+Honest statement of the variation: the control arm does not show the dark-red title in
+every run. Across the control runs measured today it appears in W-N (7 frames), F-N
+(8 frames), Q-C1 (4), Q-C2 (9), T-C (0), POST-N (0); across the pressed runs in W-P (9),
+F-H (0 -- the title's place in the recording is a bright flash), Q-P2 (11), T-T (10),
+POST-P (4). Title lifetime overlaps the abort in every case and never survives it.
+
