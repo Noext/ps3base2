@@ -792,3 +792,64 @@ cellFiber and sys_fs, which are used and fully served.
 `tools/check_lle_exports.py` is the companion that catches the failure the
 inventory cannot see: a module in the table whose exports resolve but whose code
 was never lifted.
+
+---
+
+## 10. The rebase, and the same measurements re-taken on the rebased tree
+
+`git fetch /root/Dev/ps3base2 main:refs/remotes/origin/main -f && git rebase origin/main`
+from main 235529f to 5090236. The rebase conflicted on `RESULTS.md`: W2's report
+had landed on main at the same path. Resolved the way the file's own history
+resolves it -- one report, then a rule, then the next report appended
+(4812bf3 is the earlier example, same shape):
+
+```
+$ git show origin/main:RESULTS.md | wc -l
+240
+$ wc -l /tmp/W3-report.md
+551
+$ # RESULTS.md = origin/main's report + "---" + this one
+$ git diff --stat origin/main..HEAD
+ .agent-status/W3.json      |   1 +
+ RESULTS.md                 | 554 +++++++++++++++++++++++++++++++++++++++++++++
+ current_tasks/W3.claim     |   3 +
+ recomp/lle_modules.txt     |   2 +
+ tools/check_lle_exports.py | 114 ++++++++++
+ tools/lle_inventory.py     | 122 ++++++++++
+ 6 files changed, 796 insertions(+)
+```
+
+Nothing is deleted: the diff has 796 insertions and 0 deletions.
+
+### 10.1 Nobody's tests broken after the rebase
+
+```
+$ cmake --build build-w3 -j 8 --target ps3base
+[27/27] Linking CXX executable ps3base
+
+$ ctest --output-on-failure -j 4      # in build-w3
+100% tests passed, 0 tests failed out of 34
+Total Test time (real) =   2.98 sec
+```
+
+34 rather than 33 because W2 landed `mmapper_conformance` on main in the same
+window; it builds and passes here, which is the point of re-running after the
+rebase.
+
+### 10.2 The game, on the rebound binary
+
+```
+$ grep -a 'loader: loaded' /tmp/W3-rebase.log | sed 's/.*loaded //;s/ (.*//' | tr '\n' ' '
+rdr liblv2 libsysmodule libgcm_sys libsre libnet libfs librtc libfiber
+$ grep -a 'rsx: flip' /tmp/W3-rebase.log | tail -1
+I  21.664571 rsx: flip 601 (buffer 0) worst 38.3 ms, >50ms 0, >100ms 0
+$ grep -ac 'crash: signal' /tmp/W3-rebase.log
+0
+$ tail -2 /tmp/W3-rebase.log
+I  22.680399 process: _sys_process_exit(0x8001000c)
+I  22.680584 ppu: process exit -2147418100 ... liblv2+0xc7e8 spurs-abort-tail (_sys_panic+0x58)
+```
+
+Unchanged from the pre-rebase run: 601 flips, 0 crash events, the same SPURS
+abort at 22.7 s. The two lifted modules are in the table, RDR does not ask for
+them, and nothing else moved.
