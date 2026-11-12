@@ -200,7 +200,12 @@ void method(uint32_t reg, uint32_t arg) {
      * guest may write fields or units the renderer's 16-unit table does not
      * enumerate, and an earlier narrower hook missed writes for exactly that
      * reason. Count what actually arrives, per (unit, field), before deciding. */
-    if (reg >= TEXTURE_BASE_R && reg < 0x2000) {
+    /* Exclude the clear command: CLEAR_SURFACE is 0x1D94, which lands inside the
+     * 0x1A00-0x2000 texture window above. Capturing the whole window first made the
+     * `case CLEAR_SURFACE` below unreachable, so the clear was counted as a texture
+     * field write and never reached fb_clear -- measured by track C as "paquet livre
+     * puis perdu, clears==0, fb hash = FNV of a zeroed image". */
+    if (reg != CLEAR_SURFACE && reg >= TEXTURE_BASE_R && reg < 0x2000) {
         const uint32_t unit = (reg - TEXTURE_BASE_R) / 0x20;
         const uint32_t field = (reg - TEXTURE_BASE_R) % 0x20;
         g_tex_field_writes[(unit < 32 ? unit : 31) * 8 + (field < 8 ? field : 7)]

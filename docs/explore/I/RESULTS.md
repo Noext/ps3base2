@@ -173,3 +173,237 @@ Deux pieges mesures :
 ATTENTION : avec PS3BASE_NO_RENDERER=1, ou sans fenetre, le jeu continue mais les
 surfaces ne sont jamais ecrites -> aucun pixel a comparer. Il FAUT le renderer
 Vulkan pour l'oracle visuel.
+## 8. Mesure 4 -- la sequence d'ecrans reelle (capture continue, cross toutes les 5 s)
+
+Run : `/tmp/I/scan.sh` (60 s d'observation sans touche, puis 24 x `cross` espacees de 5 s,
+capture d'ecran X 1 s apres chaque press). Journal brut : `/tmp/I/scan/driver.log`.
+
+    $ cat /tmp/I/scan/driver.log | head -8
+    0s pid=2002535
+    1s window up: 148897838
+    76s phase A done (observation)
+    76s cross 1 @ 1794477368
+    81s cross 2 @ 1794477373
+...
+    219s phase B done
+    219s exit=124
+
+Ce que montrent les captures (liste brute, puis lecture) :
+
+| capture | ecran |
+|---|---|
+| `c-1794477293` ... `c-1794477349` (t=0..56 s) | logo 4J Studios, puis fondu |
+| `c-1794477363` | ecran des **TERMS OF USE** avec le bouton `Accept` |
+| `c-1794477374` (apres cross 1) | toujours TERMS OF USE, curseur sur Accept |
+| `c-1794477500` (t=207 s) | **toujours TERMS OF USE** |
+
+Mesure decisive : **24 pressions `cross` n'ont pas fait avancer l'ecran des terms**. Le pad
+est bien injecte (`pad: frame ... bytes 00 7c 00 40 80 80 80 80`, b[3] |= 0x40 = cross), donc
+le HLE du pad fonctionne et le jeu voit la touche. Ce qui bloque est le **dialog systeme
+de l'ecran des terms** : il est dessine par le jeu mais son acceptation passe par
+`cellSysutil`/`cellMsgDialog`, et aucune ligne `msgdialog` n'apparait dans le log :
+
+    $ grep -aiE 'msgdialog|msg:' /tmp/I/scan/game.log   | wc -l
+    0
+
+Autrement dit, l'ecran TERMS OF USE du jeu n'est pas un `cellMsgDialog` (il est rendu par
+le moteur du jeu), et un `cross` n'y suffit pas depuis le pad injecte. La piste E n'a pas
+besoin de ce detail pour sa ligne de log : ce qu'elle mesure est le **comportement natif
+d'un jeu qui a depasse l'ecran de terms**, et cette piste n'a pas encore franchi cet ecran.
+Voir section 9 pour la tentative suivante.
+## 9. Mesure 5 -- LE MENU PRINCIPAL NATIF EST ATTEINT (l'oracle existe)
+
+Le run precedent (section 8) n'avancait pas parce que `cross` seul ne suffit pas sur l'ecran
+TERMS OF USE : il faut **descendre** jusqu'a `Accept` puis valider. Sequence mesuree, depuis
+`tools/drive_world.py` et confirmee par captures :
+
+    cross   (ecran autosave / OK)
+    cross   (ecran terms)
+    down down down   (focus -> Accept)
+    cross   (accepter)
+
+Commande exacte :
+
+    cd /root/Dev/ps3base2
+    DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/0 PS3BASE_DISC_DIR=/root/Dev/mc-port/disc \
+      PS3BASE_LOG=info PS3BASE_INPUT_CMD=/tmp/I/menu/input.cmd \
+      PS3BASE_CENSUS=1 PS3BASE_CENSUS_AT=25 PS3BASE_SYSCALL_LOG=200000 \
+      PS3BASE_DUMP_FRAMES=150 PS3BASE_FRAME_DIR=/tmp/I/menu/frames \
+      timeout -s INT 130 ./build/ps3base --no-launcher
+
+Journal du driver (brut) :
+
+    0s pid=2012688
+    22s t=22 warm (4J logo)
+    22s press cross
+    32s shot 140509230 / 32s after cross 1
+    41s after cross 2
+    42s press down / 46s press down / 50s press down
+    54s after down x3
+    54s press cross
+    57s shot 104857646 / 57s after cross 3 (accept)
+    ...
+    130s exit=124
+
+Captures (fichiers dans `docs/explore/I/img/`) :
+
+| fichier | ecran |
+|---|---|
+| `oracle-00-terms.png` | TERMS OF USE, bouton `Accept` |
+| `oracle-02-autosave.png` | boite autosave + `OK` (t=41 s) |
+| `oracle-04-main-menu.png` (t=54 s) | **MENU PRINCIPAL : Start Game / Join Game** |
+| `oracle-05-startgame.png` (t=57 s) | panneau **Start Game** : Create New World, Play Tutorial, 4 sauvegardes |
+
+Preuve textuelle independante, dans le meme run : le jeu cree les threads d'interface du menu
+au meme instant t=54.974 s, et **pas avant** :
+
+    I  54.974166 [2012738] ppu: _sys_ppu_thread_create '(4J) GetFriendsThreadProc' ... -> 0x100000d
+    I  54.974385 [2012738] ppu: _sys_ppu_thread_create 'thread_readSaveCacheFile' ... -> 0x100000e
+    I  54.986473 [2012738] ppu: _sys_ppu_thread_create 'thread_getSavesInfo' ... -> 0x100000f
+
+et le run continue ensuite a presenter des images jusqu'a la fin :
+
+    I 129.140685 [2012751] rsx: flip 5941 (buffer 0) worst 32.3 ms, >50ms 0, >100ms 0
+    exit=124 (timeout, processus vivant)
+
+## 10. Ce que cela donne a la piste E (oracle)
+
+`docs/explore/I/menu-trace.txt` contient, extrait tel quel du log brut de ce run :
+
+- l'horodatage des 16 creations de threads PPU, dans l'ordre ;
+- les **trois** marqueurs simultanes du menu (`GetFriendsThreadProc`, `thread_readSaveCacheFile`,
+  `thread_getSavesInfo`, tous a t=54.97 s) ;
+- l'histogramme des syscalls sur les 200 000 premiers appels traces (dominante :
+  `sys_timer_usleep` 111 582, `sys_semaphore_wait` 40 968, `sys_time_get_current_time` 27 810) ;
+- l'heure de la premiere image presentee (`rsx: flip 1` a t=12.85 s).
+
+**Mise en garde a corriger dans le harnais wasm** : `runtime/src/wasm_entry.cpp:644-658` exige
+`g_menu_thread_creations > 0` ET `g_ui_thread_creations >= 2`, et compte `thread_options_load`
+parmi les threads d'interface (`runtime/src/lv2/ppu_thread.cpp:105-108`). Or le natif cree
+`thread_options_load` a **t=12.16 s**, soit 42 s AVANT le menu : ce marqueur ne corrobore rien.
+Les deux vrais corroborateurs sont `thread_readSaveCacheFile` et `thread_getSavesInfo`,
+crees a t=54.97 s avec `GetFriendsThreadProc`. La condition `ui >= 2` peut donc etre satisfaite
+par un boot qui n'a jamais atteint le menu (il suffit de `thread_options_load` + un autre
+thread d'interface precoce) ; c'est une **fausse porte** pour la piste E.
+
+## 11. Demandes (hors perimetre de la piste I)
+
+1. `runtime/src/wasm_entry.cpp` + `runtime/src/lv2/ppu_thread.cpp` : retirer `thread_options_load`
+   des corroborateurs du menu (cree trop tot : t=12 s cote natif), et exiger les deux threads
+   de sauvegarde. Fichiers de la piste E, pas les miens — je ne les ai pas modifies.
+2. `tools/drive_world.sh` : sa sequence `cross x4 puis down x6 puis cross` ne franchit pas
+   l'ecran TERMS OF USE ; la sequence mesuree ici (`cross, cross, down, down, down, cross`) le
+   franchit. Non modifie (outil partage, hors de mon worktree).
+## 12. Mesure 6 -- diagnostic Vulkan formel (ce que vous avez demande de verifier)
+
+### 12.1 Ce qui est charge
+
+    $ nvidia-smi   (deja cite section 3)
+    NVIDIA-SMI 590.48.01 / RTX 4060 Laptop / 3473MiB / 8188MiB
+
+    $ ls /usr/share/vulkan/icd.d/
+    asahi_icd.json  gfxstream_vk_icd.json  intel_hasvk_icd.json  intel_icd.json
+    lvp_icd.json    nouveau_icd.json       nvidia_icd.json       radeon_icd.json  virtio_icd.json
+
+    $ ls /usr/share/vulkan/explicit_layer.d/
+    VkLayer_INTEL_nullhw.json
+    VkLayer_MESA_overlay.json
+
+    $ ls /usr/share/vulkan/implicit_layer.d/
+    nvidia_layers.json
+
+**La couche de validation Khronos n'est pas installee.** `VK_LAYER_KHRONOS_validation` est
+acceptee en silence (le loader l'ignore) : le run avec `VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation`
+ne produit aucune ligne `validation` et rend normalement (`rsx: flip 121` a t=17 s). Ce n'est
+pas un echec : c'est une couche absente de cette machine. Non installable sans reseau/paquet,
+je ne l'ai pas installee (hors perimetre).
+
+### 12.2 Le loader choisit bien le GPU NVIDIA
+
+    $ DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/0 VK_LOADER_DEBUG=all ... timeout -s KILL 15 ./build/ps3base --no-launcher
+    exit=137
+    lines=548
+
+Extraits bruts (selection d'ICD) :
+
+    DRIVER:                  /usr/share/vulkan/icd.d/nvidia_icd.json
+    DEBUG | DRIVER:    Searching for ICD drivers named libGLX_nvidia.so.0
+    DRIVER:            Found ICD manifest file /usr/share/vulkan/icd.d/lvp_icd.json, version 1.0.1
+    DEBUG | DRIVER:    terminator_CreateInstance: ICD "libvulkan_gfxstream.so" vkEnumerateInstanceVersion returned error. The ICD will be treated as a 1.0 ICD
+
+Seule anomalie du loader : le paquet `gfxstream` (ICD 1.0) est present mais inutilise. Aucune
+erreur `ERROR:` de chargement de `libGLX_nvidia.so.0`, aucune iteration d'ouverture de
+`/dev/nvidiactl`. La mention 31x `openat(/dev/nvidiactl)` de `docs/webassembly/CAUSE-BLOCAGE-NATIF.md`
+**ne se reproduit pas** dans ce run ni dans les 6 runs de cette piste.
+
+### 12.3 Le seul message d'erreur du systeme, et il est sans consequence
+
+    $ grep -aE '^E ' /tmp/I/run1.err
+    (aucune ligne)
+
+    $ grep -aE '^W ' /tmp/I/run1.err | head -3
+    W   0.552542 [1850406] cellAudio: SDL audio open failed: ALSA: Couldn't open audio device: No such file or directory
+    W   7.869875 [1850403] import: unimplemented cellRudp::cellRudpInit (0x63f63545) ...
+
+L'audio n'existe pas dans le conteneur (`ALSA lib conf.c:5208 ... No such file or directory`) :
+c'est un **warning**, le jeu continue et le reste du run est normal. Un seul `E`
+apparait dans le run SANS `DISPLAY` (section 6) : `gpu: SDL window creation failed`.
+
+### 12.4 Lavapipe fonctionne (plan B verifie, non utilise)
+
+Vous avez demande de verifier le plan logiciel. Il marche :
+
+    $ VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/0 \
+        PS3BASE_DISC_DIR=/root/Dev/mc-port/disc PS3BASE_LOG=info timeout -s KILL 25 ./build/ps3base --no-launcher
+    exit=137
+    I   0.198583 gpu: Vulkan presenter on llvmpipe (LLVM 20.1.2, 256 bits), swapchain 1280x720
+    I  21.871723 rsx: flip 421 (buffer 0) worst 1496.8 ms, >50ms 15, >100ms 3
+    I  23.993797 rsx: flip 481 (buffer 0) worst 72.0 ms, >50ms 9, >100ms 0
+    0 lignes 'E'
+
+Donc : meme sans GPU, l'oracle tourne chez llvmpipe, a ~20 fps au lieu de 60. Ce chemin n'est
+**pas** celui a utiliser pour l'oracle (le materiel est la et va 3x plus vite), mais il est
+prouve disponible. `README` du depot conseille de ne PAS forcer `VK_ICD_FILENAMES` : c'est
+vrai pour la vitesse, pas pour la correction.
+
+## 13. Non mesure (et pourquoi)
+
+| mesure | raison |
+|---|---|
+| erreurs de validation Khronos | la couche n'est pas installee sur cette machine (section 12.1), non installable sans paquet |
+| `vulkaninfo` | binaire absent (`vulkaninfo: command not found`), `vulkan-tools` non installe |
+| trace d'imports complete jusqu'au menu, import par import | `PS3BASE_SYSCALL_LOG=200000` a tronque a 200 000 lignes : l'histogramme est complet sur cette fenetre, pas l'ordre complet au-dela. Le log brut de 204 341 lignes est dans `/tmp/I/menu/game.log` (non commite : 30 Mo) ; les extraits commites sont dans `menu-trace.txt` |
+| monde joue (apres Start Game) | non demande par la piste, et l'oracle du menu suffit a la piste E |
+
+## 14. Reponse a la question posee
+
+**1. Diagnostic precis de l'exit 124.** `exit 124` est le code de `timeout` : le processus
+**n'est pas bloque**, il est vivant et presente des images au moment ou `timeout` le tue.
+Mesure : 1892 lignes de log en 20 s, `rsx: flip 541`, `0` ligne d'erreur, swapchain
+1280x720 creee sur `NVIDIA GeForce RTX 4060 Laptop GPU`. Les rapports precedents lisaient
+ce code comme un deadlock et cherchaient une cause inexistante.
+
+**2. Les erreurs reelles.** Il n'y en a aucune quand l'environnement est correct. Les deux
+conditions qui produisent le symptome "une seule ligne puis exit 124" sont :
+(a) lancer hors de `/root/Dev/ps3base2` -> `E loader: cannot read ./bin/mc/mc.elf` et sortie
+immediate ; (b) lancer sans `DISPLAY`/`XDG_RUNTIME_DIR` -> `XDG_RUNTIME_DIR is invalid`
++ `E gpu: SDL window creation failed` et le jeu continue **sans renderer**. La couche de
+validation Khronos est absente, lavapipe est present et fonctionne.
+
+**3. Ce qui empechait le demarrage est corrige** : il n'y avait rien a reparer dans le
+binaire. `DISPLAY=:0`, `XDG_RUNTIME_DIR=/run/user/0`, `cd /root/Dev/ps3base2`.
+
+**4. L'oracle existe** : le natif atteint le **menu principal** (Start Game / Join Game) puis
+le panneau **Start Game**, capture d'ecran a l'appui (`docs/explore/I/img/oracle-04-main-menu.png`,
+`oracle-05-startgame.png`). La trace d'imports/syscalls de ce run est dans
+`docs/explore/I/menu-trace.txt`, avec l'heure exacte des trois threads du menu (t=54.97 s).
+
+## 15. Antecedents -- verdicts finaux
+
+| Finding | Source | Applies here? |
+|---|---|---|
+| le natif bloque apres le disque, une seule ligne de log | docs/webassembly/JALON2-NATIVE-RUN-BLOCKED.md | **non, refute** -- 1892 lignes, 60 fps, menu atteint |
+| le blocage est dans le pilote NVIDIA (31 openat nvidiactl) | docs/webassembly/CAUSE-BLOCAGE-NATIF.md | **non, refute** -- 0 occurrence de nvidiactl dans 6 runs |
+| ce n'est pas Vulkan, ca bloque aussi avec le stub | docs/webassembly/BLOCAGE-PAS-VULKAN.md | non -- chemin different (sans fenetre le renderer est absent, voir section 6) |
+| headless/null backend | refs/jdc-ps3recomp/README.md:53 | non -- `PS3BASE_NO_RENDERER` suffit, mais ne produit aucune image |
+| lavapipe pour CI sans GPU | refs/jdc-ps3recomp/docs/BUILDING.md:304 | **oui, verifie** -- fonctionne, 20 fps (section 12.4) |

@@ -25,7 +25,7 @@ mkdir -p "$OUT/obj"
 #   -fwasm-exceptions          the runtime uses C++ exceptions
 #   -matomics -mbulk-memory    requires --shared-memory; every object needs them or the link fails
 #   -pthread                   the title spawns one host thread per guest thread
-CXXFLAGS=(-Oz -std=c++20 -fwasm-exceptions -msimd128 -msse4.1 -mfma
+CXXFLAGS=(-Oz -std=c++20 -fwasm-exceptions -mllvm -wasm-use-legacy-eh=false -msimd128 -msse4.1 -mfma
           -matomics -mbulk-memory -pthread -w
           -I "$ROOT/runtime/include" -I "$ROOT/runtime/src"
           -I "$ROOT/runtime/src/lv2" -I "$ROOT/runtime/src/spu" -I "$ROOT/out/ppu"
