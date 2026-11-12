@@ -116,6 +116,18 @@ struct PendingHit {
     int trap;
     uint32_t fault;
     bool write;
+    /* Y1: the word AS IT WAS at fault time. The mprotect fault fires at the
+     * instruction, before the store retires, so capturing here is the only way
+     * to report "prev -> new" instead of just the value afterwards. */
+    uint32_t prev;
+    /* Y1: guest context at fault time. ctx.lr is the return address of the
+     * caller that made the access, which names the site; ctx.cia is only
+     * maintained for syscalls, so it is reported but not relied on. */
+    uint32_t lr;
+    uint32_t cia;
+    /* Copied, not pointed at: the guest thread's name buffer can be rewritten or
+     * freed between the fault and the single-step trap. */
+    char thread[32];
     void* pcs[12];
     int npcs;
 };
@@ -131,8 +143,36 @@ thread_local uint32_t t_step_page = 0;
 thread_local bool t_step_guard = false;
 thread_local std::vector<PendingHit> t_hits;
 
+/* Y1: continuity check. Every reported event carries the word as it was just
+ * before the access, so consecutive events on the same address must chain:
+ * event[n].prev == event[n-1].new. A break means an access was NOT reported,
+ * i.e. it slipped through the step window (the page is left writable for the
+ * one instruction being single-stepped, so a store from another thread in that
+ * window is not trapped). Reporting the break is what makes the watch's own
+ * coverage measurable instead of assumed. */
+/* Per ADDRESS, not per trap: a trap may cover a range (the SPU descriptor is
+ * 0x84 bytes), and two words in that range have unrelated values, so a
+ * per-trap chain would report a gap on every alternating access. 256 words
+ * tracked covers every address any of these watches uses. */
+struct ChainState { uint32_t addr; uint32_t val; uint64_t events; uint64_t gaps; bool used; };
+ChainState g_chain[256];
+
+ChainState& chain_for(uint32_t addr) {
+    for (int i = 0; i < 256; i++)
+        if (g_chain[i].used && g_chain[i].addr == addr) return g_chain[i];
+    for (int i = 0; i < 256; i++)
+        if (!g_chain[i].used) {
+            g_chain[i] = ChainState{addr, 0, 0, 0, true};
+            return g_chain[i];
+        }
+    return g_chain[255];
+}
+
 void process_hit(const PendingHit& h) {
     Trap& t = g_traps[h.trap];
+    /* Read AFTER the retried instruction retired (trap_handler runs on the
+     * single-step trap), so for a write this is the NEW value and h.prev is the
+     * OLD one. */
     uint32_t value = vm::read32(t.len <= 4 ? t.addr : (h.fault & ~3u));
     if (t.has_val && vm::read32(t.addr) != t.val) return;
     /* GOWA_TRAP_NONZERO: only report writes whose value is non-zero, so a
@@ -146,9 +186,27 @@ void process_hit(const PendingHit& h) {
         std::string stack = stack_string(h.pcs, h.npcs);
         guest::Thread* g = guest::current();
         std::string who = g ? g->name : host::thread_name();
-        LOG_INFO("trap", "trap %d %s 0x%08x = 0x%08x by %s%s", h.trap, h.write ? "write" : "read", h.fault, value, who.c_str(), t.logged == g_trap_max ? " (further hits not logged)" : "");
+        /* Y1: prev -> new, guest lr, guest thread and the elapsed time, all in
+         * one line, so a read and a write of the same word are comparable
+         * within one run without a second log. */
+        LOG_INFO("trap", "trap %d %s 0x%08x prev 0x%08x -> 0x%08x (guest lr 0x%08x) by %s%s",
+                 h.trap, h.write ? "write" : "read", h.fault, h.prev, value, h.lr,
+                 h.thread[0] ? h.thread : who.c_str(),
+                 t.logged == g_trap_max ? " (further hits not logged)" : "");
         LOG_INFO("trap", "  %s", stack.c_str());
         if (trace::on(trace::TRAP)) stack_id = trace::intern(stack);
+        /* Y1 continuity: if the word did not hold what the previous reported
+         * event left there, an access went unreported -- a real gap in the
+         * watch, printed as one rather than hidden. */
+        const uint32_t word = t.len <= 4 ? t.addr : (h.fault & ~3u);
+        ChainState& cs = chain_for(word);
+        cs.events++;
+        if (cs.events > 1 && h.prev != cs.val) {
+            cs.gaps++;
+            LOG_WARN("trap", "CHAIN GAP trap %d at 0x%08x: previous event left 0x%08x, this one starts from 0x%08x (%llu gaps so far) -- an access was NOT watched",
+                     h.trap, word, cs.val, h.prev, static_cast<unsigned long long>(cs.gaps));
+        }
+        cs.val = value;
     }
     if (trace::on(trace::TRAP)) trace::emit(trace::T_TRAP, uint32_t(h.trap) | (uint32_t(h.write) << 8), h.fault, value, stack_id, t.len <= 4 ? 0 : vm::read32(t.addr));
     if (t.dump && !t.dumped) {
@@ -194,11 +252,31 @@ bool trap_fault(uint32_t g, bool is_write, ucontext_t* uc) {
         const Trap& t = g_traps[i];
         if (uint64_t(g) + 16 <= t.addr || uint64_t(g) >= uint64_t(t.addr) + t.len) continue;
         if (!is_write && !t.reads) continue;
-        PendingHit h{i, g, is_write, {}, 0};
+        PendingHit h{i, g, is_write, 0, 0, 0, {}, {}, 0};
+        h.thread[0] = 0;
+        guest::Thread* th = guest::current();
+        if (th) {
+            h.lr = static_cast<uint32_t>(th->ctx.lr);
+            h.cia = static_cast<uint32_t>(th->ctx.cia);
+            std::snprintf(h.thread, sizeof h.thread, "%s", th->name.c_str());
+        }
         h.npcs = stack_from(uc, h.pcs, 12);
         t_hits.push_back(h);
     }
+    /* Y1: make the page accessible BEFORE reading the watched word. It is
+     * currently read-only (write trap) or no-access (read/write trap), so a
+     * read here would fault inside the fault handler. The watch's own reads and
+     * the guest's reads of this page both go through this window, which is why
+     * the page is left writable until the single-step trap re-protects it. */
     host::vm_protect(vm::g_base + (uint64_t(g >> 12) << 12), 4096, host::Prot::ReadWrite);
+    /* The word before the store, and the guest context at the instant of the
+     * access. The store has NOT executed yet -- it retries when this handler
+     * returns -- so this prev is genuinely the pre-store value, which is what
+     * makes "0 -> 1" readable rather than "the field is 1". */
+    for (PendingHit& h : t_hits) {
+        const Trap& t = g_traps[h.trap];
+        h.prev = vm::range_mapped(t.addr, 4) ? vm::read32(t.addr) : 0;
+    }
     t_step_page = (g >> 12) + 1;
     uc->uc_mcontext.gregs[REG_EFL] |= 0x100;
     return true;
@@ -496,7 +574,14 @@ void arm_watch() {
             auto [it, fresh] = g_trap_pages.try_emplace(static_cast<uint32_t>(p), host::Prot::Read);
             if (t.reads) it->second = host::Prot::None;
         }
-        LOG_INFO("trap", "trap %zu: %s 0x%08x+0x%x%s%s", i, t.reads ? "read/write" : "write", t.addr, t.len, t.has_val ? " value-match" : "", t.dump ? " dump" : "");
+        /* Y1: arm-time value, so the state at the first guest instruction is a
+         * measurement and not an inference. The loader has already run (and
+         * zero-filled LOAD1's BSS), so this is what the guest inherits. */
+        char armed[96];
+        int o = 0;
+        for (uint32_t a = t.addr, k = 0; k < 8 && a + 4 <= t.addr + t.len; a += 4, k++)
+            o += std::snprintf(armed + o, sizeof armed - o, " %08x", vm::range_mapped(a, 4) ? vm::read32(a) : 0);
+        LOG_INFO("trap", "trap %zu: %s 0x%08x+0x%x%s%s arm-time words:%s", i, t.reads ? "read/write" : "write", t.addr, t.len, t.has_val ? " value-match" : "", t.dump ? " dump" : "", armed);
     }
     g_watch_count = static_cast<int>(g_traps.size());
     rearm_watch();

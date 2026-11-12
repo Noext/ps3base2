@@ -1,1 +1,1 @@
-{"status":"running","agent":"Y1","task":"who put 1 at 0x0177caa8 before f_0091fd18 reads it; single-run read+write watch","updated":"2026-11-12T16:23:26Z"}
+{"agent":"Y1","status":"running","task":"0x0177caa8 one-run read+write watch","at":"2026-11-12T17:10Z"}
