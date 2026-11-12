@@ -552,3 +552,33 @@ and the neighbouring reservation tests unchanged:
     Test #17: reservation_increment ......... Passed
     Test #18: lwmutex_contention ............ Passed
     Test #19: lwmutex_hle ................... Passed
+
+## Final binary, run G (after the last code change)
+
+Run G, on the binary that ships with this branch:
+
+    2011 guest trap events, 0 self reads among them
+    569 events on 0x0177caa8 (557 reads, 12 writes)
+    0 CHAIN GAP
+    first 0->1 write 4.872751 lr=0x00609a40
+    first read==1    5.752610 lr=0x0091fdb0
+    reads==1 before write: 0
+    watch totals: 2001 guest events, 42 self reads dropped
+
+Five runs, five start offsets, the same ordering every time, always with the
+0->1 write carrying guest lr 0x00609a40:
+
+    run  first 0->1 write        first read of 1       gap
+    B    3.348297 (lr 0x609a40)  3.531398*             0.183 s
+    D    2.409792 (lr 0x609a40)  3.074423              0.665 s
+    E    2.393590 (lr 0x609a40)  2.840156              0.447 s
+    F    4.346518 (lr 0x609a40)  5.473972              1.127 s
+    G    4.872751 (lr 0x609a40)  5.752610              0.880 s
+
+(*run B's numbers are from before the self-read fix; the fix did not change the
+write times, it removed a fabricated read.)
+
+## Final test run on the shipped binary
+
+    $ ctest --test-dir build-40 -j 4
+    100% tests passed, 0 tests failed out of 35
