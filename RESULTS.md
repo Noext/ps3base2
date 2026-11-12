@@ -206,3 +206,75 @@ _sys_panic, and _sys_panic exits with EABORT.
 The lifted form is already correct -- it is in the tree at HEAD, table entry and
 all. What was missing was only the NAME, which is what this task fixed.
 
+
+### M6 -- the same abort, named end to end (final build)
+
+Landsmarks now live in `recomp/landmarks.txt`, committed, because a landmark is a
+property of the firmware MODULE -- all three titles load the same liblv2 and
+libsre -- and not of one title's output tree:
+
+    landmarks: 3 from /root/Dev/wt-T4/recomp/landmarks.txt
+    liblv2           landmark liblv2+0xc7e8 -> 0x3000c7e8 in _sys_panic f_3000c790+0x58
+    libsre           landmark libsre+0xcb24 -> 0x3200cb24 in f_3200cab8+0x6c
+    libsre           landmark libsre+0x9754 -> 0x32009754 in f_3200930c+0x448
+
+Run on display :919, PS3BASE_DISC_DIR=/root/Dev/rdr-port/vfs/dev_bdvd, 130 s
+timeout, -DPS3BASE_GENERATED_DIR=/root/Dev/wt-T4/out-T4rdr/ppu. Raw,
+/tmp/T4-run3.log:2634-2640:
+
+    I  86.389502 [1797385] tty: [0] Call Stack Trace:	0x3200cb24
+    I  86.389524 [1797385] tty: [0]                  	0x32009754
+    I  86.389541 [1797385] tty: [0]                  	0x0
+    I  86.389590 [1797385] tty: [0] The SPURS is aborted.
+    I  86.389608 [1797385] process: _sys_process_exit(0x8001000c)
+    I  86.389987 [1797385] ppu: process exit -2147418100 from thread 0x1000004 lr=0x3000c7e8 liblv2+0xc7e8 spurs-abort-tail (_sys_panic+0x58)
+
+Before this work, same build, same run:
+
+    I 108.590207 [1702358] ppu: process exit -2147418100 from thread 0x1000004 lr=0x3000c7e8 (not lifted)
+
+Flips on the same binary: 41 logged flip lines, last one "flip 2401" at 83.7 s,
+then the abort at 86.4 s. The baseline build reached "flip 3001" at 105 s -- the
+difference is not a regression, it is when the SPURS watchdog fires; both are
+alive-and-flipping with 0 crashes until the title calls _sys_panic. What the
+landmark, span and seed work changed is only what the report SAYS, and the diff
+confirms it: the lifted code is byte-identical to HEAD except table.cpp.
+
+### M7 -- the seed forms and the landmark rule are pinned by a test
+
+    $ python3 tests/ppu_seed_forms.py
+    ppu_seed_forms: 16 checks passed
+
+    $ cd build-T4 && ctest -R 'ppu_seed_forms|ppu_dispatch_table' --output-on-failure
+    1/2 Test #3: ppu_dispatch_table ...............   Passed    0.03 sec
+    2/2 Test #4: ppu_seed_forms ...................   Passed    0.04 sec
+    100% tests passed, 0 tests failed out of 2
+
+    $ sh tools/check_no_dup_symbols.sh
+    gowa_stubs: no known duplicate definitions
+
+The checks that matter, both in tests/ppu_seed_forms.py:
+
+  - the SAME seed file resolves to 0x3000c7e8 for a liblv2 at 0x30000000 and to
+    0x2100c7e8 for a liblv2 at 0x21000000 (the named form follows the relayout),
+    while the absolute seed stays 0x3000c7e8 in both (which is why it goes stale);
+  - a landmark written as an absolute address is REFUSED, loudly, because a
+    landmark exists to be stable across relayouts.
+
+### M8 -- the "(not lifted)" classification was not just cosmetic
+
+has_code_at() is keyed by function ENTRY. Every return address in the guest is
+therefore "not lifted", and the process-exit log used that as its whole verdict.
+The span table generated here replaces the entry-only test for reporting:
+
+    out-T4rdr/ppu/table.cpp:
+    const FunctionSpan function_spans[] = {
+        {0x30000000, 0x30000040, 0x30000000, 0},   // lo, hi, entry, image
+        ...
+        {0x3000c790, 0x3000c820, 0x3000c790, 1},
+
+so 0x3000c7e8 lands in [0x3000c790, 0x3000c820] and names f_3000c790+0x58.
+has_code_at() itself is unchanged: the dispatch table still answers "is this an
+entry", which is the right question for an indirect call, and the report stops
+using it to answer a different one.
+

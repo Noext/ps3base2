@@ -89,8 +89,11 @@ extern const uint32_t function_count;
 extern const LandmarkEntry landmarks[] __attribute__((weak));
 extern const uint32_t landmark_count __attribute__((weak));
 
-extern const FunctionSpan function_spans[];
-extern const uint32_t function_span_count;
+/* Weak for the same reason images[] is: a generated table from a lift that the
+ * landmark/span support predates links this file with no span table at all, and
+ * a strong undefined symbol would break that link rather than degrade. */
+extern const FunctionSpan function_spans[] __attribute__((weak));
+extern const uint32_t function_span_count __attribute__((weak));
 extern const ImportEntry imports[];
 extern const uint32_t import_count;
 extern const ExportEntry exports[];

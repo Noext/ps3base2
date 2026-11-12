@@ -569,10 +569,15 @@ void call_indirect(Context& ctx, uint8_t* base, uint32_t addr) {
                          vm::read32(ea29), vm::read32(ea29 + 4),
                          ppu::ld32(base, ea29), ppu::ld32(base, ea29 + 4));
         }
+        /* The target is the thing that could not be resolved, so name it the
+         * same way a frame is named: image, landmark, containing function. An
+         * address that names no lifted function says so, which is the signal
+         * that a seed is missing rather than that the guest went wrong. */
         LOG_FATAL("ppu",
-                  "unknown indirect target 0x%08x (lr=0x%08llx, thread 0x%x) r3=0x%llx r4=0x%llx "
+                  "unknown indirect target 0x%08x -- %s (lr=0x%08llx, thread 0x%x) r3=0x%llx r4=0x%llx "
                   "r9=0x%llx r31=0x%llx ctr=0x%llx",
-                  addr, static_cast<unsigned long long>(ctx.lr), ctx.thread_id,
+                  addr, lv2::describe_address(addr).c_str(),
+                  static_cast<unsigned long long>(ctx.lr), ctx.thread_id,
                   static_cast<unsigned long long>(ctx.gpr[3]), static_cast<unsigned long long>(ctx.gpr[4]),
                   static_cast<unsigned long long>(ctx.gpr[9]), static_cast<unsigned long long>(ctx.gpr[31]),
                   static_cast<unsigned long long>(ctx.ctr));

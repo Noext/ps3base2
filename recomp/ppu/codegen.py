@@ -1092,10 +1092,22 @@ def main(manifest_path, nid_db, out_dir, chunk_bytes="0x19000"):
     # Landmarks are not seeds: nothing is lifted because of them. They name a
     # byte whose meaning a report has to spell out, and they are resolved
     # against the base this lift gives each image (see parse_seed).
-    landmarks_path = os.path.join(os.path.dirname(os.path.abspath(out_dir)), "gen", "landmarks.txt")
-    landmarks = load_landmarks(landmarks_path)
-    if landmarks:
-        print("landmarks: %d from %s" % (len(landmarks), landmarks_path))
+    # Landmarks come from two places, and both are read:
+    #  - recomp/landmarks.txt, committed. A landmark is a property of the
+    #    firmware MODULE (which byte of liblsre prints the SPURS dump), and every
+    #    title loads the same module, so it belongs beside the other committed
+    #    facts about the firmware, not in one title's output tree.
+    #  - <out>/gen/landmarks.txt, per-lift. Scratch landmarks being worked on.
+    landmarks_paths = [
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "landmarks.txt"),
+        os.path.join(os.path.dirname(os.path.abspath(out_dir)), "gen", "landmarks.txt"),
+    ]
+    landmarks = []
+    for lp in landmarks_paths:
+        got = load_landmarks(lp)
+        if got:
+            print("landmarks: %d from %s" % (len(got), lp))
+            landmarks.extend(got)
     root = os.path.dirname(os.path.abspath(manifest_path))
     manifest = json.load(open(manifest_path))
     os.makedirs(out_dir, exist_ok=True)

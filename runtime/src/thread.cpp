@@ -58,7 +58,7 @@ void body(std::shared_ptr<Thread> t) {
         LOG_INFO("ppu", "thread 0x%x '%s' sys_ppu_thread_exit(0x%llx) from lr=0x%08x %s",
                  t->id, t->name.c_str(), static_cast<unsigned long long>(e.status),
                  static_cast<uint32_t>(t->ctx.lr),
-                 lv2::has_code_at(static_cast<uint32_t>(t->ctx.lr)) ? "(lifted)" : "(not lifted)");
+                 lv2::describe_address(static_cast<uint32_t>(t->ctx.lr)).c_str());
     } catch (const lv2::ProcessExit& e) {
         /* Describe, do not classify. The lr is the return address of the call
          * that asked to exit, so it is almost never a function ENTRY -- which
