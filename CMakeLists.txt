@@ -301,6 +301,16 @@ target_link_libraries(spu_channel_conformance PRIVATE ps3base_ppu_ops pthread)
 target_compile_options(spu_channel_conformance PRIVATE ${PS3BASE_ARCH_FLAGS} ${PS3BASE_EH})
 add_test(NAME spu_channel_conformance COMMAND spu_channel_conformance)
 
+# The DMA list walker: PUTL/PUTLB/PUTLF and GETL/GETLB/GETLF, driven through
+# runtime/include/spu/dma_list.h -- the same header SpuThread::run_list calls.
+# The decisive case is a list whose second element is only filled after the
+# stall-and-notify event.
+add_executable(spu_dma_list tests/spu_dma_list.cpp)
+target_include_directories(spu_dma_list PRIVATE runtime/include)
+target_compile_options(spu_dma_list PRIVATE ${PS3BASE_ARCH_FLAGS})
+add_test(NAME spu_dma_list COMMAND spu_dma_list)
+
+
 
 # Every Vulkan format and blend factor the renderer uses must have a WebGPU
 # decision, with the inexpressible ones classified rather than omitted.

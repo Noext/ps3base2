@@ -6,6 +6,7 @@
 #include "spu/aot.h"
 #include "spu/channel_state.h"
 #include "spu/context.h"
+#include "spu/dma_list.h"
 #include "hle.h"
 
 #include <array>
@@ -130,6 +131,9 @@ struct SpuThread : Host {
     void* native = nullptr;
 
     uint32_t mfc_lsa = 0, mfc_eal = 0, mfc_size = 0, mfc_tag = 0;
+    struct MfcHist { uint32_t ch = 0, value = 0, pc = 0; } mfc_hist[8]{};
+    uint32_t mfc_hist_i = 0;
+    void mfc_hist_note(uint32_t ch, uint32_t value, uint32_t pc);
     /* The tag-status state machine lives in spu/channel_state.h so the unit test
      * drives the same code the runtime does. */
     TagState tag{};
@@ -139,16 +143,15 @@ struct SpuThread : Host {
      * stall bit set and resumes it from MFC_WrListStallAck (SPUThread.cpp:4965).
      * The count matters because RCHCNT(MFC_Cmd) reports 16 - queued, and the
      * SPURS kernel decides whether to issue a command from that number. */
-    uint32_t mfc_queue = 0;
-    uint32_t mfc_queued_count() const { return mfc_queue < 16 ? 16 - mfc_queue : 0; }
+    /* The table is spu/dma_list.h so the unit test drives the same rules; a
+     * list that stalls three times holds ONE slot, which is what makes the
+     * count survive a multi-stall list. */
+    ListStallTable lists{};
+    uint32_t mfc_queued_count() const { return lists.count(); }
     uint32_t stall_stat = 0;
     bool stall_stat_count = false;
     uint32_t atomic_stat = 0;
     bool atomic_stat_count = false;
-    struct ListState {
-        bool active = false;
-        uint32_t cmd = 0, lsa = 0, list = 0, remaining = 0;
-    } stalled[32];
 
     uint32_t raddr = 0;
     uint64_t rtime = 0;
