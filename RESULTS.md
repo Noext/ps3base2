@@ -278,3 +278,53 @@ has_code_at() itself is unchanged: the dispatch table still answers "is this an
 entry", which is the right question for an indirect call, and the report stops
 using it to answer a different one.
 
+
+### M9 -- final build: landmarks at boot, and the abort named end to end
+
+-DPS3BASE_GENERATED_DIR=/root/Dev/wt-T4/out-T4rdr/ppu (relift of recomp/images-rdr.json
+with the committed landmarks, 254 s, done=0).
+
+Raw, /tmp/T4-run6.log:7-9 (BOOT, before anything goes wrong):
+
+    I   0.067782 [1856859] main: landmark 'spurs-abort-tail' at 0x3000c7e8 = liblv2+0xc7e8 spurs-abort-tail (_sys_panic+0x58)
+    I   0.067812 [1856859] main: landmark 'spurs-abort-frame1' at 0x32009754 = libsre+0x9754 spurs-abort-frame1 (f_3200930c+0x448)
+    I   0.067825 [1856859] main: landmark 'spurs-abort-frame0' at 0x3200cb24 = libsre+0xcb24 spurs-abort-frame0 (f_3200cab8+0x6c)
+
+Raw, /tmp/T4-run6.log:2110-2122 (the abort, 142.1 s):
+
+    I 142.083873 [1856872] tty: [0]   policy module  0x32023680
+    I 142.083901 [1856872] tty: [0]   workload ID    1
+    I 142.083910 [1856872] tty: [0] Call Stack Trace:	0x3200cb24
+    I 142.083930 [1856872] tty: [0]                  	0x32009754
+    I 142.083947 [1856872] tty: [0]                  	0x0
+    I 142.083965 [1856872] tty: [0] The SPURS is aborted.
+    I 142.085019 [1856872] ppu: process exit -2147418100 from thread 0x1000004 lr=0x3000c7e8 liblv2+0xc7e8 spurs-abort-tail (_sys_panic+0x58)
+
+62 "rsx: flip" lines on this run, 0 crashes, alive until the title calls
+_sys_panic. Both titles that were green stay green (the change is additive: no
+lifted code changed, tests pass, and only report lines and two tables differ).
+
+### M10 -- the lift is unchanged; only table.cpp differs
+
+    $ diff -rq /root/Dev/ps3base2/out-rdr/ppu /root/Dev/wt-T4/out-T4rdr/ppu
+    Files /root/Dev/ps3base2/out-rdr/ppu/table.cpp and /root/Dev/wt-T4/out-T4rdr/ppu/table.cpp differ
+
+    $ grep -n 'function_count' /root/Dev/ps3base2/out-rdr/ppu/table.cpp out-T4rdr/ppu/table.cpp
+    /root/Dev/ps3base2/out-rdr/ppu/table.cpp:76844:const uint32_t function_count = 76793;
+    out-T4rdr/ppu/table.cpp:153574:const uint32_t function_count = 76793;
+
+    $ diff <(grep -o '{0x[0-9a-f]*, f_[0-9a-f]*}' HEAD/table.cpp) \
+           <(grep -o '{0x[0-9a-f]*, f_[0-9a-f]*}' NEW/table.cpp)
+    (empty)
+
+### M11 -- tests
+
+    $ python3 tests/ppu_seed_forms.py
+    ppu_seed_forms: 16 checks passed
+
+    $ cd build-T4 && ctest --output-on-failure
+    (ppu_dispatch_table Passed, ppu_seed_forms Passed)
+
+    $ sh tools/check_no_dup_symbols.sh
+    gowa_stubs: no known duplicate definitions
+
