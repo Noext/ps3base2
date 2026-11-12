@@ -825,22 +825,21 @@ def load_static_seeds(out_dir, image_name, text_lo, text_hi):
     Kept separate from the dynamic file so a rebuild can tell which source
     changed: a static seed set only changes when the binary changes, a dynamic
     one changes on every run.
+
+    Both seed forms are accepted here (see parse_seed): an absolute guest
+    address and '<image>+<offset>'. The named form is resolved against text_lo,
+    the base this lift placed the image at, so a handwritten seed survives a
+    relayout instead of being dropped as stale.
     """
     path = os.path.join(os.path.dirname(os.path.abspath(out_dir)), "gen", "seeds", image_name + ".txt")
-    if not os.path.exists(path):
-        return []
     out = []
-    with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            try:
-                a = int(line.split()[0], 16)
-            except ValueError:
-                continue
-            if text_lo <= a < text_hi:
-                out.append(a)
+    for a, named in resolve_seeds(path, image_name, text_lo):
+        if not (text_lo <= a < text_hi):
+            if named:
+                print("%-16s seed %s resolves to 0x%08x, outside this image code"
+                      " -- dropped" % (image_name, named, a))
+            continue
+        out.append(a)
     return out
 
 
@@ -860,6 +859,177 @@ def seed_is_stale(addr, images):
     re-run.
     """
     return not any(im["text_lo"] <= addr < im["text_hi"] for im in images)
+
+
+def parse_seed(token):
+    """Read one seed token: an absolute address, or an (image, offset) pair.
+
+    Two forms, and the second is the point:
+
+        0x3000c7e8          an absolute guest address
+        liblv2+0xc7e8       an image NAME plus a byte offset into that image
+
+    The absolute form is what a discovery run records, and it goes stale the
+    moment layout_for.py moves the modules: the base is recomputed from the
+    title's text extent, so the same function is at a different address on the
+    next lift. seed_is_stale() can only drop such a seed and ask for a re-run.
+
+    The (image, offset) form cannot go stale. It is resolved HERE, at lift time,
+    against the base this lift actually gave that image, so a seed written once
+    keeps naming the same byte of the same module across every relayout. That is
+    what makes a seed worth writing down: 0x3000c7e8 is `_sys_panic` returning
+    from its tty write, and the address the abort reports is the return address
+    inside that function, not a function entry of its own.
+    """
+    token = token.strip()
+    if not token or token.startswith("#"):
+        return None
+    if "+" in token:
+        name, _, off = token.partition("+")
+        try:
+            return (name.strip(), int(off, 0))
+        except ValueError:
+            return None
+    try:
+        return (None, int(token, 16))
+    except ValueError:
+        return None
+
+
+def resolve_seeds(path, image_name, text_lo):
+    """A seed file for ONE image, absolute and (image, offset) forms together.
+
+    `text_lo` is that image's base as THIS lift placed it, which is the whole
+    reason the named form exists. Returns [(addr, named)] where `named` keeps
+    the original token so a landmark can be reported in the form it was
+    written.
+    """
+    if not path or not os.path.exists(path):
+        return []
+    out = []
+    for line in open(path):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        # The image-name column a discovery run writes ("0x3b0187a8 rdr") is
+        # NOT part of the seed: the address already names the image.
+        tok = line.split()[0]
+        parsed = parse_seed(tok)
+        if parsed is None:
+            continue
+        name, value = parsed
+        if name is None:
+            out.append((value, None))
+        elif name == image_name:
+            out.append(((text_lo + value) & 0xFFFFFFFF, tok))
+        # A named seed for another image is simply not this image's business.
+    return out
+
+
+def parse_seed(token):
+    """Read one seed token: an absolute address, or an (image, offset) pair.
+
+    Two forms, and the second is the point:
+
+        0x3000c7e8          an absolute guest address
+        liblv2+0xc7e8       an image NAME plus a byte offset into that image
+
+    The absolute form is what a discovery run records, and it goes stale the
+    moment layout_for.py moves the modules: the base is recomputed from the
+    title's text extent, so the same function is at a different address on the
+    next lift. seed_is_stale() can only drop such a seed and ask for a re-run.
+
+    The (image, offset) form cannot go stale. It is resolved at lift time
+    against the base this lift actually gave that image, so a seed written once
+    keeps naming the same byte of the same module across every relayout. That is
+    what makes a seed worth writing down: 0x3000c7e8 is the return address
+    inside liblv2's _sys_panic, not a function entry of its own.
+    """
+    token = token.strip()
+    if not token or token.startswith('#'):
+        return None
+    if '+' in token:
+        name, _, off = token.partition('+')
+        try:
+            return (name.strip(), int(off, 0))
+        except ValueError:
+            return None
+    try:
+        return (None, int(token, 16))
+    except ValueError:
+        return None
+
+
+def resolve_seeds(path, image_name, text_lo):
+    """A seed file for ONE image, absolute and (image, offset) forms together.
+
+    `text_lo` is that image's base as THIS lift placed it, which is the whole
+    reason the named form exists. Returns [(addr, named)] where `named` keeps
+    the original token so a landmark can be reported in the form it was
+    written.
+    """
+    if not path or not os.path.exists(path):
+        return []
+    out = []
+    for line in open(path):
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+        # The image-name column a discovery run writes ('0x3b0187a8 rdr') is
+        # NOT part of the seed: the address already names the image.
+        tok = line.split()[0]
+        parsed = parse_seed(tok)
+        if parsed is None:
+            continue
+        name, value = parsed
+        if name is None:
+            out.append((value, None))
+        elif name == image_name:
+            out.append(((text_lo + value) & 0xFFFFFFFF, tok))
+        # A named seed for another image is simply not this image's business.
+    return out
+
+
+def load_landmarks(path):
+    """Landmarks: (image, offset) seeds whose purpose is to be READ, not lifted.
+
+    Format, one per line:
+
+        liblv2+0xc7e8   spurs-abort-tail
+
+    The first token is the seed and must be the named form. The second is the
+    label the runtime prints, so an abort report says WHY that address matters
+    instead of only where it is.
+
+    A landmark is resolved here against this lift's own base for that image,
+    which is the entire point of the form: Red Dead's liblv2 sits at 0x30000000
+    today because layout_for.py puts the modules above the title's text, and it
+    sat at 0x21000000 before that. The absolute seed 0x3000c7e8 names the right
+    byte of liblv2 only for as long as nobody relayouts; 'liblv2+0xc7e8' keeps
+    naming the same byte.
+
+    Returns [(image_name, offset, label)] in file order.
+    """
+    if not path or not os.path.exists(path):
+        return []
+    out = []
+    for raw in open(path):
+        line = raw.split('#', 1)[0].strip()
+        if not line:
+            continue
+        parts = line.split()
+        parsed = parse_seed(parts[0])
+        if parsed is None:
+            print('landmark: cannot parse seed %r -- skipped' % parts[0])
+            continue
+        name, off = parsed
+        if name is None:
+            print('landmark: %r is absolute; a landmark must be (<image>+<offset>) '
+                  'or it goes stale on the next relayout -- skipped' % parts[0])
+            continue
+        label = parts[1] if len(parts) > 1 else ''
+        out.append((name, off, label))
+    return out
 
 
 def load_seeds(path):
@@ -919,6 +1089,13 @@ def main(manifest_path, nid_db, out_dir, chunk_bytes="0x19000"):
     seed_addrs = load_seeds(seeds_path)
     if seed_addrs:
         print("seeds: %d indirect target(s) from %s" % (len(seed_addrs), seeds_path))
+    # Landmarks are not seeds: nothing is lifted because of them. They name a
+    # byte whose meaning a report has to spell out, and they are resolved
+    # against the base this lift gives each image (see parse_seed).
+    landmarks_path = os.path.join(os.path.dirname(os.path.abspath(out_dir)), "gen", "landmarks.txt")
+    landmarks = load_landmarks(landmarks_path)
+    if landmarks:
+        print("landmarks: %d from %s" % (len(landmarks), landmarks_path))
     root = os.path.dirname(os.path.abspath(manifest_path))
     manifest = json.load(open(manifest_path))
     os.makedirs(out_dir, exist_ok=True)
@@ -931,6 +1108,8 @@ def main(manifest_path, nid_db, out_dir, chunk_bytes="0x19000"):
     imports = []
     exports = []
     unimpl = {}
+    resolved_landmarks = []
+    all_spans = {}
     # The code range of every image, so a seed can be checked against all of them
     # before the loop starts. Cheap: the ELF header is all it reads.
     image_spans = []
@@ -1039,6 +1218,49 @@ def main(manifest_path, nid_db, out_dir, chunk_bytes="0x19000"):
         funcs, entries = lift(img, mine, log=seed_log)
         if rejected[0] > 5:
             print("%-16s ... and %d more interior seeds rejected" % (spec["name"], rejected[0] - 5))
+        # Resolve this image's landmarks against the functions just lifted. The
+        # span test is the same one seeds_outside_functions uses, and it is the
+        # reason a landmark can name an address that is NOT a function entry:
+        # 0x3000c7e8 is the return address of the call at 0x3000c7e4, inside
+        # f_3000c790. An exact-entry lookup would report it as unlifted, which
+        # is precisely the report this task exists to fix.
+        _spans = sorted((min(f.insns), max(f.insns), a) for a, f in funcs.items() if f.insns)
+        for _lo, _hi, _entry in _spans:
+            all_spans[_entry] = (_lo, _hi, idx)
+        # Export OPD -> the code address it names, so a landmark's owning function
+        # can be reported by its specification name. An OPD is {code, toc}; the
+        # code word is what the entry points at.
+        _export_symbols = {}
+        for _exp in img.exports:
+            _blob = img.elf.read(_exp["opd"], 8)
+            if not _blob or len(_blob) < 8:
+                continue
+            _code = struct.unpack(">I", _blob[:4])[0]
+            if _exp["name"]:
+                _export_symbols.setdefault(_code, _exp["name"])
+        for lname, loff, llabel in landmarks:
+            if lname != spec["name"]:
+                continue
+            laddr = (img.text_lo + loff) & 0xFFFFFFFF
+            owner = 0
+            for slo, shi, sentry in _spans:
+                if slo <= laddr <= shi:
+                    owner = sentry
+                    break
+            # The export name of the owning function, when the module exports it.
+            # A landmark that reads "liblv2+0xc7e8 spurs-abort-tail _sys_panic+0x58"
+            # names the Sony entry point; the f_XXXX name is the lifter's.
+            symbol = _export_symbols.get(owner, "")
+            resolved_landmarks.append({"image": idx, "image_name": spec["name"],
+                                       "addr": laddr, "entry": owner,
+                                       "offset": laddr - owner if owner else 0,
+                                       "symbol": symbol,
+                                       "label": llabel, "seed": "%s+0x%x" % (lname, loff)})
+            print("%-16s landmark %s -> 0x%08x %s" % (
+                spec["name"], "%s+0x%x" % (lname, loff), laddr,
+                ("in %s%s+0x%x" % (symbol + " " if symbol else "",
+                                   "f_%08x" % owner, laddr - owner))
+                if owner else "NOT IN ANY LIFTED FUNCTION"))
         em = Emitter(img, funcs, entries, len(imports), idx, img.text_lo)
         for imp in img.imports:
             imports.append(dict(imp, image=idx))
@@ -1098,6 +1320,33 @@ def main(manifest_path, nid_db, out_dir, chunk_bytes="0x19000"):
     for im in images:
         t.append(f'    {{"{im["name"]}", "{im["file"]}", {str(im["prx"]).lower()}, 0x{im["text_lo"]:x}, 0x{im["text_hi"]:x}, 0x{im["toc"]:x}, 0x{im["entry"]:x}}},')
     t += ["};", f"const uint32_t image_count = {len(images)};", ""]
+    # The landmark table: what a report consults to turn a raw guest address
+    # into '<image> <label>+<offset>'. Sorted by address so the runtime can
+    # binary-search it, and each entry carries its owning lifted function entry
+    # so a PC inside a function still names that function.
+    resolved_landmarks.sort(key=lambda l: l["addr"])
+    t.append("const LandmarkEntry landmarks[] = {")
+    for l in resolved_landmarks:
+        t.append('    {"%s", "%s", "%s", 0x%08x, 0x%08x, 0x%08x},' % (
+            l["image_name"], l["label"], l["symbol"], l["addr"], l["entry"], l["offset"]))
+    t += ["};", f"const uint32_t landmark_count = {len(resolved_landmarks)};", ""]
+
+    # The span table: every lifted function's [first, last] instruction range.
+    #
+    # This exists because the dispatch table is keyed by ENTRY, so a guest PC
+    # that is not an entry reads as unlifted. That is wrong, and it is exactly
+    # why the Red Dead abort reported "(not lifted)" for 0x3000c7e8: that word
+    # is the return address of the call at 0x3000c7e4, the second instruction of
+    # f_3000c790's body. The function is lifted and running; the PC is simply not
+    # its first instruction.
+    #
+    # Sorted by first instruction; the intervals do not nest, so one binary
+    # search bounds the candidate.
+    spans = sorted((lo, hi, a, idx) for (a, (lo, hi, idx)) in all_spans.items())
+    t.append("const FunctionSpan function_spans[] = {")
+    for lo, hi, entry, imidx in spans:
+        t.append("    {0x%08x, 0x%08x, 0x%08x, %d}," % (lo, hi, entry, imidx))
+    t += ["};", f"const uint32_t function_span_count = {len(spans)};", ""]
     t.append("const FuncEntry functions[] = {")
     t += [f"    {{0x{addr:x}, {name}}}," for addr, name in all_funcs]
     t += ["};", f"const uint32_t function_count = {len(all_funcs)};", ""]
