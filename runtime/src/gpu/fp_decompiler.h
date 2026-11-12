@@ -31,4 +31,15 @@ using FpWordReader = std::function<uint32_t(uint32_t word_index)>;
 FragmentProgramInfo analyse_fragment_program(const FpWordReader& read);
 FragmentProgramInfo decompile_fragment_program(const FpWordReader& read, const FragmentProgramKey& key);
 
+/* The same program, but the GLSL is written for the WebGPU backend: samplers are
+ * emitted as separate texture + sampler bindings instead of combined ones.
+ *
+ * The reason is measured, not stylistic. A combined sampler compiles to an
+ * OpTypeSampledImage variable, and naga -- which wgpu-native uses to translate
+ * SPIR-V -- rejects it with "invalid id". A separate texture2D plus a sampler
+ * call produces the OpImage/OpTypeSampler shape naga does implement. The Vulkan
+ * path is untouched: decompile_fragment_program still emits the combined form.
+ */
+FragmentProgramInfo decompile_fragment_program_wgpu(const FpWordReader& read, const FragmentProgramKey& key);
+
 }

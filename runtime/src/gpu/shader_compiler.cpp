@@ -68,19 +68,12 @@ glslang_stage_t to_stage(ShaderStage s) {
     }
 }
 
-}
-
-bool compile_glsl(ShaderStage stage, const std::string& source, std::vector<uint32_t>& spirv, std::string& log) {
-    std::string path = cache_path(source_key(stage, source));
-    if (load_cached(path, spirv)) return true;
-    bool ok = compile_glsl_uncached(stage, source, spirv, log);
-    if (ok) store_cached(path, spirv);
-    return ok;
-}
-
-bool load_cached_glsl(ShaderStage stage, const std::string& source, std::vector<uint32_t>& spirv) { return load_cached(cache_path(source_key(stage, source)), spirv); }
-
-bool compile_glsl_uncached(ShaderStage stage, const std::string& source, std::vector<uint32_t>& spirv, std::string& log) {
+/* One glslang run. The SPIR-V version is a parameter because the two backends
+ * need different ones: Vulkan takes 1.6 (what this file always asked for), and
+ * wgpu-native needs 1.5, whose `discard` is OpKill. 1.6 encodes it as
+ * OpTerminateInvocation, which naga does not implement -- measured, see
+ * docs/explore/H2/RESULTS.md. */
+bool compile_version(ShaderStage stage, const std::string& source, std::vector<uint32_t>& spirv, std::string& log, glslang_target_language_version_t version) {
     std::call_once(g_init, [] { glslang_initialize_process(); });
     glslang_input_t input{};
     input.language = GLSLANG_SOURCE_GLSL;
@@ -88,7 +81,7 @@ bool compile_glsl_uncached(ShaderStage stage, const std::string& source, std::ve
     input.client = GLSLANG_CLIENT_VULKAN;
     input.client_version = GLSLANG_TARGET_VULKAN_1_3;
     input.target_language = GLSLANG_TARGET_SPV;
-    input.target_language_version = GLSLANG_TARGET_SPV_1_6;
+    input.target_language_version = version;
     input.code = source.c_str();
     input.default_version = 450;
     input.default_profile = GLSLANG_NO_PROFILE;
@@ -114,6 +107,32 @@ bool compile_glsl_uncached(ShaderStage stage, const std::string& source, std::ve
     }
     glslang_program_delete(program);
     glslang_shader_delete(shader);
+    return ok;
+}
+
+}  // namespace
+
+bool compile_glsl(ShaderStage stage, const std::string& source, std::vector<uint32_t>& spirv, std::string& log) {
+    std::string path = cache_path(source_key(stage, source));
+    if (load_cached(path, spirv)) return true;
+    bool ok = compile_glsl_uncached(stage, source, spirv, log);
+    if (ok) store_cached(path, spirv);
+    return ok;
+}
+
+bool load_cached_glsl(ShaderStage stage, const std::string& source, std::vector<uint32_t>& spirv) { return load_cached(cache_path(source_key(stage, source)), spirv); }
+
+bool compile_glsl_uncached(ShaderStage stage, const std::string& source, std::vector<uint32_t>& spirv, std::string& log) {
+    return compile_version(stage, source, spirv, log, GLSLANG_TARGET_SPV_1_6);
+}
+
+bool compile_glsl_wgpu(ShaderStage stage, const std::string& source, std::vector<uint32_t>& spirv, std::string& log) {
+    /* A separate cache namespace (the key is XORed with "WPGU") so a 1.5 module
+     * can never be mistaken for the 1.6 module of the same source. */
+    std::string path = cache_path(source_key(stage, source) ^ 0x57504755ull);
+    if (load_cached(path, spirv)) return true;
+    bool ok = compile_version(stage, source, spirv, log, GLSLANG_TARGET_SPV_1_5);
+    if (ok) store_cached(path, spirv);
     return ok;
 }
 

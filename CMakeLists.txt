@@ -27,6 +27,11 @@ set(PS3BASE_GENERATED_DIR "${CMAKE_SOURCE_DIR}/out/ppu" CACHE PATH "Directory wi
 set(PS3BASE_GENERATED_OPT "-O2" CACHE STRING "Optimization level for generated code")
 set(PS3BASE_SPU_OPT "-O2" CACHE STRING "Optimization level for generated SPU code")
 
+# The WebGPU backend compiles BESIDE Vulkan. third_party/wgpu-native is the
+# release drop (v29.0.1.1, headers + libwgpu_native.{a,so}); it is vendored
+# rather than fetched so the build needs no network.
+set(WGPU_DIR "${CMAKE_SOURCE_DIR}/third_party/wgpu-native" CACHE PATH "wgpu-native prefix")
+
 if(MSVC)
     set(PS3BASE_CLANG /clang:)
     set(PS3BASE_EH /EHsc)
@@ -115,6 +120,7 @@ endforeach()
 # too -- its static initialisers would otherwise run against nothing at startup
 # and fault before main().
 list(REMOVE_ITEM GOWA_RUNTIME_SOURCES "${CMAKE_SOURCE_DIR}/runtime/src/jobsys/jobs_modules.cpp")
+
 list(APPEND GOWA_RUNTIME_SOURCES "${CMAKE_SOURCE_DIR}/runtime/src/window_title.cpp")
 list(APPEND GOWA_RUNTIME_SOURCES "${CMAKE_SOURCE_DIR}/runtime/src/rdcapture.cpp")
 list(APPEND GOWA_RUNTIME_SOURCES ${GOWA_SPU_GEN_SOURCES})
@@ -156,6 +162,18 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/stb/stb_image.h" AND NOT EXISTS "${CM
 endif()
 
 add_library(ps3base_runtime OBJECT ${GOWA_RUNTIME_SOURCES})
+# The WebGPU backend always compiles: it is a translation unit, not a link
+# dependency, and it is inert unless PS3BASE_WGPU is set at run time. That
+# keeps a build with the backend present identical to one without it on
+# the Vulkan path, which is what makes the A/B comparison honest.
+if(EXISTS "${WGPU_DIR}/lib/libwgpu_native.so")
+    target_sources(ps3base_runtime PRIVATE runtime/src/gpu/wgpu_backend.cpp)
+    target_include_directories(ps3base_runtime PRIVATE "${WGPU_DIR}/include")
+    target_compile_definitions(ps3base_runtime PRIVATE PS3BASE_HAVE_WGPU=1)
+    message(STATUS "WebGPU backend: wgpu-native at ${WGPU_DIR}")
+else()
+    message(STATUS "WebGPU backend disabled: ${WGPU_DIR}/lib/libwgpu_native.so missing")
+endif()
 file(GLOB GOWA_EDGE_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/runtime/src/spu/edge/*.cpp")
 file(GLOB GOWA_RENJOB_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/runtime/src/spu/renjob/*.cpp")
 file(GLOB GOWA_SCREAM_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/runtime/src/spu/scream/*.cpp")
@@ -236,6 +254,11 @@ else()
     message(STATUS "Launcher disabled: third_party/imgui or third_party/stb missing")
 endif()
 target_link_libraries(ps3base PRIVATE ps3base_ppu ps3base_spu ps3base_ppu_ops ${PS3BASE_SYS_LIBS} glslang SPIRV glslang-default-resource-limits)
+if(EXISTS "${WGPU_DIR}/lib/libwgpu_native.so")
+    target_link_directories(ps3base PRIVATE "${WGPU_DIR}/lib")
+    target_link_libraries(ps3base PRIVATE wgpu_native)
+    set_target_properties(ps3base PROPERTIES BUILD_RPATH "${WGPU_DIR}/lib")
+endif()
 target_include_directories(ps3base PRIVATE runtime/include)
 target_compile_options(ps3base PRIVATE ${PS3BASE_ARCH_FLAGS} ${PS3BASE_EH})
 
@@ -324,7 +347,7 @@ add_test(NAME spurs COMMAND spurs)
 # Point this at a wgpu-native prefix to build the smoke test:
 #   cmake -DWGPU_DIR=/path/to/wgpu-native ...
 # Empty by default, so a clean checkout configures without it.
-set(WGPU_DIR "" CACHE PATH "wgpu-native prefix (optional; enables wgpu_smoke)")
+
 if(EXISTS "${WGPU_DIR}/lib/libwgpu_native.so")
     add_executable(wgpu_smoke tests/wgpu_smoke.cpp)
     target_include_directories(wgpu_smoke PRIVATE "${WGPU_DIR}/include" runtime/include)
@@ -531,16 +554,10 @@ target_compile_options(sysutil PRIVATE ${PS3BASE_ARCH_FLAGS})
 target_link_libraries(sysutil PRIVATE ${CMAKE_DL_LIBS} pthread)
 add_test(NAME sysutil COMMAND sysutil)
 
-# sysutil_handlers: the SAME handlers the imports run (cellSysutil.cpp is
-# included), called with a real ppu::Context, so the argument order and the
-# value that lands in r3 are checked -- not only the rules in the header. The
-# services it calls (msgdialog, osk, vfs, cbwatch) are stubbed, so this runs with
-# no game, no GPU and no threads.
-add_executable(sysutil_handlers tests/sysutil_handlers.cpp runtime/src/memory.cpp runtime/src/regions.cpp runtime/src/mem.cpp runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/backtrace_port.cpp runtime/src/host.cpp runtime/src/log.cpp)
-target_include_directories(sysutil_handlers PRIVATE runtime/include "${CMAKE_SOURCE_DIR}/runtime/src" "${CMAKE_SOURCE_DIR}/runtime/src/hle")
-target_compile_options(sysutil_handlers PRIVATE ${PS3BASE_ARCH_FLAGS})
-target_link_libraries(sysutil_handlers PRIVATE ${CMAKE_DL_LIBS} pthread)
-add_test(NAME sysutil_handlers COMMAND sysutil_handlers)
+# [H2] target disabled at base a538cdc: tests/sysutil_handlers.cpp does not exist here (it lands on main).
+# The file itself is restored; only the target is skipped, and only because the test also
+# needs the main-side hle/sysutil_hle.h changes, which are outside this piste.
+
 
 
 
