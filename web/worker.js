@@ -28,11 +28,11 @@ function log(text) {
 const PAD_FRAMES = 8;
 
 async function boot() {
-  const url = new URL('./game.js', import.meta.url);
+  const url = new URL('./game.js', self.location.href);
 
   mod = await import(url.href);
   const Module = await mod.default({
-    locateFile: (p) => new URL('./' + p, import.meta.url).href,
+    locateFile: (p) => new URL('./' + p, self.location.href).href,
     print: (t) => log(t),
     printErr: (t) => log(t),
     /* Emscripten runs main() on a pthread; we wait for the runtime's own

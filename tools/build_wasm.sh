@@ -85,7 +85,9 @@ echo "== link"
 # PS3BASE_NAMED=1 keeps the name section so a bare "unreachable" can be
 # attributed to a function instead of guessed from wasm-function indices.
 "$EMCC" "${CXXFLAGS[@]}" -nostdlib++ ${PS3BASE_NAMED:+-g} \
-    -sPTHREAD_POOL_SIZE=4 -sALLOW_MEMORY_GROWTH=1 \
+    -sPTHREAD_POOL_SIZE=24 -sPTHREAD_POOL_SIZE_STRICT=2 -sPROXY_TO_PTHREAD=1 -sALLOW_MEMORY_GROWTH=1 \
+    -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createPs3base \
+    -sENVIRONMENT=web,node -sALLOW_BLOCKING_ON_MAIN_THREAD=0 \
     -sINITIAL_MEMORY=268435456 -sMAXIMUM_MEMORY=3221225472 \
     -sERROR_ON_UNDEFINED_SYMBOLS=0 \
     --preload-file "$DISK@/" \
