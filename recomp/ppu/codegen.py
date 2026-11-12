@@ -2,7 +2,7 @@ import os
 import struct
 import sys
 
-from analysis import Image, discover, islands, looks_like_function, branch_target, bo_always, sext, load_switch_tables, profile_for
+from analysis import ALL_RULES, Image, discover, islands, looks_like_function, branch_target, bo_always, sext, load_switch_tables, profile_for
 from isa import mnemonic
 
 
@@ -972,8 +972,19 @@ def main(manifest_path, nid_db, out_dir, chunk_bytes="0x19000"):
         # relative jump table and 0x3000d360 comes back at 0.7 s. Measured: with
         # profile_for(spec["name"]) the module got NO_RULES and the run died at
         # 0.74 s instead of reaching Module 37.
-        _title = manifest[0]["name"]
-        img = Image(os.path.join(root, spec["elf"]), nids, profile_for(_title))
+        # Two different questions, and conflating them cost two red regresses:
+        #
+        #  - the TITLE gets its own profile. Minecraft and GTA are green with the
+        #    conservative lifter, so they keep it; a new rule has to be proven on
+        #    the title before it is enabled there.
+        #  - a FIRMWARE MODULE gets every rule, always. The same liblv2 is loaded
+        #    by all three titles, and it contains a relative TOC jump table that a
+        #    conservative lift cannot see: without the rules the run dies at 0.6 s
+        #    on 'unknown indirect target 0x3000d360', measured in both RDR and GTA.
+        #    A module is not a place to be cautious -- it is the same binary.
+        _is_title = (spec["name"] == manifest[0]["name"])
+        _profile = profile_for(spec["name"]) if _is_title else ALL_RULES
+        img = Image(os.path.join(root, spec["elf"]), nids, _profile)
         # The file is global but a table address belongs to one image: keep only
         # the entries whose bctr and targets live in THIS image's code.
         img.manual_tables = {}
