@@ -16,7 +16,7 @@
  *      the same aligned 8 bytes as the load.
  *
  * The store in test 1 is a plain memcpy into vm::ptr, exactly like
- * runtime/src/loader.cpp:80 and runtime/src/hle/*.cpp do it. That is the point:
+ * runtime/src/loader.cpp:80 and the handlers under runtime/src/hle do it. That is the point:
  * the failure being reproduced is a guest reservation being committed over data
  * this runtime wrote behind rsv::'s back.
  */
@@ -141,6 +141,19 @@ int main()
         const uint32_t got = vm::read32(a);
         std::fprintf(stderr, "  clean lwarx/stwcx.: ok=%d counter=0x%08x\n", ok ? 1 : 0, got);
         CHECK(ok && got == 0x11u, "an uncontended lwarx/stwcx. must commit");
+    }
+
+    /* 7. dcbz zero-fills the line with a plain memset (runtime/include/ppu/ops.h:285)
+     *    and never reaches rsv::, so it is the sharpest test of the full-line
+     *    comparison: only the line's bytes can catch it. */
+    {
+        vm::write32(a, 0x0A0A0A0Au);
+        const uint32_t v = ppu::lwarx(ctx, base, a);
+        (void)v;
+        ppu::dcbz(base, line);
+        const bool ok = ppu::stwcx(ctx, base, a, 0x0B0B0B0Bu);
+        std::fprintf(stderr, "  lwarx then dcbz of the same line -> stwcx. %s\n", ok ? "SUCCESS (wrong)" : "failed (correct)");
+        CHECK(!ok, "a dcbz of the reserved line must cancel the reservation");
     }
 
     std::printf("%d checks, %d failures\n", checks, fails);

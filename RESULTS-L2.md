@@ -140,3 +140,34 @@ so the two paths are not interchangeable and a comparison must hold it fixed.
 Both baseline and fix numbers above are from the headless path.
 
 
+## Measurement 6 -- the sharpest case: dcbz, which is a plain memset on the line
+
+runtime/include/ppu/ops.h:285 does `std::memset(b + (ea & ~127u), 0, 128)` and
+calls notify_store() for a diagnostic, never rsv::. So it bumps no version. Only
+the byte comparison of the full line can catch it, and it does:
+
+    $ ./build-51/reservation_line
+      lwarx  [0x10000090] = 0x11111111, then a bypass store to 0x100000a0 (same line)
+      stwcx. -> failed (correct)
+      stwcx. after a write to a different line -> success (correct)
+      lwarx at 0x10000090 then stwcx. at 0x100000a0 (same line) -> success (correct)
+      ldarx then a bypass store to the same line -> stdcx. failed (correct)
+      lwarx then vm::write32 to the same line -> stwcx. failed (correct)
+      clean lwarx/stwcx.: ok=1 counter=0x00000011
+      lwarx then dcbz of the same line -> stwcx. failed (correct)
+    7 checks, 0 failures
+
+## Measurement 7 -- the whole suite, on the rebased branch
+
+    $ cd /root/Dev/wt-L2/build-51 && ctest --output-on-failure -j 4
+    100% tests passed, 0 tests failed out of 35
+    Total Test time (real) =   3.61 sec
+
+The new `reservation_line` is one of the 35. The four reservation tests:
+
+    reservation_line       7 checks, 0 failures
+    reservation_increment  8 checks, 0 failures
+    reservation_xproc      4 checks, 0 failures
+    lock_counter           3 checks, 0 failures
+
+
