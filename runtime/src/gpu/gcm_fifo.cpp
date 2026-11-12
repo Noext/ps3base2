@@ -380,7 +380,7 @@ void drain() {
             g_unmapped_stops.fetch_add(1, std::memory_order_relaxed);
             return;
         }
-        if (++guard > 200000) {
+        if (++guard > 2000000) {
             LOG_WARN("gcmfifo", "drain budget exhausted at get 0x%08x (put 0x%08x)", get, put);
             return;
         }
