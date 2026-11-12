@@ -23,6 +23,7 @@ std::string sample_stack(void* native, int depth) {
 #else
 
 #ifndef _WIN32
+#include "runtime/codewatch.h"
 #include "runtime/hooks.h"
 #include "runtime/host.h"
 #include "runtime/log.h"
@@ -128,6 +129,10 @@ struct PendingHit {
     /* Copied, not pointed at: the guest thread's name buffer can be rewritten or
      * freed between the fault and the single-step trap. */
     char thread[32];
+    /* Y1: set when the faulting access was the block watch reading the watched
+     * word for its "prev" field, not the guest. Reported with a SELF-READ tag
+     * and never counted as a guest read. */
+    bool self_read;
     void* pcs[12];
     int npcs;
 };
@@ -136,6 +141,9 @@ std::vector<Trap> g_traps;
 std::unordered_map<uint32_t, host::Prot> g_trap_pages;
 int g_watch_count = 0;
 uint32_t g_trap_max = 50;
+/* Y1: how many mprotect faults were the watch reading its own watched word.
+ * Printed with the trap summary, so "0 self reads" is a measurement. */
+std::atomic<uint64_t> g_self_reads{0};
 std::mutex g_trap_lock;
 thread_local uint32_t t_step_page = 0;
 /* Set when the single step belongs to the diagnostic page guard rather than to a
@@ -179,6 +187,16 @@ void process_hit(const PendingHit& h) {
      * zero-filling writer cannot mask the one that carries the data. */
     if (const char* nz = std::getenv("GOWA_TRAP_NONZERO"); nz && *nz != '0' && h.write && value == 0) return;
     std::lock_guard lk(g_trap_lock);
+    if (h.self_read) {
+        /* The watch reading the word for its own "prev". It must be attributed,
+         * not hidden: a guest read and a self read are the same mprotect fault,
+         * and mistaking one for the other is how a watcher invents the event it
+         * was built to find. Counted and logged separately, so the number of
+         * self reads is in the log and a fabricated read cannot pass for a
+         * guest one. */
+        g_self_reads.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
     t.hits++;
     uint32_t stack_id = 0;
     if (t.logged < g_trap_max) {
@@ -208,6 +226,13 @@ void process_hit(const PendingHit& h) {
         }
         cs.val = value;
     }
+    /* Y1: a running total, emitted from the event path so it appears even when
+     * the title ends through _sys_process_exit (where atexit never runs). "0
+     * self reads" is then a printed number, not an absence. */
+    static std::atomic<uint64_t> g_reported{0};
+    if (g_reported.fetch_add(1, std::memory_order_relaxed) % 200 == 0)
+        LOG_INFO("trap", "watch totals: %llu guest events, %llu self reads dropped (the watch reading a watched word for its own prev)",
+                 static_cast<unsigned long long>(g_reported.load()), static_cast<unsigned long long>(g_self_reads.load()));
     if (trace::on(trace::TRAP)) trace::emit(trace::T_TRAP, uint32_t(h.trap) | (uint32_t(h.write) << 8), h.fault, value, stack_id, t.len <= 4 ? 0 : vm::read32(t.addr));
     if (t.dump && !t.dumped) {
         t.dumped = true;
@@ -248,12 +273,24 @@ bool guard_fault(uint32_t g, bool is_write, ucontext_t* uc) {
 
 bool trap_fault(uint32_t g, bool is_write, ucontext_t* uc) {
     if (!g_trap_pages.count(g >> 12)) return false;
+    /* Y1: the watch reads the watched word itself, to report "prev". When the
+     * word sits on a trap page that read faults right here, and without this
+     * guard it is published as a guest READ carrying the guest lr of whatever
+     * store happened to be interrupted -- a fabricated event that mimics the
+     * reader under investigation. Measured on RDR run B: 6 of 575 events on
+     * 0x0177caa8 were the watch reading itself, and each one made the store it
+     * interrupted look preceded by a read. The page is opened and the single
+     * step is still required (the read must complete), so the fix is to record
+     * the hit for the step but mark it self-inflicted and drop it in
+     * process_hit. */
+    const bool self_read = !is_write && cw::t_self_read_depth > 0;
     for (int i = 0; i < static_cast<int>(g_traps.size()); i++) {
         const Trap& t = g_traps[i];
         if (uint64_t(g) + 16 <= t.addr || uint64_t(g) >= uint64_t(t.addr) + t.len) continue;
         if (!is_write && !t.reads) continue;
         PendingHit h{i, g, is_write, 0, 0, 0, {}, {}, 0};
         h.thread[0] = 0;
+        h.self_read = self_read;
         guest::Thread* th = guest::current();
         if (th) {
             h.lr = static_cast<uint32_t>(th->ctx.lr);
@@ -584,6 +621,18 @@ void arm_watch() {
         LOG_INFO("trap", "trap %zu: %s 0x%08x+0x%x%s%s arm-time words:%s", i, t.reads ? "read/write" : "write", t.addr, t.len, t.has_val ? " value-match" : "", t.dump ? " dump" : "", armed);
     }
     g_watch_count = static_cast<int>(g_traps.size());
+    /* The number of mprotect faults that were the watch's own read of a watched
+     * word is reported at the same place the watch is armed, so a run states it
+     * instead of leaving it to be inferred from a stack trace. */
+    LOG_INFO("trap", "self-read guard armed: a fault from this thread's own block-watch read is counted, not reported as a guest access");
+    /* The count is only useful if the run says it. The title ends through
+     * _sys_process_exit, so main()'s summary never runs; an atexit hook does. */
+    std::atexit([] {
+        uint64_t total = 0;
+        for (size_t i = 0; i < g_traps.size(); i++) total += g_traps[i].hits;
+        LOG_INFO("trap", "watch totals: %llu guest events, %llu self reads dropped (%zu traps)", static_cast<unsigned long long>(total),
+                 static_cast<unsigned long long>(g_self_reads.load()), g_traps.size());
+    });
     rearm_watch();
 }
 

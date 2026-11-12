@@ -397,6 +397,16 @@ target_compile_options(reservation_xproc PRIVATE ${PS3BASE_ARCH_FLAGS})
 target_link_libraries(reservation_xproc PRIVATE ${CMAKE_DL_LIBS} pthread)
 add_test(NAME reservation_xproc COMMAND reservation_xproc)
 
+# Every guest write path reaches the block watch, measured rather than argued:
+# one line armed, one store through each of the seven paths, then the log is
+# read back and each path's label must be present. A path that stops calling
+# cw::block_store fails here instead of silently widening a watch.
+add_executable(write_paths tests/write_paths.cpp runtime/src/ppu_ops.cpp runtime/src/memory.cpp runtime/src/regions.cpp runtime/src/mem.cpp runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/backtrace_port.cpp runtime/src/host.cpp runtime/src/log.cpp)
+target_include_directories(write_paths PRIVATE runtime/include "${CMAKE_SOURCE_DIR}/runtime/src")
+target_compile_options(write_paths PRIVATE ${PS3BASE_ARCH_FLAGS})
+target_link_libraries(write_paths PRIVATE ${CMAKE_DL_LIBS} pthread)
+add_test(NAME write_paths COMMAND write_paths)
+
 # Two guest threads, one shared counter, one million increments each. A lost
 # update proves the reservation fast path is broken.
 add_executable(lock_counter tests/lock_counter.cpp runtime/src/memory.cpp runtime/src/regions.cpp runtime/src/mem.cpp runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/backtrace_port.cpp runtime/src/host.cpp runtime/src/log.cpp)

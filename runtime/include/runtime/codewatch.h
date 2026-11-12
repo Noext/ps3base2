@@ -109,6 +109,26 @@ void note_hit(uint32_t addr, uint32_t size, const char* how, uint32_t value);
 extern std::atomic<bool> g_block_on;
 bool blockwatch_hit(uint32_t addr, uint32_t size, const uint8_t* data, const char* how);
 
+/* Depth of the block watch's OWN reads of a watched word, entered around every
+ * vm::read32 that reports a prev value.
+ *
+ * The watched word can be on a trap page, and then the watch's read faults
+ * inside the SIGSEGV handler's own machinery. The handler trapped on the page
+ * and reports what it sees, so without this counter the watch's read is
+ * published as a guest read with the guest lr of the interrupted store -- a
+ * fabricated event that looks exactly like the reader the investigation is
+ * looking for. Measured on RDR run B: 6 of 575 events on 0x0177caa8 were this,
+ * all of them at a moment that made the store they interrupted look like it was
+ * preceded by a read. Thread-local because the fault happens on the same thread
+ * as the read. */
+extern thread_local int t_self_read_depth;
+struct SelfReadScope {
+    SelfReadScope() { ++t_self_read_depth; }
+    ~SelfReadScope() { --t_self_read_depth; }
+    SelfReadScope(const SelfReadScope&) = delete;
+    SelfReadScope& operator=(const SelfReadScope&) = delete;
+};
+
 /* Called before a store is applied: prev is still readable, which is what makes
  * "0 -> 0" (a redundant write) distinguishable from "0x0123456 -> 0". */
 inline void block_store(uint32_t addr, uint32_t size, const uint8_t* data, const char* how) {

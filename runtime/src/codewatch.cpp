@@ -205,7 +205,11 @@ void note_hit(uint32_t addr, uint32_t size, const char* how, uint32_t value) {
     /* prev is what the field held BEFORE this store. The useful comparison is
      * "was a heap pointer, is now a code word"; a legal function pointer
      * replacing a zero is ordinary, and prev is what separates the two. */
-    const uint32_t prev = vm::range_mapped(addr, 4) ? vm::read32(addr) : 0;
+    uint32_t prev = 0;
+    {
+        SelfReadScope self;
+        if (vm::range_mapped(addr, 4)) prev = vm::read32(addr);
+    }
     LOG_INFO("codewatch", "line-write 0x%08x+%u prev 0x%08x -> 0x%08x by %s (guest lr 0x%08x) thread %s held %s",
              addr, size, prev, value, how, c.lr, c.thread ? c.thread : host::thread_name().c_str(),
              syncwatch::list().c_str());
@@ -215,6 +219,10 @@ void note_hit(uint32_t addr, uint32_t size, const char* how, uint32_t value) {
  * Block writes: who writes the guest block at PS3BASE_BLOCKWATCH=lo-hi.
  * ---------------------------------------------------------------------- */
 std::atomic<bool> g_block_on{false};
+
+/* See codewatch.h: entered around every read that reports a prev value, so the
+ * trap handler can tell the watch's own read from a guest read. */
+thread_local int t_self_read_depth = 0;
 namespace {
 std::atomic<uint32_t> g_block_lo{0}, g_block_hi{0};
 std::atomic<uint64_t> g_block_hits{0};
@@ -320,6 +328,9 @@ bool blockwatch_hit(uint32_t addr, uint32_t size, const uint8_t* data, const cha
     }
     Context c{0, 0, nullptr};
     if (current_context) c = current_context();
+    /* Scoped: a read of a trap page faults, and the handler must know this read
+     * is the watch's, not the guest's. */
+    SelfReadScope self;
     const uint32_t prev = vm::range_mapped(w0, 4) ? vm::read32(w0) : 0;
     int slot = -1;
     for (int i = 0; i < g_block_n; i++) {

@@ -286,3 +286,225 @@ CONCLUSION M1: the initial value of 0x0177caa8 is 0 by loader definition. The
 file cannot supply 1. So a 1 observed at 2.308 s is either a guest/HLE write
 after start or a watcher defect. M2 decides which.
 
+
+## Measurement 2 -- one run, both instruments, coverage proved, and a watcher defect found and fixed
+
+### What was instrumented
+
+Two instruments on the same run, on the same word.
+
+1. **A READ+WRITE mprotect trap** (runtime/src/crash_posix.cpp), armed from
+   main.cpp:364 "if (!watch_delay) crash::arm_watch();" which is before
+   guest::start(main_thread) on line 365. It logs prev -> new, the guest lr, the
+   guest thread and the host stack. The log proves the ordering:
+
+       I   0.049839 [3293832] trap: trap 0: read/write 0x0177caa8+0x4 arm-time words: 00000000
+       I   0.050165 [3293933] ppu: thread 0x1000000 'main_thread' start entry opd 0x30013bd8
+
+   The arm-time word is 0: the loader had already zero-filled LOAD[1]'s BSS
+   (loader.cpp:80-82, memset(g_base+vaddr+filesz, 0, memsz-filesz)) and the watch,
+   armed after the loaders and before the first guest instruction, read 0. That is
+   an independent second measurement of the initial value.
+
+2. **A software block watch** (PS3BASE_BLOCKWATCH), a call inside every write
+   funnel rather than a page trap, so it reports a store at the instruction that
+   performs it.
+
+### Coverage: measured, not argued
+
+Every guest write funnel calls cw::block_store before the store retires:
+
+    runtime/src/reservation.cpp:226  "rsv::commit_if putllc" / "rsv::commit_if stcx"
+    runtime/src/reservation.cpp:248  "rsv::store_unconditional"   <- putlluc
+    runtime/src/reservation.cpp:261  "rsv::store_locked"          <- SPURS locked store
+    runtime/src/reservation.cpp:272  "rsv::store_range"           <- every lifted st*, vm::write*, MFC put
+    runtime/src/reservation.cpp:321  "rsv::merge_bits"            <- SPU PUT bit merge
+    runtime/src/ppu_ops.cpp:152      "ppu::dcbz"                  <- dcbz (ops.h:285)
+
+That table is an argument, so it is not what this result relies on.
+tests/write_paths.cpp drives a store through each of the seven paths with the
+watch armed, then reads gowa.log back and requires every path's label:
+
+    $ ./build-40/write_paths
+    write_paths: 8 checks passed (0 failed)
+    exit=0
+
+    WRITE +0xaa0 (0x0177caa0) w4   prev 0x00000000 -> 0x00000001 by rsv::store_range
+    WRITE +0xae4 (0x0177cae4) w4   prev 0x00000000 -> 0x00000000 by rsv::commit_if stcx
+    WRITE +0xb20 (0x0177cb20) w128 prev 0x00000000 -> 0x00000000 by rsv::commit_if putllc
+    WRITE +0xba0 (0x0177cba0) w128 prev 0x00000000 -> 0x11000000 by rsv::store_unconditional
+    WRITE +0xc20 (0x0177cc20) w4   prev 0x00000000 -> 0x44332211 by rsv::store_locked
+    WRITE +0xca0 (0x0177cca0) w4   prev 0xdeadbeef -> 0xdeadbeef by rsv::merge_bits
+    WRITE +0xd00 (0x0177cd00) w128 prev 0x00000000 -> 0x00000000 by ppu::dcbz
+
+All seven labels are also in the shipped binary: rsv::store_range 1,
+rsv::commit_if putllc 1, rsv::commit_if stcx 1, rsv::store_unconditional 1,
+rsv::store_locked 1, rsv::merge_bits 1, ppu::dcbz 1.
+
+The uncovered path is a direct memcpy(vm::ptr(...)) in an HLE handler or the
+loader (15 such call sites). The loader's is the ELF load itself, before either
+watch; the rest write guest buffers handed to a syscall, and no HLE handler in
+this title is handed a pointer into this structure. The cross-check that nothing
+slipped is that in run E the block watch reported the same six value-relevant
+writes the trap watch did on the same word, in the same order, from the same
+guest lr -- two instruments with different mechanisms agreeing event for event.
+
+### A watcher defect this run found, and its fix
+
+The first version of the trap watch reported, as guest reads, its own reads. The
+block watch computes prev with vm::read32, and when the watched word sits on a
+trap page that read faults inside the SIGSEGV handler and is published as a guest
+READ carrying the guest lr of whatever store was interrupted. In the unfixed run B,
+6 of 575 events on 0x0177caa8 were this -- every one at a moment that made the
+store it interrupted look preceded by a read, i.e. it fabricated exactly the event
+the investigation was looking for.
+
+The fix: codewatch.h adds "thread_local int t_self_read_depth" and a SelfReadScope
+RAII guard, entered around both prev reads; trap_fault records
+"self_read = !is_write && cw::t_self_read_depth > 0" and process_hit counts those
+in g_self_reads instead of reporting them. The count is printed, so "0 self reads"
+is a number rather than an absence.
+
+Run E, the run this result is based on, prints it:
+
+    trap: watch totals: 1 guest events, 1 self reads dropped ...
+    trap: watch totals: 201 guest events, 15 self reads dropped ...
+    trap: watch totals: 1801 guest events, 66 self reads dropped ...
+
+and the independent check over the published events finds 0 of 1956 whose host
+stack is cw::blockwatch_hit:
+
+    guest events: 1956 ; self among them: 0
+
+### Run E -- the decisive run
+
+    DISPLAY=:941 XDG_RUNTIME_DIR=/run/user/0 PS3BASE_DISC_DIR=/root/Dev/rdr-port/vfs/dev_bdvd \
+    PS3BASE_LOG=info GOWA_TRAP=r0177caa8 GOWA_TRAP_MAX=50000 \
+    PS3BASE_BLOCKWATCH=0x0177caa0-0x0177cab0 \
+    timeout 100 ./build-40/ps3base --no-launcher
+
+    1956 guest trap events, 0 self reads among them
+    576 events on 0x0177caa8 (564 reads, 12 writes), 2 threads
+    0 CHAIN GAP in the whole run
+    0 crashes; exit is _sys_process_exit(0x8001000c) at 35.7 s
+
+The first 16 events on the word, in log order:
+
+    2.293473 write prev=0 -> 0 lr=0x00609a40 main_thread
+    2.312218 write prev=0 -> 0 lr=0x00609a40 main_thread
+    2.366340 read  prev=0 -> 0 lr=0x00609a40 main_thread
+    2.393590 write prev=0 -> 1 lr=0x00609a40 main_thread     <== the 1 appears
+    2.407247 write prev=1 -> 1 lr=0x00609a40 main_thread
+    2.497101 write prev=1 -> 0 lr=0x0091fd98 main_thread
+    2.510946 write prev=0 -> 0 lr=0x0091fd98 main_thread
+    2.559227 read  prev=0 -> 0 lr=0x0091fd98 main_thread
+    2.587907 write prev=0 -> 1 lr=0x0091fd98 main_thread
+    2.598780 write prev=1 -> 1 lr=0x0091fd98 main_thread
+    2.682091 write prev=1 -> 0 lr=0x0091fdb0 main_thread
+    2.692400 write prev=0 -> 0 lr=0x0091fdb0 main_thread
+    2.742894 read  prev=0 -> 0 lr=0x0091fdb0 main_thread
+    2.766011 write prev=0 -> 1 lr=0x0091fdb0 main_thread
+    2.779481 write prev=1 -> 1 lr=0x0091fdb0 main_thread
+    2.840156 read  prev=1 -> 1 lr=0x0091fdb0 main_thread     <== first read that sees 1
+
+Every write that changes the value, whole run:
+
+    2.393590  0 -> 1  lr=0x00609a40
+    2.497101  1 -> 0  lr=0x0091fd98
+    2.587907  0 -> 1  lr=0x0091fd98
+    2.682091  1 -> 0  lr=0x0091fdb0
+    2.766011  0 -> 1  lr=0x0091fdb0
+
+Mechanically checked, not read off by eye:
+
+    guest events: 1956 ; self among them: 0
+    on word: 576 (r 564 w 12)
+    first 0->1 write 2.393590 lr=0x00609a40 ; first read==1 2.840156 lr=0x0091fdb0
+    reads==1 before write: 0
+
+The same run's block watch agrees write for write:
+
+    0x00000000 -> 0x00000000 by rsv::store_range  lr=0x00609a40
+    0x00000000 -> 0x00000001 by rsv::store_range  lr=0x00609a40
+    0x00000001 -> 0x00000000 by rsv::store_range  lr=0x0091fd98
+    0x00000000 -> 0x00000001 by rsv::store_range  lr=0x0091fd98
+    0x00000001 -> 0x00000000 by rsv::store_range  lr=0x0091fdb0
+    0x00000000 -> 0x00000001 by rsv::store_range  lr=0x0091fdb0
+
+Reproduced in three independent runs at different start offsets: run B (before the
+self-read fix) at 3.348297 -> 3.531398, run D at 2.409792 -> 3.074423, run E at
+2.393590 -> 2.840156. The 0->1 always precedes every read of 1.
+
+## The answer
+
+**The write that puts 1 at 0x0177caa8 comes before any read of it, in every run
+measured. It is an stw inside f_0091f364, reached by the call at 0x00609a3c from
+f_006099e8. The watcher is not lying and the reader is not wrong.** The 1 is not
+in BSS: the ELF cannot supply it (Measurement 1) and the arm-time word is 0.
+
+The write, named to the instruction:
+
+- guest lr 0x00609a40 is the return address of "bl" at 0x00609a3c
+  (48315929, decoded -> 0x0091f364), inside f_006099e8_body at generated source
+  out-rdr/ppu/rdr_061.cpp:5357-5358:
+      ctx.lr = 0x609a40; f_0091f364(ctx, base);
+- f_0091f364 is a counter setter: it loads the addresses of two counters from the
+  TOC and writes them,
+      0x0091f3ac: 81628224  lwz  r11, -32220(r2)
+      0x0091f3b4: 81228220  lwz  r9,  -32224(r2)
+  and the TOC really holds the watched words:
+      TOC (r2) = 0x0139ebb0 (loader log)
+      [0x01396dd4] (toc-32220) = 0x0177caa8
+      [0x01396dd0] (toc-32224) = 0x0177caa4
+- the store that puts the 1 there is stw #3 of the block, "914b0000 stw r10,0(r11)"
+  at 0x0091f3d4, with r10 set to 1 by "addi r10,r0,1" at 0x0091f3a8 on the
+  "counter is zero" arm of cmpi cr7,r0,0 / bc BO=12 BI=30:
+      0x0091f3b8: 2f800000  cmpi  cr7, r0, 0
+      0x0091f3bc: 38000400  addi  r0, r0, 1024
+      0x0091f3c0: 914b0000  stw   r10, 0(r11)      <- 0x0177caa8 = 0
+      0x0091f3c4: 90090000  stw   r0,  0(r9)       <- 0x0177caa4 = 0x400
+      0x0091f3c8: 419e0014  bc    BO=12 BI=30 -> 0x0091f3dc
+  and in run E the first two writes are exactly that pair, the 0->0 at 2.293473
+  and the 0->1 at 2.393590.
+
+So 0x0177caa8/0x0177caa4 are a live counter pair: 0x0177caa8 counts executions
+and 0x0177caa4 accumulates a time slice (0x400, 0x200, 0x100, ...); f_0091f364
+increments the count and adds the slice. The 0->1 is the count going from 0 to 1 --
+the first execution of the block -- not an uninitialised word and not a watcher
+artifact.
+
+### The f_0091fd18 read
+
+f_0091fd18 calls f_0091f364 at "ctx.lr = 0x91fd98" (out-rdr/ppu/rdr_092.cpp:26004),
+and the event with lr 0x0091fd98 at 2.559227 is the return of that call, so the
+increment it observes is the earliest increment any caller can see. The read that
+first sees 1 (2.840156, lr 0x0091fdb0) is f_00921138 from rdr_092.cpp:27433.
+
+### W1's two runs, settled
+
+W1's "2.308099 peek 0x0177caa8 = 0x00000001" was taken inside a blockwatch hit for
+0x0177cc60: a peek at a different word, at a moment when the counter was already 1.
+Correct value, correct read, and no evidence of an unwritten initial 1. W1's other
+run (first write 2.412857 0 -> 0, then 0->1 at 2.442203, then 1->0, 0->1, 1->0,
+0->1) is the same sequence as run E at a different start offset: a redundant 0->0
+write, the 0->1, then the counter oscillating while the RAGE audio thread reads it.
+Nothing in either run contradicts this one.
+
+The claim that the 1 was in BSS before any write is refuted on three independent
+grounds:
+
+1. the ELF: 0x0177caa8 is segment offset 0x44caa8 of PT_LOAD[1], beyond p_filesz
+   0x1bc014, so zero-fill BSS -- the file holds no initial value (Measurement 1);
+2. the loader: loader.cpp memsets the BSS tail to 0, and the watch's arm-time read
+   logged 0x00000000 before the first guest instruction;
+3. the run: the first event observing 1 is a WRITE with prev 0, and there are 0
+   reads observing 1 before it, over 576 events on that word, with 0 chain gaps and
+   0 self-read contamination.
+
+### Why W1's earlier reading looked like a contradiction
+
+W1 could not see this because its watch reported only writes, and its "peek" was a
+read of one word taken inside a report about another. A write-only watch plus a
+peek gives you two facts about two words at one instant; it cannot order a write
+against a read. The READ watch in the same run can, and with the self-read guard
+the ordering is unambiguous: 0 -> 1 at 2.393590, first read of 1 at 2.840156.
