@@ -1,1 +1,1 @@
-{"status":"running","agent":"U2","task":"no more zero-fill","note":"baseline and NOZERO measured","updated":"2026-11-12T11:58:00Z"}
+{"status":"running","agent":"U2","note":"fix measured: 0 aborts, 2881 flips, exception reaches guest","updated":"2026-11-12T12:02:00Z"}
