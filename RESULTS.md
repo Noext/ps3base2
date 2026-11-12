@@ -248,3 +248,66 @@ walker.
 
 No element anywhere in the run carries a non-zero size with an eal below
 0x10000, so the faulting transfer is not a list element either.
+
+### M5 -- the audit result: the walker matches RPCS3 on every clause, and it is not on the fault path
+
+The walker was rewritten to the specification and moved into
+runtime/include/spu/dma_list.h so the unit test drives the shipped code. Each
+clause, against RPCS3 do_list_transfer (refs/rpcs3/rpcs3/Emu/Cell/SPUThread.cpp:2927):
+
+| clause | specification | RPCS3 | before | after |
+|---|---|---|---|---|
+| element is 8 bytes, big-endian {notify:1,reserved:16,size:15,eal:32} | SPU ISA | 2939 struct alignas(8) list_element | correct | correct |
+| size = word0 & 0x7FFF, notify = high bit of word0 | SPU ISA | 2970 ts_mask = 0x7fff; 3460 sb & 0x80 | correct | correct |
+| list base 8-byte aligned, masked | SPU ISA | 2957 item_ptr = eal & 0x3fff8 | correct | correct |
+| lsa masked to 16 | SPU ISA | 2958 arg_lsa = lsa & 0x3fff0 | correct | correct |
+| lsa advances by each element's size, rounded to 16 | SPU ISA | 3390 lsa = arg_lsa + (eal & 0xf); arg_lsa += align(size,16) | correct | correct |
+| a notify bit on the LAST element does not stall | 3455 breaks on !arg_size BEFORE 3460 | 3451-3460 | correct | correct |
+| stall resumes by RE-READING the following elements at that moment | SPU ISA | 2957 reads item_ptr every refill; 5463 re-enters | correct | correct |
+| one queue entry per list across every stall | 5463 does not re-enqueue | 3460-3478, 5529 | **WRONG** | fixed |
+| stall status is one bit per tag | SPU ISA | 3472 set_value(rotl(1, tag) | get_value()) | correct | correct |
+| list size above 0x4000 refused | 5041 `if (ch_mfc_cmd.size <= 0x4000)` | 5041 | **missing** | fixed |
+| MFC_RdListStallStat returns the tag bits and clears the count | SPU ISA | 5688-5695 | correct | correct |
+
+Two real deviations, both fixed:
+
+1. **The queue slot was taken on every stall, not once per command.** The old
+   code did `mfc_queue++` on each stall and `mfc_queue--` only when a resume
+   finished the list, so a list that stalls N times holds N slots. RCHCNT on
+   MFC_Cmd is 16 - mfc_size and the SPURS kernel reads it before issuing its
+   next command, so a leaked slot eventually stops the kernel issuing at all.
+   The list that needs this most is the one that stalls repeatedly, which is
+   exactly the list a frame allocator builds.
+2. **A list command larger than 0x4000 bytes was walked anyway.** RPCS3
+   refuses it (5041). 0x4000 bytes is the 2048-element maximum; walking past it
+   reads local storage the guest never intended as a list, and each such
+   element is a transfer the guest never asked for.
+
+Neither deviation is on the fault path: the faulting command is 0x40 (MFC_GET),
+not 0x44/0x45/0x46, and no notify bit is ever set (M2), so the stall path never
+runs in this title.
+
+### M6 -- the unit test, including the required case: element 1 filled AFTER the stall
+
+tests/spu_dma_list.cpp, built as the spu_dma_list CTest target:
+
+    $ ./build-20/spu_dma_list
+    64 checks, 0 failure(s)
+
+The decisive case builds a list at LS 0x1a100 whose element 0 carries the
+notify bit and whose element 1 is all zero at the time of the walk -- the same
+addresses and the same shape as the fault. It then asserts, in order:
+
+* only element 0 transfers before the stall, and it is the one the guest wrote;
+* the stalled command holds exactly one queue slot;
+* the guest then fills element 1 (== the 0x80 bytes element 0 wrote are
+  inspected, element 1 is written at 0x1a108 with a NEW eal derived from them);
+* the acknowledgement resumes with list = 0x1a108 and lsa = 0x2080;
+* the resumed walk transfers element 1 with the eal written AFTER the stall;
+* element 2, never written, is seen as eal 0 / size 0;
+* and, so the test cannot pass vacuously, element 1 read BEFORE the stall is
+  asserted to be eal 0 / size 0 -- the unmapped-0 transfer -- and asserted to
+  differ from what the resume returns.
+
+A walker that decoded ahead of time or cached elements passes every other check
+and fails this one.
