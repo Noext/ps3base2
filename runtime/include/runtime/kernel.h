@@ -3,6 +3,7 @@
 #include "ppu/context.h"
 
 #include <cstdint>
+#include <string>
 
 namespace lv2 {
 
@@ -56,8 +57,22 @@ struct SyscallReg {
 };
 
 /* Is there lifted code at this guest address? Used to tell an OPD from a bare
- * code pointer: a title supplies both, in different places. */
+ * code pointer: a title supplies both, in different places.
+ *
+ * NOTE: this is keyed by function ENTRY. A return address inside a lifted
+ * function answers false; use describe_address() or span_entry_at() when the
+ * question is "is this PC inside code the lift produced". */
 bool has_code_at(uint32_t addr);
+
+/* The entry of the lifted function whose [first, last] instruction range
+ * contains this address, or 0. The interval is what a PC in the middle of a
+ * function needs. */
+uint32_t span_entry_at(uint32_t addr);
+
+/* A guest address rendered for a report: which image, which landmark label,
+ * and which lifted function with the offset into it. Defined by the dispatch
+ * table, because that is what knows the layout. */
+std::string describe_address(uint32_t addr);
 
 struct ThreadExit {
     uint64_t status;

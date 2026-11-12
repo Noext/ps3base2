@@ -1,0 +1,33 @@
+# Landmarks: guest addresses a report must be able to NAME.
+#
+# Form: <image>+<offset>, one per line, then a label. The offset is into that
+# image's own code segment, and the lifter resolves it against the base it
+# actually gives that image. That is why the form is not an absolute address.
+#
+# Measured on Red Dead Redemption: liblv2 sat at 0x21000000, then the module band
+# moved to 0x30000000, and every absolute seed written for the first layout named
+# the wrong image in the second. seed_is_stale() could only drop them and ask for
+# a re-run. "liblv2+0xc7e8" names the same byte in both.
+#
+# A landmark is not a seed: nothing is lifted because of it. It is an address the
+# runtime already reaches, whose MEANING the report has to spell out. The lifter
+# resolves each one to the lifted function that contains it and emits the pair
+# into table.cpp; the runtime prints the label on every line that names the
+# address.
+#
+# These are firmware-module facts and therefore shared by every title: all three
+# titles load the same liblv2 and libsre.
+
+# liblv2 _sys_panic (sysPrxForUser NID 0x4232B0DB, OPD 0x30014200).
+# 0x3000c7e8 is the instruction after "bl 0x3000fad0" at 0x3000c7e4 -- the
+# return address inside _sys_panic, not a function entry. has_code_at() is keyed
+# by entry, which is why the SPURS abort reported this PC as "(not lifted)".
+liblv2+0xc7e8   spurs-abort-tail
+
+# libsre: the two frames the title prints in its own "Call Stack Trace" for the
+# SPURS workload abort. 0x3200cb24 is f_3200cab8+0x6c, the instruction after
+# "bl 0x3200e5c4"; 0x32009754 is f_3200930c+0x448. f_3200e5c4 walks a linked list
+# and prints each node's string through 0x3201d958 (the tty write), which is the
+# function that emits the dump itself.
+libsre+0xcb24   spurs-abort-frame0
+libsre+0x9754   spurs-abort-frame1

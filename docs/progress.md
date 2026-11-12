@@ -909,3 +909,28 @@ FAILURE: libspurs ... "handler.c", line 198, spurs_handler_entry` after two
 `SecondaryCellSpursKernel0` DMA GETs of `ea 0x00000000`, which is the next
 milestone, not this one: the criterion records that it happens *after* the
 notice and *after* 60 s, so progress on it is visible as a moved number.
+## T4 -- the SPURS abort path is named, and the seed form that keeps naming it
+
+The RDR abort reported `lr=0x3000c7e8 (not lifted)`. Both halves were wrong: the
+byte is INSIDE liblv2's `_sys_panic` (f_3000c790, in the dispatch table at HEAD),
+and it is not an entry because it is the return address of the `bl 0x3000fad0` at
+0x3000c7e4. `has_code_at()` is keyed by entry, which is the right question for an
+indirect call and the wrong one for a report.
+
+Added: a `<image>+<offset>` seed form resolved at lift time (recomp/ppu/codegen.py
+parse_seed/resolve_seeds), committed landmarks (recomp/landmarks.txt), a
+FunctionSpan table, `lv2::describe_address()`, and a boot-time landmark listing.
+See docs/decisions.md D-011 and D-012.
+
+    I   0.067782 main: landmark 'spurs-abort-tail' at 0x3000c7e8 = liblv2+0xc7e8 spurs-abort-tail (_sys_panic+0x58)
+    I 142.085019 ppu: process exit -2147418100 from thread 0x1000004 lr=0x3000c7e8 liblv2+0xc7e8 spurs-abort-tail (_sys_panic+0x58)
+
+What the abort path DOES: `_sys_panic(code, va_list)` spills the varargs save
+area, calls syscall 988 (sys_dbg_register_ppu_exception_handler), calls
+0x3000fad0 to print the formatted dump to the tty, then checks a global panic
+flag and calls `_sys_process_exit(CELL_EABORT = 0x8001000c)` at 0x3000c81c. The
+SPURS watchdog reaches _sys_panic; the 0x8001000c in the log is EABORT, not
+CELL_SPURS_TASK_ERROR_FATAL (which is 0x80410914, cellSpurs.h:64).
+
+Lift diff against HEAD: table.cpp only, 76793 functions both sides. Minecraft
+5401 flips, GTA 5761 flips, both alive; tests/ppu_seed_forms.py 16 checks.

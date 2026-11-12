@@ -3,6 +3,7 @@
 #include "runtime/codewatch.h"
 #include "runtime/host.h"
 #include "runtime/image.h"
+#include "runtime/kernel.h"
 #include "runtime/loader.h"
 #include "runtime/log.h"
 #include "spu/aot.h"
@@ -268,6 +269,18 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(lvl, "debug")) logging::set_level(logging::Level::Debug);
     }
     LOG_INFO("main", "GOWA-pc: %u images, %u functions, %u imports, %u exports, root %s", image::image_count, image::function_count, image::import_count, image::export_count, loader::g_root.c_str());
+    /* Print the landmarks at boot, once, with their resolved addresses. A
+     * landmark exists to make a later report readable, and a mapping that is
+     * only visible when something goes wrong cannot be checked before it does.
+     * The addresses are resolved at LIFT time from (image, offset) seeds, so
+     * this line also proves the seed named the right byte of the right module. */
+    if (&image::landmark_count && image::landmark_count) {
+        for (uint32_t i = 0; i < image::landmark_count; i++) {
+            const image::LandmarkEntry& l = image::landmarks[i];
+            LOG_INFO("main", "landmark '%s' at 0x%08x = %s", l.label, l.addr,
+                     lv2::describe_address(l.addr).c_str());
+        }
+    }
     if (!vm::init()) return 1;
     /* The title image is whatever the profile names; a build with no profile
      * uses the first image in the manifest, which for a generated tree is the

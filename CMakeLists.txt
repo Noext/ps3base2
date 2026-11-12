@@ -269,6 +269,15 @@ add_test(NAME hook_flags COMMAND hook_flags)
 add_test(NAME ppu_dispatch_table
          COMMAND python3 "${CMAKE_SOURCE_DIR}/tests/ppu_dispatch_table.py")
 
+# ppu_seed_forms: the two seed forms, and why the named one exists. An absolute
+# seed is only valid for the layout it was recorded in; layout_for.py recomputes
+# every module base from the title's text extent, so an absolute seed silently
+# names the wrong byte after a relayout. "liblv2+0xc7e8" is resolved at lift time
+# and cannot go stale. The test pins the parse, the per-image resolution, and the
+# refusal of an absolute landmark.
+add_test(NAME ppu_seed_forms
+         COMMAND python3 "${CMAKE_SOURCE_DIR}/tests/ppu_seed_forms.py")
+
 add_executable(memory_map tests/memory_map.cpp runtime/src/memory.cpp runtime/src/regions.cpp runtime/src/mem.cpp runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/backtrace_port.cpp runtime/src/host.cpp runtime/src/log.cpp)
 target_include_directories(memory_map PRIVATE runtime/include)
 target_compile_options(memory_map PRIVATE ${PS3BASE_ARCH_FLAGS})

@@ -239,6 +239,103 @@ void coverage_dump(const char* tag) {
 
 bool has_code_at(uint32_t addr) { return lookup(addr) != nullptr; }
 
+/* The lifted function whose instruction range contains `addr`, or 0.
+ *
+ * has_code_at() answers a narrower question than a report needs: it asks for a
+ * function ENTRY, because that is what the dispatch table is keyed by. Every
+ * return address in the guest is therefore "not lifted", which is how Red Dead's
+ * SPURS abort reported the frame that raised it. Measured on that frame:
+ *
+ *     lr=0x3000c7e8 (not lifted)   but 0x3000c7e4 is "bl 0x3000fad0" inside
+ *                                  f_3000c790, whose span is 0x3000c790-0x3000c820
+ *
+ * The interval test is what turns that into "liblv2+0xc7e8, _sys_panic+0x58".
+ */
+uint32_t span_entry_at(uint32_t addr) {
+    if (!&image::function_span_count) return 0;
+    uint32_t lo = 0, hi = image::function_span_count;
+    while (lo < hi) {
+        uint32_t mid = lo + (hi - lo) / 2;
+        const image::FunctionSpan& s = image::function_spans[mid];
+        if (addr < s.lo) {
+            hi = mid;
+        } else if (addr > s.hi + 3) {
+            lo = mid + 1;
+        } else {
+            return s.entry;
+        }
+    }
+    return 0;
+}
+
+}  // namespace ppu
+
+namespace lv2 {
+
+/* Render a guest address the way a report should read it: which image, which
+ * landmark, and which lifted function with how far into it.
+ *
+ *     "liblv2+0xc7e8 spurs-abort-tail _sys_panic+0x58"   <- a landmark, labelled
+ *     "liblv2+0x1234 f_30001234+0x28"                     <- any lifted function
+ *     "0x00d1bbec (no lifted code)"                       <- genuinely unknown
+ *
+ * Deliberately returns a string rather than logging: the caller decides whether
+ * this is an INFO line, a FATAL, or part of a multi-frame dump. */
+std::string describe_address(uint32_t addr) {
+    char buf[192];
+    const char* image_name = nullptr;
+    uint32_t image_base = 0;
+    if (&image::image_count) {
+        for (uint32_t i = 0; i < image::image_count; i++) {
+            if (addr >= image::images[i].text_lo && addr < image::images[i].text_hi) {
+                image_name = image::images[i].name;
+                image_base = image::images[i].text_lo;
+                break;
+            }
+        }
+    }
+    /* A landmark names this exact byte and says why it matters. It is checked
+     * before the function span because the label is the point: a caller that
+     * wrote the seed down wants the label back, not f_3000c790. */
+    if (&image::landmark_count) {
+        for (uint32_t i = 0; i < image::landmark_count; i++) {
+            const image::LandmarkEntry& l = image::landmarks[i];
+            if (l.addr != addr) continue;
+            const unsigned off = image_name ? addr - image_base : addr;
+            if (l.entry && *l.symbol) {
+                std::snprintf(buf, sizeof(buf), "%s+0x%x %s (%s+0x%x)",
+                              l.image, off, *l.label ? l.label : "", l.symbol, l.offset);
+            } else if (l.entry) {
+                std::snprintf(buf, sizeof(buf), "%s+0x%x %s (f_%08x+0x%x)",
+                              l.image, off, *l.label ? l.label : "", l.entry, l.offset);
+            } else {
+                std::snprintf(buf, sizeof(buf), "%s+0x%x %s (no lifted function)",
+                              l.image, off, *l.label ? l.label : "");
+            }
+            return buf;
+        }
+    }
+    const uint32_t entry = ppu::span_entry_at(addr);
+    if (entry) {
+        if (image_name)
+            std::snprintf(buf, sizeof(buf), "%s+0x%x f_%08x+0x%x",
+                          image_name, addr - image_base, entry, addr - entry);
+        else
+            std::snprintf(buf, sizeof(buf), "f_%08x+0x%x (no image owns this range)",
+                          entry, addr - entry);
+        return buf;
+    }
+    if (image_name)
+        std::snprintf(buf, sizeof(buf), "%s+0x%x (no lifted code)", image_name, addr - image_base);
+    else
+        std::snprintf(buf, sizeof(buf), "0x%08x (no lifted code)", addr);
+    return buf;
+}
+
+}  // namespace lv2
+
+namespace ppu {
+
 void call_indirect(Context& ctx, uint8_t* base, uint32_t addr) {
     /* PS3BASE_CTR_PROBE: print ctr at entry to call_indirect for one lr. An
      * indirect call whose ctr does not match the word the guest just loaded
@@ -472,10 +569,15 @@ void call_indirect(Context& ctx, uint8_t* base, uint32_t addr) {
                          vm::read32(ea29), vm::read32(ea29 + 4),
                          ppu::ld32(base, ea29), ppu::ld32(base, ea29 + 4));
         }
+        /* The target is the thing that could not be resolved, so name it the
+         * same way a frame is named: image, landmark, containing function. An
+         * address that names no lifted function says so, which is the signal
+         * that a seed is missing rather than that the guest went wrong. */
         LOG_FATAL("ppu",
-                  "unknown indirect target 0x%08x (lr=0x%08llx, thread 0x%x) r3=0x%llx r4=0x%llx "
+                  "unknown indirect target 0x%08x -- %s (lr=0x%08llx, thread 0x%x) r3=0x%llx r4=0x%llx "
                   "r9=0x%llx r31=0x%llx ctr=0x%llx",
-                  addr, static_cast<unsigned long long>(ctx.lr), ctx.thread_id,
+                  addr, lv2::describe_address(addr).c_str(),
+                  static_cast<unsigned long long>(ctx.lr), ctx.thread_id,
                   static_cast<unsigned long long>(ctx.gpr[3]), static_cast<unsigned long long>(ctx.gpr[4]),
                   static_cast<unsigned long long>(ctx.gpr[9]), static_cast<unsigned long long>(ctx.gpr[31]),
                   static_cast<unsigned long long>(ctx.ctr));
@@ -835,4 +937,8 @@ namespace lv2 {
 /* The declaration lives in kernel.h under lv2; the implementation belongs with
  * the dispatch table it asks about, under ppu. One forwarder keeps both true. */
 bool has_code_at(uint32_t addr) { return ppu::has_code_at(addr); }
+
+/* Same forwarder, same reason: the interval table lives with the dispatch
+ * table it indexes. */
+uint32_t span_entry_at(uint32_t addr) { return ppu::span_entry_at(addr); }
 }  // namespace lv2
