@@ -1,1 +1,1 @@
-{"agent":"Q3","status":"running","branch":"explore/q3","task":"drive past WARNING","updated":"2026-11-13T12:39Z","note":"both branches past WARNING to chapter card; crash at 0x00ae5818, flip 1381 both arms"}
+{"agent":"Q3","status":"running","branch":"explore/q3","task":"drive past WARNING","updated":"2026-11-13T12:43Z","note":"cross branch writes 3 real saves (RAGE.SAV+PARAM.SFO+ICON0.PNG, sub_title 'Exodus in America'); square writes 0"}

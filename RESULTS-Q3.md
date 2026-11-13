@@ -302,3 +302,85 @@ start-up, and the guest then dies on its own fault (exit -6, SIGABRT from the
 runtime's unknown-indirect-target abort, not a driver kill). The driver reports the
 guest's own exit code, so exit -6 here is a RESULT: the run ended by itself.
 
+### M6 -- THE CROSS BRANCH ACTUALLY CREATES A SAVE GAME (new result, not in P4)
+
+This was not the task, and it is the strongest evidence that the cross branch was
+driven for real for the first time. The cross arm WROTE THREE SAVE FILES into the
+VFS; the square arm wrote none.
+
+Same VFS, same binary, same display, the two arms of M3 -- the only difference is
+--branch. Counted from each arm's own run.log:
+
+    $ grep -ac 'savedata: save ' /tmp/q3-sq/run.log      -> 0
+    $ grep -ac 'savedata: save ' /tmp/q3-cr/run.log      -> 3
+
+The cross arm's writes, verbatim:
+
+    I  48.272345 savedata: save 'BLES00680RDR2SAVE0_SAV' (new) stat result 0 setParam 0xd0210140 recreate 0x2 indicator 0x0 needKB 0 progress 100
+    I  48.272478 savedata: write BLES00680RDR2SAVE0_SAV/RAGE.SAV type 0 offset 0x0 size 0x124c7 -> 0x124c7
+    I  48.272534 savedata: write BLES00680RDR2SAVE0_SAV/ICON0.PNG type 2 offset 0x0 size 0x13133 -> 0x13133
+    I  48.461124 savedata: save 'BLES00680RDR2OPTIONS_SAV' (new) stat result 0 setParam 0xd0210140 recreate 0x2 indicator 0x0 needKB 0 progress 100
+    I  48.461544 savedata: write BLES00680RDR2OPTIONS_SAV/RAGE.SAV type 0 offset 0x0 size 0x16f -> 0x16f
+    I  48.461603 savedata: write BLES00680RDR2OPTIONS_SAV/ICON0.PNG type 2 offset 0x0 size 0x13133 -> 0x13133
+    (and BLES00680RDR2MPSAVE_SAV, the third)
+
+and the list the title then reads back, growing 0 -> 1 -> 2 -> 3 in the same arm:
+
+    I  22.949992 savedata: ListAutoLoad: 0 savedata match prefix 'BLES00680' ... listing 0
+    I  48.353085 savedata: ListAutoLoad: 1 savedata match prefix 'BLES00680' ... listing 1
+    I  48.353144 savedata: GetListItem 'BLES00680RDR2SAVE0_SAV' -> title 'Red Dead Redemption' size 188 kB
+    I  48.559021 savedata: ListAutoLoad: 2 savedata match prefix 'BLES00680' ... listing 2
+    I  48.742588 savedata: ListAutoLoad: 3 savedata match prefix 'BLES00680' ... listing 3
+
+The square arm's log has exactly one ListAutoLoad, at 16.506450, listing 0, and no
+save at all -- which is what "Continue Without Saving" means.
+
+The written files are REAL, not placeholders. Preserved at
+/root/Dev/q3work/created-saves/ (9 files, 6.5K), and checked field by field:
+
+    $ file .../BLES00680RDR2SAVE0_SAV/ICON0.PNG
+    PNG image data, 320 x 176, 8-bit/color RGBA, non-interlaced
+
+    $ head -c 32 .../BLES00680RDR2SAVE0_SAV/RAGE.SAV | xxd
+    00000000: 0000 0007 0000 0053 0000 000e 6762 4973  .......S....gbIs
+    00000010: 4672 6573 6853 7461 7274 0100 0000 0400  FreshStart......
+
+    PARAM.SFO decoded as a PSF structure (\x00PSF, version 1.1, 7 keys):
+    ATTRIBUTE            = 00000000
+    CATEGORY             = 'SD'
+    DETAIL               = 00
+    SAVEDATA_DIRECTORY   = 'BLES00680RDR2SAVE0_SAV'
+    SAVEDATA_LIST_PARAM  = (empty)
+    SUB_TITLE            = 'Exodus in America'
+    TITLE                = 'Red Dead Redemption'
+
+'Exodus in America' in SUB_TITLE is the chapter card the run is displaying when it
+saves, and 'Red Dead Redemption' is the title. So the save path, the PSF writer, the
+PNG icon writer and the save-list reader all work, and the game reached the point of
+saving its first chapter.
+
+### M7 -- the savedata guard earned itself again, and the VFS must be reset per run
+
+The M6 saves were written into the shared /root/Dev/p4work/vfs-clean, so the NEXT
+run's precondition was gone. The guard caught it, verbatim:
+
+    $ python3 tools/drive_rdr.py /root/Dev/q3work/rdrx :146 /root/Dev/p4work/vfs-clean /tmp/q3-plan 150 --plan square,cross
+    drive_rdr: /root/Dev/p4work/vfs-clean/dev_hdd0/home/00000001/savedata is not empty; RDR will load a save instead of prompting.
+    exit 2
+
+This is the third time this guard has prevented a run from silently testing the
+wrong path (P4 recorded the first two). The square arm leaves the VFS clean and the
+cross arm does not, so a cross run must be followed by clearing savedata/ before the
+next run -- the driver names the directory in the message so this is one rm away.
+
+### M8 -- --plan kept as a deprecated alias, so existing invocations do not break
+
+    $ python3 tools/drive_rdr.py --help | grep -A2 '\-\-plan'
+      --plan PLAN           deprecated alias: --plan square,cross == --branch
+                            square (only the first entry is used; the second was
+                            the bug)
+
+    $ python3 tools/drive_rdr.py ... --plan circle
+    drive_rdr: --branch/--plan must name one of cross, square, not 'circle'
+    exit 2
+

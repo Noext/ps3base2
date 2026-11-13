@@ -342,9 +342,15 @@ def main(argv):
     ap.add_argument('vfs', help='VFS root; its dev_hdd0/home/00000001/savedata must be EMPTY')
     ap.add_argument('out', help='output directory')
     ap.add_argument('max_seconds', nargs='?', type=float, default=180.0)
-    ap.add_argument('--branch', default='square', choices=sorted(BRANCHES),
+    ap.add_argument('--branch', default=None, choices=sorted(BRANCHES),
                     help='ALERT row to press: square = Continue Without Saving, '
                          'cross = Create A New Save Game (default square)')
+    # The old spelling, kept so an existing invocation does not break. It was a
+    # LIST indexed per ALERT sample, which is the bug this version fixes: only
+    # the FIRST entry can mean anything now, and it selects the branch.
+    ap.add_argument('--plan', default=None,
+                    help='deprecated alias: --plan square,cross == --branch square '
+                         '(only the first entry is used; the second was the bug)')
     ap.add_argument('--hold', type=int, default=200)
     ap.add_argument('--gap', type=int, default=120)
     ap.add_argument('--retry', type=float, default=10.0,
@@ -353,6 +359,12 @@ def main(argv):
     ap.add_argument('--cwd', default=None,
                     help='working directory for the title (default: the checkout holding out-rdr)')
     args = ap.parse_args(argv)
+    if args.branch is None:
+        args.branch = (args.plan.split(',')[0].strip() if args.plan else 'square')
+    if args.branch not in BRANCHES:
+        print('drive_rdr: --branch/--plan must name one of %s, not %r'
+              % (', '.join(sorted(BRANCHES)), args.branch), file=sys.stderr)
+        return 2
     if not os.path.exists(args.binary):
         print('drive_rdr: no binary at %s' % args.binary, file=sys.stderr)
         return 2
