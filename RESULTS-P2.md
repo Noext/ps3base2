@@ -381,3 +381,39 @@ ps3recomp #68: NOT a TLS issue at all -- CHANGELOG.md:631 lists #68 as
   threads that exited and were removed.
 The TLS arena is therefore NOT the cause of the host SIGSEGV at guest 0x10.
 The fault is a NULL fiber stack link in libfiber.
+
+## C5. The NULL back-chain, confirmed from the register dump of the same run
+The census run's own crash report prints every guest register:
+
+    r0=0x0 r1=0xd0032d30 r2=0x0 r3=0x0 r4=0x0 r5=0xd0033360 r6=0xd0033370
+    r7=0xd0033380 r8=0xd0033390 r9=0x0 r10=0xd0033310 r11=0xd0033290
+    r12=0x24000048 r13=0x10007060 ...
+
+r9 = 0x0 is exactly the value the faulting instruction consumes:
+libfiber_000.cpp:231-232 is
+    gpr[9] = ld64(base, gpr[1] + 0)      // r1 = 0xd0032d30
+    gpr[0] = ld64(base, gpr[9] + 16)     // (r14,%rcx,1) with rcx = 0x10
+so the word at guest 0xd0032d30 is ZERO, and the next line dereferences it at
++0x10, which is the reported fault address 'guest 0x10'.
+
+r1 = 0xd0032d30 lies inside main_thread's own stack,
+    stacks: thread 16777216 'main_thread' ... range 0xd0010000..0xd0050000
+0x22d30 bytes above the stack base and 0x1d2d0 below the top. So the fiber
+switch's save slot in the caller's frame holds 0: nothing was stored there by
+the switch, and the return path has no stack to go back to.
+
+This is the last piece that separates the fault from TLS: the pointer being
+dereferenced is a GUEST STACK pointer (r1), the value is a stack slot, and r13
+is untouched at 0x10007060 with a valid, initialised block behind it (C1).
+
+## C6. Reproduction and determinism
+The fault reproduces on every run at the same point with the same signature:
+
+    crash: signal 11 ... fault ... (guest 0x10) thread main_thread 0x1000000
+    guest regs: ... r9=0x0 ... r13=0x10007060
+    tcb r13 (0x10007060): 32 zero words
+    object r6 (0xd0033370): ... 2a4e4f20 4e414d45   = "*NO " "NAME"
+
+Runs observed: /tmp/P2-census-run2.log (56.11 s), and the gdb runs at 15-19 s
+under the debugger (faster because gdb stops at the texture-watch faults and the
+timing shifts). The guest-0x10 fault is identical in all of them.
