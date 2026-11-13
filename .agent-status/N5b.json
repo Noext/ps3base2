@@ -1,11 +1,1 @@
-{
-  "status": "running",
-  "agent": "N5b",
-  "branch": "explore/N5b",
-  "worktree": "/root/Dev/wt-N5b",
-  "results": "/root/Dev/wt-N5b/RESULTS-N5b.md",
-  "base": "202e9ef",
-  "last_measurement": 1,
-  "finding": "RDR calls no notify-queue function at all; mixer clock 187.4 periods/s (5.337ms)",
-  "updated": "2026-11-13T07:33:08.690004Z"
-}
+{"status":"running","agent":"N5b","branch":"explore/N5b","worktree":"/root/Dev/wt-N5b","results":"/root/Dev/wt-N5b/RESULTS-N5b.md","base":"202e9ef","last_measurement":"2b","finding":"index advances 187.4/s and Multistream reads it; RDR registers no notify queue; 0 events is a title property","updated":"2026-11-13T07:45:00Z"}
