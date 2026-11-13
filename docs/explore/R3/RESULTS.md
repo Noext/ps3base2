@@ -110,3 +110,64 @@ La couture est bien celle qui TOURNE, pas une qui existe :
 ```
 I 1.397780 [10] rsxring: first method through the seam: 0x0060 arg=0x56616661 io=0x00001000
 ```
+
+---
+
+## 4. La frontiere K0-bis est levee : le renderer LIE en wasm
+
+K0-bis avait nomme le mur : `rsx_renderer.cpp` compile mais reclame 18 symboles Vulkan au link.
+Ce tour mesure que le mur tombe, et par quel mecanisme.
+
+### 4.1 `runtime/src/gpu/vk_null.cpp` — 58 entrees Vulkan en no-op, signees exactement
+
+Les **58** fonctions (pas 18 : le compte de K0-bis portait sur les symboles distincts du premier
+rapport d'erreur, pas sur l'ensemble) sont generees par script depuis les typedefs `PFN_vk*` de
+`third_party/Vulkan-Headers/include/vulkan/vulkan_core.h`. Pas ecrites a la main : une signature
+fausse lie silencieusement en wasm et corrompt la pile de l'appelant.
+
+```
+$ python3 /tmp/R3-probe/genvk2.py
+wrote stubs 58
+$ wc -l runtime/src/gpu/vk_null.cpp
+574 runtime/src/gpu/vk_null.cpp
+```
+
+Deux pieges mesures :
+1. **volk declare les `vk*` comme des POINTEURS de fonction** (`extern PFN_vkXxx vkXxx;`), pas
+   comme des fonctions. Definir `vkCmdDrawIndexed` comme fonction est une redefinition d'une autre
+   espece et ne compile pas (`error: redefinition ... as different kind of symbol`). Le backend nul
+   remplace donc le POINTEUR.
+2. Le regex sur `vulkan_core.h` attrape `VkPhysicalDevicePushDescriptorPropertiesKHR` comme type de
+   retour de `vkCmdPushDescriptorSetKHR` (un `typedef` voisin est sur la meme ligne logique). Corrige
+   a la main, documente ici.
+
+### 4.2 `runtime/src/gpu/gpu_wasm_support.cpp` — 27 symboles de support
+
+Apres `vk_null`, il restait 27 symboles, tous des fonctions de support et aucun du chemin de decode :
+`compile_glsl`/`load_cached_glsl` (glslang, pas de build wasm — le chemin web emet du WGSL),
+`edge_compute::*`, `mv::*` (DLSS), le presenter (swapchain + fenetre native), et les compteurs
+`rsx::*_stats` qui vivaient dans `rsx_no_display.cpp` sous `PS3BASE_NO_RENDERER`.
+
+Correction de methode importante : `enabled()` renvoie **true**, et c'est le seul "oui" qui ne
+simule pas Vulkan. `gpu::enabled()` est lu par `rsx_renderer.cpp:4519` comme « puis-je finir une
+frame ? » ; avec `false`, `present()` retourne avant `end_pass()` **et avant tous ses diagnostics** —
+les compteurs du renderer (draws, skipped, raisons de skip par ligne) ne sont imprimes que la.
+Mesure avec `false` : 1321 flips et pas une ligne disant pourquoi rien n'etait dessine.
+
+`display_buffer()` est de meme : il **enregistre** la description que le guest fournit et repond
+vrai, au lieu de renvoyer faux et de faire sortir `present()` tot.
+
+### 4.3 Resultat
+
+```
+$ em++ ... -sERROR_ON_UNDEFINED_SYMBOLS=0 -o game.js obj/*.o
+(0 undefined symbol)
+-rwxr-xr-x 1 root root 45547321 game.wasm
+```
+
+Le module boote et flippe dans Chromium avec le VRAI renderer lie :
+
+```
+$ grep -oE 'rsx: flip [0-9]+' /tmp/R3-probe/rend3.log | tail -1
+rsx: flip 241
+```
