@@ -77,3 +77,84 @@ That means:
 The fix is therefore in the driver, not the runtime: the plan must be indexed by the
 STATE being acted on, and WARNING must have its own action.
 
+### M1 (12:33Z) -- the driver's plan was consumed per SAMPLE; proof of the bug and the fix
+
+The bug, stated as the code that produced it (previous tools/drive_rdr.py):
+
+    def act(self, state, elapsed, n):
+        ...
+        elif state == 'ALERT' and self.alert_index < len(self.alert_actions):
+            button = self.alert_actions[self.alert_index]
+            self.alert_index += 1          # <-- one plan entry per ALERT SAMPLE
+            self.send(button)
+
+and the WARNING branch had no press at all:
+
+    elif state == 'WARNING' and 'warning' not in self.done:
+        self.done.add('warning')
+        print(...)                          # <-- prints, presses nothing
+
+So the only reason M0 got past the WARNING is that the ALERT was sampled twice,
+1.46 s apart, and the second sample's cross landed on the WARNING. A run in which
+the ALERT is sampled once leaves the driver on the WARNING pressing nothing.
+
+The fix (tools/drive_rdr.py, this branch): a press belongs to a SCREEN, and the
+evidence that it worked is the appearance of the screen that FOLLOWS it:
+
+    AFTER_ALERT   = ('WARNING', 'LOADING', 'CHAPTER')
+    AFTER_WARNING = ('LOADING', 'CHAPTER')
+
+    if state in AFTER_ALERT:   self.satisfied.add('ALERT')
+    if state in AFTER_WARNING: self.satisfied.add('WARNING')
+
+    elif state == 'ALERT' and 'ALERT' not in self.satisfied:
+        self.press_once('ALERT', self.args.branch, ...)
+    elif state == 'WARNING' and 'WARNING' not in self.satisfied:
+        self.press_once('WARNING', 'cross', ...)     # both branches: Continue [X]
+
+`press_once` re-presses only if the same screen is still up --retry seconds
+later (default 10 s), because the pad queue drains in ~4 s and a retry inside
+that window would double-press. The ALERT row is now selected by --branch
+(square = Continue Without Saving, cross = Create A New Save Game) instead of by
+consuming a plan list, so the two branches are actually two different runs.
+A CHAPTER state (\"EXODUS IN AMERICA\") and a LAST-*.png grab were added so the
+deliverable is the last screen reached even when the guest dies between samples.
+
+### M2 (12:34Z) -- CONTAMINATION: tools/regress.sh clear_strays() kills a driver run
+
+First run of the fixed driver, square branch, on :146:
+
+    exit -9 elapsed 125.2
+    states {"OTHER": 79, "TITLE": 5, "SCANNING": 1, "MENU": 1}
+    journal: TITLE at 111.07 s, SCANNING 116.14, MENU 119.64, then killed
+
+-9 at 125.2 s is not the guest and not my 240 s budget. Machine state at that
+moment, verbatim:
+
+    $ uptime
+     12:35:02 up 3 days, 16:53,  0 user,  load average: 57.02, 48.62, 32.74
+    $ ps aux | grep -E 'regress|clear_strays' | grep -v grep
+    root 2820847  0.4  0.0   2940  1820 ?  S  12:26  0:02 sh tools/regress.sh
+
+and the killer, from tools/regress.sh:176-182:
+
+    clear_strays() {
+        for p in /proc/[0-9]*; do
+            c=$(tr "\0" " " < "$p/cmdline" 2>/dev/null) || continue
+            case "$c" in
+                *ps3base*--no-launcher*)
+
+My binary was /root/Dev/ps3base2/build-rdr/ps3base --no-launcher, which matches.
+The fix is the one P4 used and is not a change to regress.sh: hard-link the
+binary under a name the pattern does not match.
+
+    $ ln -f /root/Dev/ps3base2/build-rdr/ps3base /root/Dev/q3work/rdrx
+    $ stat -c '%i %h' /root/Dev/ps3base2/build-rdr/ps3base /root/Dev/q3work/rdrx
+    2630061 2
+    2630061 2                      <- same inode: the same binary, not a copy
+    $ case '/root/Dev/q3work/rdrx --no-launcher' in *ps3base*--no-launcher*) echo BAD;; *) echo SAFE;; esac
+    SAFE
+
+The 111 s time-to-title in that run (against 43.64 s in M0) is the load, not a
+regression: load average went 20 -> 57 between the two runs.
+

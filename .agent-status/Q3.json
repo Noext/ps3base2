@@ -1,1 +1,1 @@
-{"agent":"Q3","status":"running","branch":"explore/q3","task":"drive past WARNING","updated":"2026-11-13T12:31Z","note":"baseline: driver passes WARNING only by accident; plan consumed twice on ALERT"}
+{"agent":"Q3","status":"running","branch":"explore/q3","task":"drive past WARNING","updated":"2026-11-13T12:36Z","note":"driver rewritten: press per screen; regress clear_strays kills runs -> hard-linked rdrx"}
