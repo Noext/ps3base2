@@ -158,3 +158,147 @@ binary under a name the pattern does not match.
 The 111 s time-to-title in that run (against 43.64 s in M0) is the load, not a
 regression: load average went 20 -> 57 between the two runs.
 
+### M3 (12:35-12:37Z) -- BOTH BRANCHES DRIVEN PAST WARNING, A/B, SAME DISPLAY, SAME MINUTE
+
+The two arms differ ONLY in --branch. Same binary (hard-linked /root/Dev/q3work/rdrx,
+inode 2630061, the same inode as build-rdr/ps3base), same VFS
+(/root/Dev/p4work/vfs-clean, savedata/ empty), same display :146, same
+GOWA_FLASH_DIR=/root/Dev/devflash-out/dev_flash, back to back with no other work
+between them.
+
+    === START 12:35:12 load 49.35
+    === square done 12:36:24 load 34.08
+    === cross done 12:37:30 load 25.95
+
+ARM 1 -- --branch square (Continue Without Saving), output verbatim:
+
+      0.00 STATE OTHER      |
+     23.70 STATE TITLE     Press START
+     23.70 -> start
+     25.99 STATE SCANNING  Scanning for installed downloadable content... please wait. _
+     28.39 STATE MENU      Online Multiplayer Downloadable Content 2 Single Player &
+     28.39 -> right,right,cross (Single Player)
+     35.45 STATE OTHER      |
+     41.48 STATE ALERT     (OCR) ... save could nat be found. What would you like to do?
+     41.48 -> square (ALERT: Continue Without Saving)
+     45.09 STATE WARNING   Autosave has been disabled. You may enable autosave in the options menu.
+     45.09 -> cross (WARNING: Continue)
+     48.86 STATE LOADING   ... Loading...
+     57.08 STATE CHAPTER   ... EXODUS IN AMERICA
+     64.95 STATE OTHER     (transition)
+     66.96 STATE CHAPTER   ... EXODUS IN AMERICA
+     71.25 STATE OTHER     |
+    exit -6 elapsed 71.8
+    states {"OTHER": 28, "TITLE": 2, "SCANNING": 2, "MENU": 5, "ALERT": 5,
+            "WARNING": 5, "LOADING": 4, "CHAPTER": 7}
+
+ARM 2 -- --branch cross (Create A New Save Game), output verbatim:
+
+      0.00 STATE OTHER      |
+     31.93 STATE TITLE     Press START
+     31.93 -> start
+     34.21 STATE OTHER     | od dow tent ewait. _
+     35.19 STATE SCANNING  Scanning for installed downloadable content... please wait. _
+     36.36 STATE MENU      Online Multiplayer Downloadable Content 2 Single Player &
+     36.36 -> right,right,cross (Single Player)
+     42.27 STATE OTHER     (transition)
+     44.23 STATE ALERT     A Red Dead Redemption single player save could not be found. What would you like to do?
+     44.23 -> cross (ALERT: Create A New Save Game)
+     46.90 STATE WARNING   This game saves data automatically at certain points. Do not switch off the power when the
+     46.90 -> cross (WARNING: Continue)
+     48.78 STATE OTHER     |
+     49.40 STATE LOADING   Loading...
+     53.07 STATE CHAPTER   & EXODUS IN AMERICA
+     61.57 STATE OTHER     (transition)
+     63.01 STATE CHAPTER   ... EXODUS IN AMERICA
+     64.64 STATE OTHER     (transition)
+    exit -6 elapsed 66.0
+    states {"OTHER": 33, "TITLE": 3, "SCANNING": 1, "MENU": 4, "ALERT": 4,
+            "WARNING": 2, "LOADING": 2, "CHAPTER": 6}
+
+The two arms produce the TWO DIFFERENT WARNING BODIES the branch predicts, and
+nothing else differs:
+
+    square -> WARNING "Autosave has been disabled. You may enable autosave in the
+                        options menu."
+    cross  -> WARNING "This game saves data automatically at certain points. Do not
+                        switch off the power when the HDD access indicator is
+                        flashing. Autosave may be turned off at any time in the
+                        options menu."
+
+Each WARNING is dismissed by its OWN press -- "-> cross (WARNING: Continue)" in both
+arms -- which is the thing the old driver could not do. The ALERT press is now
+selected by --branch, so the cross arm's cross went to the ALERT's row 2 and not to
+the WARNING by accident.
+
+### M4 -- THE DELIVERABLE: the last screen reached on each branch, and the crash instant
+
+Last screen reached, both branches: the RDR chapter card **EXODUS IN AMERICA**,
+full 1280x720, over the red key art.
+
+    docs/evidence/q3-square-chapter.png   279042 bytes  (square arm, CHAPTER-0050, t=57.08 s)
+    docs/evidence/q3-cross-chapter.png    343426 bytes  (cross arm,  CHAPTER-0048, t=53.07 s)
+
+The chapter card is not a static image: it CROSS-FADES through three different key
+arts in each arm (a mesa, a rider with a rifle, a town street), which is why CHAPTER
+is sampled 7 times in the square arm and 6 in the cross arm. The two arms show
+different art at the same state, so the card is animating, not stuck.
+
+Every screen of both arms, in order, as committed evidence:
+
+    q3-square-alert.png    q3-square-warning.png    q3-square-loading.png    q3-square-chapter.png
+    q3-cross-alert.png     q3-cross-warning.png     q3-cross-loading.png     q3-cross-chapter.png
+
+The crash, and the screen on display at that instant
+----------------------------------------------------
+Both arms die on the SAME fault, at the SAME place, with the chapter card as the
+last thing drawn:
+
+  square arm
+    I  68.720554 rsx: flip 1381 (buffer 0) worst 139.6 ms, >50ms 2, >100ms 1
+    F  70.954815 ppu: unknown indirect target 0x00ae5818 -- rdr+0xad5618 (no lifted code)
+       (lr=0x00adc030, thread 0x1000000) r3=0x1 r4=0xae5818 r9=0x737d9698 r31=0x73693fe0 ctr=0xae5818
+    exit -6 elapsed 71.8
+
+  cross arm
+    I  62.132268 rsx: flip 1381 (buffer 0) worst 39.5 ms, >50ms 0, >100ms 0
+    F  64.670457 ppu: unknown indirect target 0x00ae5818 -- rdr+0xad5618 (no lifted code)
+       (lr=0x00adc030, thread 0x1000000) r3=0x1 r4=0xae5818 r9=0x739e1698 r31=0x73697fe4 ctr=0xae5818
+    exit -6 elapsed 66.0
+
+The crash instant is 70.954815 s (square) / 64.670457 s (cross) of guest time. The
+screen on display then is the chapter card -- the driver's final grab, taken after
+the guest exited, is a BLACK frame (mean=0, 269 bytes, LAST-0058.png / LAST-0055.png),
+which is the window being cleared on exit, not a new screen. The last frame the guest
+actually DREW is the chapter card, and the last flip before the fault is flip 1381 in
+BOTH arms.
+
+Both arms reach flip 1381 and then fault, which is a strong statement that the crash
+is not timing: the two runs differ by 5 s of start-up and by 11 s of total, and stop
+at the same flip.
+
+What the guest is doing at the crash, verbatim from the square arm's log tail -- this
+is the engine running, not a menu waiting:
+
+    I  70.553897 cellFiber: HLE CreateFiber #682 entry=0x01385418 arg=0x7303b660 stack=0xd0033490+0xdc70 prio=0 -> CELL_OK
+    I  70.554093 cellFiber: HLE CreateFiber #683 entry=0x01385418 arg=0x7303b660 stack=0xd0041490+0xdc70 prio=0 -> CELL_OK
+    I  70.566557 cellFiber: HLE RunFibers(0x0165d580) ran 2805 fibre switch(es) -> CELL_OK
+    I  70.566744 cellFiber: HLE JoinFiber #683 -> status 0x1e, CELL_OK
+    I  70.566927 cellFiber: HLE JoinFiber #682 -> status 0x1e, CELL_OK
+    I  70.566934 cellFiber: HLE JoinFiber #681 -> status 0x1e, CELL_OK
+    I  70.942142 sceNp: ManagerGetStatus -> -1
+    F  70.954815 ppu: unknown indirect target 0x00ae5818 ...
+
+The RAGE threads are up from 0.48 s ('[RAGE] DVD Streamer', '[RAGE] HDD Streamer',
+'[RAGE Audio] Multistream'), the renderer is drawing (flip 1381, 31 fps, 32.5 ms
+frames), and cellFiber is running 2805 switches in one RunFibers. So the run is past
+the menus and into the game's own start-up when it hits the unlifted target.
+
+### M5 -- the driver's exit codes and what "reached the end" means here
+
+The task's criterion was "until the main menu or the start of gameplay". Both arms
+pass the menus and reach the chapter card, which is the first screen of gameplay
+start-up, and the guest then dies on its own fault (exit -6, SIGABRT from the
+runtime's unknown-indirect-target abort, not a driver kill). The driver reports the
+guest's own exit code, so exit -6 here is a RESULT: the run ended by itself.
+

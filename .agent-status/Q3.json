@@ -1,1 +1,1 @@
-{"agent":"Q3","status":"running","branch":"explore/q3","task":"drive past WARNING","updated":"2026-11-13T12:36Z","note":"driver rewritten: press per screen; regress clear_strays kills runs -> hard-linked rdrx"}
+{"agent":"Q3","status":"running","branch":"explore/q3","task":"drive past WARNING","updated":"2026-11-13T12:39Z","note":"both branches past WARNING to chapter card; crash at 0x00ae5818, flip 1381 both arms"}
