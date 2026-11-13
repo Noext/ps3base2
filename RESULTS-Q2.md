@@ -538,3 +538,90 @@ that the current thread has no fibre context. The title calls Yield 426 077
 times before it ever creates a fibre. That is a behaviour gap in LLE libfiber
 under this title's usage, which is what the HLE implementation addresses.
 
+
+## Final state
+
+Branch `explore/q2`, rebased onto main, 0 commits behind.
+
+```
+$ git diff --stat origin/main..HEAD
+ .agent-status/Q2.json          |   1 +
+ CMakeLists.txt                 |  62 +++++
+ RESULTS-Q2.md                  | 540 +++++++++++++++++++++++++++++++++++++++++
+ current_tasks/Q2.claim         |   5 +
+ tests/export_coverage.py       | 198 +++++++++++++++
+ tools/check_export_coverage.py | 273 +++++++++++++++++++++
+ 6 files changed, 1079 insertions(+)
+```
+
+0 deletions, and no `runtime/` or `recomp/` source touched: this branch adds a
+gate and its test, and changes no behaviour.
+
+### The gate, as delivered
+
+* `tools/check_export_coverage.py` -- for every LLE module in a generated table,
+  every exported function (export table -> descriptor -> code address) must have
+  a lifted function, the descriptor must be the PRX's own opd, and its TOC must
+  match the image. Bounded: 16-24 MB, 30-50 ms per title.
+* `CMakeLists.txt` -- runs at **configure time** and fails the configure with
+  `FATAL_ERROR` listing every missing export. `-DPS3BASE_EXPORT_GATE=OFF` exists
+  only to diagnose a tree that cannot pass it. Also registered as ctest
+  `export_coverage`, and re-runs when `table.cpp` changes.
+* `tests/export_coverage.py` -- six cases on a synthetic PRX, no disc needed,
+  0.21 s, 10 MB. Registered as ctest `export_coverage_gate`.
+
+```
+$ cmake -S . -B <build> -DPS3BASE_GENERATED_DIR=<tree>/ppu ...
+-- Export coverage gate: PASS
+
+$ ctest -R 'export_coverage|ppu_' --output-on-failure
+1/5 Test #3: ppu_dispatch_table ...............   Passed    0.02 sec
+2/5 Test #4: ppu_seed_forms ...................   Passed    0.04 sec
+3/5 Test #5: ppu_run_extent_table .............   Passed    0.02 sec
+4/5 Test #6: export_coverage ..................   Passed    0.05 sec
+5/5 Test #7: export_coverage_gate .............   Passed    0.19 sec
+100% tests passed, 0 tests failed out of 5
+```
+
+Negative control (the gate must fail, not warn): removing the Yield entry from
+`functions[]` stops the configure with
+
+```
+CMake Error at CMakeLists.txt:209 (message):
+  Export coverage gate FAILED (tools/check_export_coverage.py).
+    libfiber       NO-LIFT            nid=0C44F441   module=cellFiber      opd=0x3600e930 code=0x360033dc
+-- Configuring incomplete, errors occurred!
+```
+
+### The three answers, in one line each
+
+1. **The gate exists and fails the build.** Every exported function of every
+   LLE module has lifted code in all three titles: RDR 844/844, MC 764/764,
+   GTA 764/764, 0 missing, 0 bad opd, 0 bad TOC.
+2. **'47/47 exports verified' was false because it counted the wrong set.**
+   `check_lle_exports.py` skipped the unnamed export set (`if not m["module"]:`,
+   and a regex that could not match an empty module name), so it checked 47 of
+   the 87 functions libfiber's own .opd names; it also treated a descriptor's
+   code word outside the image text as data and passed it, so a descriptor
+   pointing at 0x00010001 was `ok`. Both holes are now covered by tests.
+3. **The libfiber lift did not stop at 0x36005c80.** For a relocated PRX the
+   lifter's seed set is a scan of the data LOADs for `{code, toc}` pairs with the
+   module TOC (`analysis.py:136-147`), and 0x36005c80 is the highest seed that
+   scan produces -- the top of the module's own descriptor table. All 87 seeds
+   are lifted, plus 2 island entries; all 962 direct branch targets in the text
+   land on an emitted label. Above 0x36005c80 sit nine import trampolines and
+   data. The address the finding compared it against, 0x3600e930, is an .opd
+   slot in the *second* PT_LOAD; the code it points at, 0x360033dc, is lifted and
+   is in the crash backtrace. The PERM return is libfiber behaving correctly for
+   a thread with no fibre context, not a coverage hole.
+
+### What the memory incident was
+
+My own synthetic fixture wrote the libent size as a 4-byte word instead of the
+single byte at offset 0, so `b[0]` was 0 and `addr += size` never advanced. The
+gate had no guard, so the loop appended forever. Fixed in both places: the
+fixture writes the byte, and the gate raises and reports `LIBENT-MALFORMED` on a
+zero size or a chain over 4096 entries. Re-running the broken fixture under a
+2 GB ceiling now gives 10 MB and 0.19 s instead of 24 GB. Every number in this
+file was taken with `ulimit -v` and `timeout` set, one run at a time.
+
