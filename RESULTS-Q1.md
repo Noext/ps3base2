@@ -159,3 +159,110 @@ leave the other 16 cases still falling through `call_indirect`. The dynamic path
 is what proves convergence; it is not the fix.
 
 
+
+### M6 -- the rule change (recomp/ppu/analysis.py), and why it is general
+
+Two defects, both in the detectors, both fixed at the rule and not at the address.
+
+**(a) `jump_table()`: a table whose extent is its own run of code words.**
+
+The detector required, for every table whose base is not `bctr + 4`, both a bound
+compare and a branch to a default. That is the right requirement for a TOC-loaded
+base -- the value there is a run-time pointer, so a bound is the only evidence of
+length. It is the wrong requirement for an ABSOLUTE base built by `lis/addi` in
+the same window: the table's address is in the instruction stream, so its extent
+can be read out of memory, and the run of in-code entries IS the evidence.
+
+The new rule, exactly as written in the file:
+
+    positional = base == bctr + 4
+    run_extent = False
+    if positional:
+        bound = 4096                      # the contiguous run decides the extent
+    elif default_off is None and bound is None:
+        if base_from_toc:                 # a run-time pointer keeps its bound
+            return None
+        bound = 4096
+        run_extent = True
+    if bound is None:
+        bound = 4096
+
+and, for a `run_extent` table only, two extra conditions before it is accepted:
+
+    if run_extent:
+        if len(targets) < 3:              # three code words is a dispatch table
+            return None
+        lo_t, hi_t = min(targets), max(targets)
+        if hi_t - lo_t > 0x4000:           # one contiguous region of THIS function
+            return None
+
+The two guards are what keep the rule from degenerating into the scan that was
+switched off in tools/static_seeds.py. That scan seeded 3,460 addresses at once
+and the title segfaulted in its renderer, because a table of FUNCTION POINTERS
+has entries scattered across the image and lifting them as cases of the caller
+splits every one of them. A switch's case labels are basic blocks inside the
+function that dispatches, so a table whose entries span more than 0x4000 bytes is
+not a switch and is refused. The 0x4000 window is the same one
+`table_dispatch_bctr` already uses for a function's extent.
+
+**(b) `table_dispatch_bctr()`: the setter is the nearest definition BEFORE the bctr.**
+
+    -    setter = None
+    -    for a in range(lo_fn, hi_fn, 4):      # the LAST writer in the whole body
+    -        ...
+    -        if op in (12, 14, 15, 24):
+    -            setter = a
+    +    for a in range(bctr - 4, lo_fn - 4, -4):   # the nearest writer ABOVE the bctr
+    +        ...
+    +        if op in (12, 14, 15, 24):
+    +            setter = a
+    +            break
+
+`_register_is_table_base()` has already established that the first write to the
+register walking back from the bctr is a `lis/addi`. The definition that
+dominates the dispatch is therefore that one, and scanning forward for the last
+writer in the body picks up unrelated later blocks. On f_00ae50f0 the last writer
+is 0xae79f4, 0x2800 bytes past the dispatch, and the base rebuilt from it was
+0x01440958 -- not in text, zero targets, detector returns None.
+
+### M7 -- the A/B, same machine, same minute, interleaved
+
+Both sides read the SAME `bin/rdr/EBOOT.elf` and `bin/gta/EBOOT.elf`; only
+`recomp/ppu/*.py` differs (`git show main:...` vs `git show explore/q1:...`).
+
+    \$ python3 /tmp/q1_liftstats2.py /tmp/q1-ab/main rdr bin/rdr/EBOOT.elf
+    analysis from /tmp/q1-ab/main/recomp/ppu/analysis.py
+    rdr   functions  72988  jump_tables   176  indirect_jumps     1  insns  4350712  5.4s
+    \$ python3 /tmp/q1_liftstats2.py /tmp/q1-ab/main gta bin/gta/EBOOT.elf
+    gta   functions  20081  jump_tables    15  indirect_jumps     0  insns  1791870  1.3s
+    \$ python3 /tmp/q1_liftstats2.py /tmp/q1-ab/new  rdr bin/rdr/EBOOT.elf
+    analysis from /tmp/q1-ab/new/recomp/ppu/analysis.py
+    rdr   functions  72988  jump_tables   193  indirect_jumps     0  insns  4351199  5.4s
+    \$ python3 /tmp/q1_liftstats2.py /tmp/q1-ab/new  gta bin/gta/EBOOT.elf
+    gta   functions  20081  jump_tables    15  indirect_jumps     0  insns  1791870  1.3s
+    \$ python3 /tmp/q1_liftstats2.py /tmp/q1-ab/main rdr bin/rdr/EBOOT.elf     (A again)
+    rdr   functions  72988  jump_tables   176  indirect_jumps     1  insns  4350712  5.3s
+    \$ python3 /tmp/q1_liftstats2.py /tmp/q1-ab/new  rdr bin/rdr/EBOOT.elf     (B again)
+    rdr   functions  72988  jump_tables   193  indirect_jumps     0  insns  4351199  5.4s
+
+Read the numbers:
+
+- RDR: **jump tables 176 -> 193 (+17), unresolved indirect jumps 1 -> 0.** The
+  +17 is the 17-case table at 0x013e5c8c. The single unresolved bctr on main is
+  exactly 0xae5178.
+- RDR: function count **unchanged at 72988** and instruction count **+487**
+  (0.011%). The new cases are labels inside the function that already existed;
+  no function was split, which is the failure mode the guards exist to prevent.
+- GTA: **identical** in every column (20081 / 15 / 0 / 1791870). The rule change
+  does not touch a title that was green.
+- Both repeats reproduce their side exactly, so the difference is the code and
+  not the machine.
+
+The generated code, from the fresh lift (`out-q1/ppu/rdr_110.cpp:28679`):
+
+    switch (uint32_t(ctx.ctr)) { case 0xae517c: goto L_ae517c; ... case 0xae5818: goto L_ae5818; ... case 0xae58b8: goto L_ae58b8; default: ppu::call_indirect(ctx, base, uint32_t(ctx.ctr)); return; }
+
+17 cases, 0xae5818 among them, and the same switch is emitted at all 17
+dispatchers in the function (every case body ends by dispatching again).
+
+

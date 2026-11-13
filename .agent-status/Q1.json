@@ -4,6 +4,6 @@
   "branch": "explore/q1",
   "worktree": "/root/Dev/wt-Q1",
   "task": "lift gap at rdr+0xad5618",
-  "progress": "M1-M5 static analysis done: jump table at 0x013e5c8c, 17 entries, 0xae5818 is index 13; both detectors return None (jump_table wants a bound compare; table_dispatch_bctr picks the wrong setter)",
-  "updated": "2026-11-13T12:41:49.844Z"
+  "progress": "rule change done in analysis.py: jump_table accepts a run-extent absolute table (>=3 entries, <=0x4000 span); table_dispatch_bctr takes the nearest setter before the bctr. A/B: RDR jump_tables 176->193, indirect_jumps 1->0, functions unchanged 72988; GTA identical. Fresh lift emits case 0xae5818. Now building the binary for the run proof.",
+  "updated": "2026-11-13T12:53:21.303Z"
 }
