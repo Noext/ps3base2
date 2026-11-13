@@ -47,3 +47,70 @@ stack says the same thing: RESULTS-P1.md:151 frame #2 is
 `f_360033dc_body+0x1bc (= cellFiberPpuYield, 0x3600345c)` -- a lifted function
 that is executing when the fault happens.
 
+
+## Measurement 2 -- the export coverage gate, and the table on all three games
+
+`tools/check_export_coverage.py` (new). It walks each PRX's own libent chain
+(num_func first, so the unnamed module_start/module_stop/PRX-entry exports are
+included), looks each (module, NID, image) up in the generated `exports[]`, and
+requires: row present; table opd non-zero and equal to the PRX's own opd; the
+descriptor's first word inside the image text and an entry in `functions[]`;
+the descriptor's second word equal to the image TOC.
+
+```
+$ for g in rdr mc gta; do python3 tools/check_export_coverage.py \
+    /root/Dev/ps3base2/out-$g/ppu/table.cpp --root /root/Dev/ps3base2 --imports; done
+```
+
+| game | module | func exports | lifted | miss | rowmiss | badopd | badtoc | own imports dead |
+|---|---|---|---|---|---|---|---|---|
+| rdr | liblv2 | 163 | 163 | 0 | 0 | 0 | 0 | 0 |
+| rdr | libsysmodule | 20 | 20 | 0 | 0 | 0 | 0 | 0 |
+| rdr | libsre | 267 | 267 | 0 | 0 | 0 | 0 | 0 |
+| rdr | libgcm_sys | 105 | 105 | 0 | 0 | 0 | 0 | 0 |
+| rdr | libfs | 96 | 96 | 0 | 0 | 0 | 0 | 0 |
+| rdr | libnet | 103 | 103 | 0 | 0 | 0 | 0 | 0 |
+| rdr | libfiber | 50 | 50 | 0 | 0 | 0 | 0 | 0 |
+| rdr | librtc | 40 | 40 | 0 | 0 | 0 | 0 | 0 |
+| mc | liblv2 | 163 | 163 | 0 | 0 | 0 | 0 | 0 |
+| mc | libsysmodule | 20 | 20 | 0 | 0 | 0 | 0 | 0 |
+| mc | libsre | 267 | 267 | 0 | 0 | 0 | 0 | 0 |
+| mc | libgcm_sys | 105 | 105 | 0 | 0 | 0 | 0 | 0 |
+| mc | libfs | 96 | 96 | 0 | 0 | 0 | 0 | 0 |
+| mc | libvdec | 24 | 24 | 0 | 0 | 0 | 0 | **91** |
+| mc | libsmvd2 | 23 | 23 | 0 | 0 | 0 | 0 | 0 |
+| mc | libspurs_jq | 66 | 66 | 0 | 0 | 0 | 0 | 0 |
+| gta | liblv2 | 163 | 163 | 0 | 0 | 0 | 0 | 0 |
+| gta | libsysmodule | 20 | 20 | 0 | 0 | 0 | 0 | 0 |
+| gta | libsre | 267 | 267 | 0 | 0 | 0 | 0 | 0 |
+| gta | libgcm_sys | 105 | 105 | 0 | 0 | 0 | 0 | 0 |
+| gta | libfs | 96 | 96 | 0 | 0 | 0 | 0 | 0 |
+| gta | libvdec | 24 | 24 | 0 | 0 | 0 | 0 | **91** |
+| gta | libsmvd2 | 23 | 23 | 0 | 0 | 0 | 0 | 0 |
+| gta | libspurs_jq | 66 | 66 | 0 | 0 | 0 | 0 | 0 |
+
+Totals: RDR 844 function exports / 844 lifted; MC 764/764; GTA 764/764.
+Every descriptor's code word is a lifted function entry and every TOC matches.
+
+The one real finding is **libvdec**: all 24 of its own exports are lifted, but
+91 of its own imports resolve nowhere -- `libavcdec`, `libdivx311dec`,
+`libdivxdec` are not lifted into the MC/GTA tables, so the first video call
+goes to a null slot. That is exactly the class of fault the export-only check
+cannot see, and it is why the gate has a dependency half.
+
+### The gate fails on a broken table (A/B, same machine, same minute)
+
+Four corrupted copies of `out-rdr/ppu/table.cpp`, each exercising one hole the
+old tool had. `tools/check_lle_exports.py` vs `tools/check_export_coverage.py`:
+
+| case | old tool | new gate |
+|---|---|---|
+| A: `{0x360033dc, f_360033dc}` removed from `functions[]` | FAIL (caught) | FAIL (caught) |
+| B: Yield's table opd replaced by 0 | FAIL (caught) | FAIL (caught) |
+| C: Yield's table opd moved to 0x3600e938 | FAIL (caught) | FAIL (caught) |
+| D: the unnamed PRX-entry export row removed | **PASS -- missed** | FAIL (caught) |
+
+Case D is the structural blind spot: `check_lle_exports.py` never even parses
+the unnamed rows (its regex requires a non-empty module name, `[^\"]+`), and
+then skips them explicitly with `if not m["module"]: continue`.
+
