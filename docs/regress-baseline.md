@@ -95,6 +95,17 @@ The numbers below are read by `tools/regress.sh`, one line per game, as
 | 2026-11-12 | rdr | 2161 flips | Social Club legal notice on screen at 13 s; SPURS abort at 78 s |
 | 2026-11-12 | rdr | 601 flips | title screen reached at ~22 s; abort at ~23 s |
 | 2026-11-12 | all | A/B rule | the criterion becomes the reference binary in the same minute; rdr's bar becomes the title screen, read from a recording |
+| 2026-11-13 | rdr | EXODUS IN AMERICA | the 17-entry dispatch table at 0x013e5c8c resolves (17 labels, 0 indirect jumps left); 3 of 4 runs reach the chapter card, 4921/6061/5341 flips, 0 crashes, 0 unknown indirect. The 4th crashed after the card on a cellFiber JoinFiber defect, not on the dispatch. See docs/findings/f-rdr-dispatch-table.md |
+
+### RDR's row cannot be judged by regress.sh yet
+
+The RDR row above cannot be judged by `tools/regress.sh` as it stands: its
+criterion is the ALERT screen and it sends no input, so the title never leaves
+"Press START" there. Measured -- `rdr-ref1 alive flips=2461` with
+`miss: 0 OCR'd` on every attempt. The run that does reach ALERT drives with
+`tools/drive_rdr.py`, which presses START; `tools/rdr_ab.sh` pairs two binaries
+that way. Fixing regress.sh for this title means giving it an input driver, and
+that is a separate change.
 
 ## Why Red Dead Redemption sat at 0
 

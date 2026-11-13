@@ -975,3 +975,57 @@ past Press START. The chain established since:
 
 That is a configuration condition, not a race: an earlier reading of the guard
 word at 0x0177caa8 as a contended counter was refuted by measurement.
+
+## Milestone: RDR's 17-entry dispatch table resolves, and the title reaches its chapter card
+
+The table at `0x013e5c8c` is recovered on the real image. Measured on
+`bin/rdr/EBOOT.elf`, not on a synthetic shape:
+
+    jump_table(0x00ae5178) -> base 0x013e5c8c, 17 targets, 0x00ae517c..0x00ae58b8
+    explore(0x00ae50f0)    -> 522 insns, 0 errors, 0 indirect jumps left
+    all 17 targets are labels of the function
+    17 bcctr sites (0x00ae5178..0x00ae58b4) all resolve to 0x013e5c8c
+
+The hand-written table path was verified to reach `explore()` and not only the
+log, which is the failure the resume prompt names: a lift with
+`PS3BASE_NO_AUTO_TABLES=1` produces `switch table at bctr 0x00ae5178: 17
+target(s)` from the file alone, emits `L_ae5818`, and yields 76 788 functions
+-- five FEWER than the automatic lift, which is the expected sign: the automatic
+pass had split what it could not see into extra function entries.
+
+The prompt's `bctr = 0x00adc030` is wrong and is corrected in the finding:
+`0x00adc030` is `lbz r26, 0x8c(r1)`, the instruction after the `bl` that calls
+the dispatcher -- the return address the crash report printed as `lr`. The real
+dispatch is `0x00ae5178 = 4e800420 bcctr`.
+
+Runs, one instance at a time under a lock, 240-250 s, `--branch cross`:
+
+    A  load 5.46  4921 flips  0 crashes  0 unknown indirect  EXODUS IN AMERICA
+    B  load 4.85  6061 flips  0 crashes  0 unknown indirect  EXODUS IN AMERICA
+    C  load 11.09 5341 flips  0 crashes  0 unknown indirect  EXODUS IN AMERICA
+    D  load 22.55 3421 flips  1 crash    0 unknown indirect  LOADING
+
+The `unknown indirect target 0x00ae5818` that ended the previous session does
+not appear in any run. Run D crashed after the chapter card on a cellFiber
+defect -- `JoinFiber` returns CELL_OK with status 0 for a fibre the log says is
+"still in state 3", then the next CreateFiber faults at guest
+`0xffff8b2d24000000`. That is a distinct fault from the old LLE fibre crash
+(guest 0x10) and it is the next thing to fix, not something this milestone
+claims.
+
+Proof commands:
+
+    $ ulimit -v 4000000 && python3 tests/ppu_run_extent_real_bytes.py
+    6 checks passed, 0 skipped
+
+    $ python3 tools/check_export_coverage.py out-rdr/ppu/table.cpp --imports
+    PASS: every exported function of every LLE module has lifted code
+
+    $ ./tools/check_no_dup_symbols.sh
+    gowa_stubs: no known duplicate definitions
+
+The A/B against the reference binary does NOT attribute the chapter to the
+table: that binary's lift has no switch at all, and it crashed first at 220 s on
+the old LLE fibre fault, so it never reached the dispatch. The attribution rests
+on the lift-level measurements above. See docs/findings/f-rdr-dispatch-table.md.
+

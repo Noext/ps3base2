@@ -135,3 +135,39 @@ The rule is therefore mechanical, not judgement:
 
 This is written down because the alternative -- reading each diff by eye at merge
 time -- failed three times while the diff was being read.
+
+## One subagent at a time, one game at a time, one compile at a time
+
+This is the permanent organisation of a working session. It is mechanical, like
+the merge queue above, because the alternative -- several agents in flight and a
+report written from memory -- has already produced a false report.
+
+1. **One subagent at a time.** Launch one, wait for its status `done` or
+   `blocked`, read its `RESULTS.md` **in full**, have the work verified and
+   merged, and only then launch the next. Never two in parallel.
+2. **One game instance at a time on the machine**, under a lock, bounded in
+   duration, killed by the agent that started it.
+3. **At most one compilation at a time.**
+4. **One report per turn**, at the end, after the last subagent. No questions in
+   between: when a choice appears, take the one that produces a measurement and
+   write down that you took it.
+5. **Never conclude anything about a subagent without having read its report.**
+   A status file is not a result; `done` is a claim the report has to support.
+6. **Never compare a descriptor address to a code bound.** A descriptor is data
+   that *contains* the code address. `0x3600e930` is an `.opd` in libfiber's
+   data segment, not unlifted code; comparing it to `text_hi` produced a whole
+   finding that had to be retracted (docs/findings/f-rdr-fiber-fix.md).
+
+## Measurement discipline
+
+Every comparison is an **A/B on the same machine, in the same minute**. Two runs
+minutes apart on a shared machine are not comparable; that error produced a false
+regression report once already.
+
+- Check `cut -d' ' -f1-3 /proc/loadavg` before a flip measurement and record it.
+- Watch **RAM**, not just CPU and disk: an analysis script once took 46 GB and
+  saturated the machine. Cap every Python script:
+  `ulimit -v 2000000 && timeout 60 python3 <script>`.
+- Delete nothing outside your own scope. `/root/Dev/wasm-base`,
+  `/root/Dev/t-T1`, `/root/Dev/t-T2`, `/root/Dev/t-V` and their branches are
+  not ours.
