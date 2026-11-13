@@ -285,3 +285,67 @@ because the checker's line counts every entry of each module it was given
 row count for a different tree. The two numbers were never the same quantity and
 nothing compared them.
 
+
+## Measurement 5 -- the lift's true extent, proved by tiling
+
+Two independent measures agree that libfiber's lifted region ends exactly where
+its code ends, and that nothing above it is code.
+
+**(a) The generated source labels tile the code region.** Every basic block the
+lifter emitted is a `L_xxxxxxxx:` label. In `out-rdr/ppu/libfiber_000.cpp`:
+
+```
+labels in libfiber text: 530, lowest 0x36000000, highest 0x36005c80
+first import stub: 0x36005c88
+highest label to first stub: 0x36005c80..0x36005c88 = 8 bytes
+  that gap is: 38600000 4e800020        <- li r3,0 ; blr  (the last function's tail)
+stub region: 0x36005c88..0x36005da8 = 288 bytes = 9 trampolines x 32 bytes
+```
+
+530 labels, 89 of them function entries and 441 in-function blocks. Every direct
+branch target inside the text lands on one of them:
+
+```
+$ # walk every b/bc in the text, resolve the target, look it up in the label set
+direct branch targets inside libfiber text: 962
+targets with no label and no stub (i.e. not in the lifted source): 0
+```
+
+962 of 962. There is no branch in libfiber that jumps to an address the lift did
+not produce.
+
+**(b) The .opd covers every function the module exports, and the lift covers the
+.opd.** 87 descriptors name code in the text; 87 are lifted; the two extra lifted
+entries (0x3600026c, 0x360002a0) are the ELFv1 fiber-entry thunks, which the
+.opd does not name but a call can reach.
+
+What is above 0x36005c88, byte for byte:
+
+| range | what |
+|---|---|
+| 0x36005c78..0x36005c88 | `li r3,0; blr` x2 -- the last two leaf functions, both lifted |
+| 0x36005c88..0x36005da8 | 9 import trampolines, one per PRX import stub, deliberately not lifted |
+| 0x36005da8..0x36005db4 | zero padding |
+| 0x36005db4..0x36005dec | the two libent export-table entries |
+| 0x36005dec..0x36006558 | export name/NID/address tables and .rodata (`libfiber`, `fiber_ppu.c`, `*NO NAME*`) |
+| 0x36006560..0x3600eb50 | the second PT_LOAD: .opd (0x3600e7bc..0x3600eb50) and the pointer table |
+
+The trampolines are not a lifter gap: `recomp/ppu/analysis.py:604` models a
+branch into one as `ppu::call_import(ctx, base, N)` (`if t in img.stubs`), which
+is what the runtime wants -- lifting them as guest functions would run the
+guest's own stub code against a host-side import table that is not there.
+
+So: the lift is complete for this module. The fibre crash was not a missing
+lift. It was the LLE implementation of a scheduler being driven by a title that
+calls `Yield` 426 077 times before it ever creates a fibre, and the fix that
+landed (HLE cellFiber) addresses the behaviour, not a coverage hole.
+
+### The one thing the lift genuinely does not cover
+
+`0x3600e930` is not code and never was. It is the .opd slot of
+`cellFiberPpuYield`; the code it points at, 0x360033dc, is lifted and runs.
+Reading a .opd address and asking 'is it inside the lifted text' is a category
+error, and it is the error the finding document made when it wrote
+'le lift de libfiber s'arrete a 0x36005c80'. 0x36005c80 is the highest address
+the .opd names; it is not where the lift stopped.
+
