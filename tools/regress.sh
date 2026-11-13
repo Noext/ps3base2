@@ -181,8 +181,16 @@ clear_strays() {
         case "$c" in
             *ps3base*--no-launcher*)
                 [ "$(cat "$p/comm" 2>/dev/null)" = "tmux: server" ] && continue
-                ppid=$(awk '/^PPid:/{print $2}' "$p/status" 2>/dev/null)
-                [ "$ppid" = "$$" ] && continue
+                # The game runs inside a subshell, so its PPid is that
+                # subshell, not $$ -- comparing one level was not enough and
+                # the harness killed its own runs (exit 137, flips 181). Walk
+                # the whole parent chain instead.
+                anc=$p; own=1
+                while [ -n "$anc" ] && [ "$anc" != "0" ] && [ "$anc" != "1" ]; do
+                    anc=$(awk '/^PPid:/{print $2}' "/proc/$anc/status" 2>/dev/null)
+                    if [ "$anc" = "$$" ]; then own=0; break; fi
+                done
+                [ "$own" = "1" ] && kill -9 "${p#/proc/}" 2>/dev/null
                 kill -9 "${p#/proc/}" 2>/dev/null
                 ;;
         esac
