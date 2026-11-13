@@ -246,7 +246,25 @@ mesure a une resolution qui n'est pas celle dans laquelle Vulkan dessine. Le 10,
 1280x480 puis en laissant le presenteur agrandir : comparer a cette echelle mesure le presenteur
 autant que le renderer.
 
-## 10. Dette nommee
+## 10. Regression du chemin Vulkan : rien casse
+
+    $ cd /tmp/out-R2 && ctest -E spu_bench --output-on-failure
+    96% tests passed, 1 tests failed out of 28
+     27 - sysutil (Failed)
+
+Les deux echecs sont **anterieurs et sans rapport** avec ce correctif, verifie :
+
+| test | etat | preuve que ce n'est pas moi |
+|---|---|---|
+| `sysutil` | 4 echecs (video-out secondaire, resolutionId) | `git diff 827be60 -- tests/` : je n'ai touche a aucun test. La base `827be60` precede le correctif `sysutil_hle.h` de main (`git diff 827be60 main -- runtime/src/hle/sysutil_hle.h` = 29+/14-). Le binaire de `/root/Dev/ps3base2` (main) passe 211/0. |
+| `spu_bench` | ne compile pas (`renjob_gen.h` etc. absents) | ces en-tetes generes n'existent pas non plus a `827be60` : `ls runtime/src/spu/renjob/renjob_gen.h` echoue dans les deux arbres |
+
+`wgpu_map` passe 11/11, et le chemin Vulkan n'est touche par aucun de mes trois correctifs :
+`sampler_for()`, le televersement des mips et le redimensionnement de cible sont tous dans
+`wgpu_backend.cpp`, appele uniquement sous `if (wgpu::enabled())`. Les deux ajouts au renderer
+remplissent des champs de `wgpu::DrawInputs` et le log `vksampler:`.
+
+## 11. Dette nommee
 
 1. **La cible du miroir suit maintenant le draw** (1280x480 sur ces frames), donc `capture_ppm`
    rend une image 1280x480 et non plus 1280x720. Un consommateur qui attend du 720 doit agrandir
