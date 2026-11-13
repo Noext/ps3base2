@@ -18,10 +18,12 @@
 #include "runtime/thread.h"
 #include "runtime/stacks.h"
 #include "runtime/memory.h"
+#include "runtime/fibertrace.h"
 
 #include <algorithm>
 #include <chrono>
 #include <atomic>
+#include <cstring>
 #include <map>
 #include <mutex>
 #include <string>
@@ -673,6 +675,44 @@ void call_import_body(Context& ctx, uint8_t* base, uint32_t index, ImportSlot& s
 }
 
 void call_import_inner(Context& ctx, uint8_t* base, uint32_t index, ImportSlot& slot, int32_t st, const image::ImportEntry& imp) {
+    /* PS3BASE_FIBER_TRACE=1: every cellFiber import, with the guest stack
+     * pointer r1 before and after, recorded in a ring the crash handler dumps.
+     *
+     * Why this exists: the RDR host SIGSEGV at guest 0x10 is a null+0x10 read
+     * inside LLE libfiber, and libfiber is only reachable through a cellFiber
+     * import. The hypothesis under test is "a fibre switch precedes the crash",
+     * and a switch is exactly the case where r1 going in and r1 coming out
+     * differ -- the fibre runs on its own guest stack. So r1 before/after is the
+     * measurement, not a reading of the lifted switch code.
+     *
+     * The events go to memory and not to the log: logging every one of them is
+     * 24 000 lines in 36 s, which slows the run and buries the last few events
+     * -- and the last few are the only ones that matter. */
+    struct FiberScope {
+        bool on;
+        ppu::Context& ctx;
+        const image::ImportEntry& imp;
+        uint32_t index;
+        uint32_t r1_in;
+        uint32_t lr_in;
+        FiberScope(ppu::Context& c, uint8_t*, const image::ImportEntry& i, uint32_t idx)
+            : on(fibertrace::enabled() && i.module && std::strcmp(i.module, "cellFiber") == 0),
+              ctx(c), imp(i), index(idx), r1_in(static_cast<uint32_t>(c.gpr[1])),
+              lr_in(static_cast<uint32_t>(c.lr)) {
+            if (!on) return;
+            guest::Thread* t = guest::current();
+            fibertrace::note(fibertrace::Kind::Enter, t ? t->id : 0u, 0,
+                             imp.name ? imp.name : "?", lr_in, r1_in, c.gpr[3]);
+        }
+        ~FiberScope() {
+            if (!on) return;
+            const uint32_t r1_out = static_cast<uint32_t>(ctx.gpr[1]);
+            guest::Thread* t = guest::current();
+            fibertrace::note(fibertrace::Kind::Leave, t ? t->id : 0u, 0,
+                             imp.name ? imp.name : "?", lr_in, r1_out, ctx.gpr[3],
+                             r1_out != r1_in);
+        }
+    } fiber_scope(ctx, base, imp, index);
     /* r2 is the caller's table-of-contents register and an import is transparent
      * to it: on console the callee preserves it and the caller's own
      * `lwz r2, 40(r1)` reloads the same value. A HLE handler is C++ code that

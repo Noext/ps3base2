@@ -24,6 +24,7 @@ std::string sample_stack(void* native, int depth) {
 
 #ifndef _WIN32
 #include "runtime/codewatch.h"
+#include "runtime/fibertrace.h"
 #include "runtime/hooks.h"
 #include "runtime/host.h"
 #include "runtime/log.h"
@@ -360,6 +361,12 @@ void fault_handler(int sig, siginfo_t* si, void* ctx) {
     void* pcs[24];
     int n = stack_from(uc, pcs, 24);
     for (int i = 0; i < n; i++) LOG_ERROR("crash", "  #%d %s", i, symbol_of(reinterpret_cast<uintptr_t>(pcs[i])).c_str());
+    /* The cellFiber events that led here. Printed BEFORE the register dump so
+     * the reader sees the sequence first: what the fault is a consequence of is
+     * the last import that ran, not the address it faulted at. */
+    fibertrace::dump("crash");
+    LOG_ERROR("crash", "  cellFiber import nesting depth on this thread: %d%s", fibertrace::depth(),
+              fibertrace::depth() > 0 ? " (the fault happened INSIDE a cellFiber import)" : "");
     if (t) {
         auto& c = t->ctx;
         LOG_ERROR("crash", "  guest lr 0x%llx r1 0x%llx r2 0x%llx r3 0x%llx r4 0x%llx r5 0x%llx", static_cast<unsigned long long>(c.lr), static_cast<unsigned long long>(c.gpr[1]),
