@@ -96,6 +96,7 @@ struct Fiber {
     uint32_t stack_size = 0;
     uint32_t guest_fiber = 0;/* the guest CellFiberPpu object */
     uint32_t priority = 0;
+    uint32_t exit_status = 0;/* what the entry returned; JoinFiber reports it */
     char name[32] = {};
 
     /* The host side. One host stack and one host context per fibre, because a
@@ -184,6 +185,7 @@ void fiber_trampoline() {
          *   ppu: unknown indirect target 0x01385418 -- (no lifted code)
          * Both call_opd and the OPD layout are the established ones here. */
         guest::call_opd(*st->live_ctx, vm::g_base, f.entry);
+        f.exit_status = static_cast<uint32_t>(st->live_ctx->gpr[3]);
     }
     f.state = State::Terminated;
     st->in_fiber = false;
@@ -340,8 +342,46 @@ HLE_FUNC(cellFiber, cellFiberPpuDeleteFiber) {
     ret(ctx, CELL_FIBER_ERROR_INVAL);
 }
 
+/* cellFiberPpuJoinFiber(fiber, status) -- refs/rpcs3/.../cellFiber.cpp:202.
+ *
+ * MEASURED why this cannot refuse: with RunFibers running the fibre for real,
+ * the title's next call is JoinFiber, and the title treats an error as fatal:
+ *
+ *   cellFiber: HLE CreateFiber #0 ... -> CELL_OK
+ *   cellFiber: HLE RunFibers(0x0165d580) ran 932 fibre switch(es) -> CELL_OK
+ *   tty: [FATAL] cellFiberPpuJoinFiber(g_Fibers->m_Fiber, &exitCode) failed, code 80760002
+ *   process: _sys_process_exit(0x1)
+ *
+ * So JoinFiber is on the path this game actually walks. RPCS3 validates and
+ * returns CELL_OK; the console's fibre has finished by the time the scheduler
+ * returns (RunFibers above ran it to completion), so the join is a status
+ * report and not a wait. Same shape here: validate, write the exit status,
+ * return CELL_OK. */
 HLE_FUNC(cellFiber, cellFiberPpuJoinFiber) {
-    LOG_WARN("cellFiber", "JoinFiber is not implemented");
+    const uint32_t fiber_ea = a32(ctx, 0);
+    const uint32_t status_ea = a32(ctx, 1);
+    if (!fiber_ea || !status_ea) return ret(ctx, CELL_FIBER_ERROR_NULL_POINTER);
+    if (fiber_ea & (SCHEDULER_ALIGN - 1)) return ret(ctx, CELL_FIBER_ERROR_ALIGN);
+    ThreadState* st = state_for_self();
+    if (st) {
+        std::lock_guard lk(g_lock);
+        /* The handle is what CreateFiber wrote into the CellFiberPpu object. */
+        const uint32_t handle = vm::range_mapped(fiber_ea, 4) ? vm::read32(fiber_ea) : 0;
+        if (valid_handle(*st, handle) && st->fibers[handle].state != State::Free) {
+            const Fiber& f = st->fibers[handle];
+            /* A fibre that has not finished is not joinable yet; the console
+             * would block, but this title has already run it to completion. */
+            if (f.state != State::Terminated) {
+                LOG_WARN("cellFiber", "JoinFiber #%u: still in state %u (not yet terminated)", handle,
+                         static_cast<unsigned>(f.state));
+            }
+            if (vm::range_mapped(status_ea, 4)) vm::write32(status_ea, f.exit_status);
+            LOG_INFO("cellFiber", "HLE JoinFiber #%u -> status 0x%x, CELL_OK", handle, f.exit_status);
+            return ret(ctx, 0);
+        }
+    }
+    if (vm::range_mapped(status_ea, 4)) vm::write32(status_ea, 0);
+    LOG_WARN("cellFiber", "JoinFiber on an unknown handle (fiber=0x%08x)", fiber_ea);
     ret(ctx, CELL_FIBER_ERROR_INVAL);
 }
 

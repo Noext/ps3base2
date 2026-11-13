@@ -71,10 +71,18 @@ void dump(const char* why) {
     const uint64_t end = g_pos.load(std::memory_order_relaxed);
     const uint64_t count = end < kRingSize ? end : kRingSize;
     const uint64_t start = end - count;
+    /* "empty" and "not watching" are different results and an earlier version of
+     * this line printed them the same way: with PS3BASE_FIBER_TRACE unset the ring
+     * is empty because nothing was ever recorded, not because no import ran. */
+    if (!enabled()) {
+        LOG_ERROR("fibertrace", "%s: NOT RECORDING -- PS3BASE_FIBER_TRACE is not set, so this "
+                  "run gathered no cellFiber events (this is not evidence that none ran)", why);
+        return;
+    }
     LOG_ERROR("fibertrace", "%s: last %llu cellFiber events of %llu, oldest first%s",
               why, static_cast<unsigned long long>(count),
               static_cast<unsigned long long>(end),
-              count == 0 ? " -- THE RING IS EMPTY: no cellFiber import ran in this process" : "");
+              count == 0 ? " -- THE RING IS EMPTY: the trace was on and no cellFiber import ran" : "");
     for (uint64_t i = start; i < end; i++) {
         const Event& e = g_ring[i % kRingSize];
         LOG_ERROR("fibertrace", "  t=%.6f th=0x%x %-6s %s at 0x%08x r1=0x%08x r3=0x%llx lr=0x%08x%s",

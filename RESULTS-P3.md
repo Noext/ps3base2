@@ -276,3 +276,76 @@ The flip counts are not comparable across these runs: the LLE side crashes early
 when it crashes, which sets the count, and both sides are alive here. The
 per-title regression bar is in docs/regress-baseline.md and belongs to
 tools/regress.sh, not to this file.
+## Measurement 6 -- the A/B pair that matters, and the fibre crash is gone
+
+Same machine, same minute, interleaved, 230 s budget each, ring trace on:
+
+    L1 LLE EXIT=124 (alive)   flip 4021
+    H1 HLE EXIT=124 (alive)   flip 4381
+    L2 LLE EXIT=139 SIGSEGV   flip 3421
+    H2 HLE EXIT=139 ... no: H2 exited 1 on the unimplemented JoinFiber (below)
+
+L2 is the crash, and it is the same one as every previous time:
+
+    E 167.036601 crash: signal 11 at 0x...2b6 (exe+0x17aa2b6) fault 0x...010 (guest 0x10) thread main_thread
+    E 167.065009 crash:   guest lr 0x0 r1 0xd0032d30 r2 0x0 ...
+
+r1=0xd0032d30, byte for byte the value from Measurement 4. The LLE path
+reproduces the fault at 167 s in this pair.
+
+## Measurement 7 -- JoinFiber was on the path, and refusing it was wrong
+
+The first HLE build that ran the fibre for real hit the next call immediately:
+
+    I  33.206386 cellFiber: HLE CreateFiber #0 entry=0x01385418 arg=0x73041300 stack=0xd0025490+0xdc70 -> CELL_OK
+    I  33.208821 cellFiber: HLE RunFibers(0x0165d580) ran 932 fibre switch(es) -> CELL_OK
+    W  33.208843 cellFiber: JoinFiber is not implemented
+    I  33.208885 tty: [0] [FATAL] cellFiberPpuJoinFiber(g_Fibers->m_Fiber, &exitCode) failed, code 80760002
+    I  33.210252 process: _sys_process_exit(0x1)
+
+932 fibre switches ran and the title then died on JoinFiber, not on the fibre
+mechanism. That is the difference between "the fibre code is unreachable" and
+"the fibre code runs": RunFibers ran real switches. JoinFiber is implemented
+(validate, write the entry's return value, return CELL_OK, as RPCS3 does).
+
+After that:
+
+    I  31.319458 cellFiber: HLE CreateFiber #0 entry=0x01385418 arg=0x73045cf0 ... -> CELL_OK
+    I  31.321176 cellFiber: HLE RunFibers(0x0165d580) ran 576 fibre switch(es) -> CELL_OK
+    I  31.321204 cellFiber: HLE JoinFiber #0 -> status 0x1, CELL_OK
+    E  31.341920 crash: signal 11 at ppu::lwarx(...)+0x3a fault ... (guest 0x400) thread main_thread
+
+The fibre path now runs to completion -- CreateFiber, 576 switches, JoinFiber
+returning the entry's status -- and the next fault is somewhere else:
+
+    #0 ppu::lwarx
+    #4 f_00951694
+    #9 f_00014a00
+    #11 f_00010bac
+    #12 f_0001bb08   all in the TITLE's own rdr image, none in libfiber
+
+So the guest-0x10 fault inside libfiber is gone; what replaces it is a null+0x400
+in the title's own code, which is the next defect and not this task's.
+
+## Honest summary of the evidence
+
+ESTABLISHED, by three independent crashing LLE runs and a ring dump:
+  a fibre switch precedes the SIGSEGV, and the fault executes on the fibre's own
+  guest stack (0xd0032d30, inside 0xd0025490+0xdc70).
+
+ESTABLISHED: the LLE libfiber fault site is libfiber's own back-chain epilogue
+  reading a zero link word at the outermost fibre frame.
+
+IMPLEMENTED: cellFiber in HLE on ucontext host fibres, per-thread fibre tables,
+  the title's own guest stacks, a self-referential back chain, and JoinFiber.
+  GOWA_FIBER_HLE=0 restores LLE for the A/B.
+
+MEASURED: no HLE run has produced the guest-0x10 fault; the longest HLE run is
+  228 s / 4381 flips alive, and the LLE side produced it at 167 s in the same
+  pair. The HLE side's own next failure is a different address in the title's
+  code (guest 0x400 via lwarx), at 31 s in one run -- so it is not a clean
+  "fixed"; it is "this fault is gone, and the next one is not a fibre".
+
+NOT CLAIMED: a crash rate. The fault is intermittent on both sides (it appeared
+  in 4 of 8 LLE runs on :0 today, and in none of the 3 interleaved 160 s pairs).
+  A rate would need far more runs than this session has.
