@@ -161,6 +161,35 @@ l'agrandissement du presenteur, que le miroir n'a pas.
 `p_repro`, puis `pair1`). L'image est le logo 4J Studios, pas un aplat : 620 couleurs distinctes,
 coverage 72 %, meme moyenne 169,2325 des deux cotes.
 
+### 4.1 Le temoin qui prouve que c'est bien le correctif
+
+Le meme frame, meme run, meme resolution appariee, avec le sampler factice restaure
+(`PS3BASE_WGPU_DUMMY_SAMPLER=1`) :
+
+    $ /tmp/R2/pair.sh ctrl_dummy PS3BASE_WGPU_DUMMY_SAMPLER=1
+    $ python3 /tmp/R2/cmp3.py /tmp/R2/ctrl_dummy
+    wgpu_000080.ppm surface_local_00280000_1280x480_f44.ppm rms 3.427481 SHA_EQ False distinct 116
+    wgpu_000100.ppm surface_local_00280000_1280x480_f44.ppm rms 3.427481 SHA_EQ False distinct 116
+
+| variante (meme frame, meme resolution) | RMS | SHA egal | couleurs distinctes |
+|---|---|---|---|
+| sampler factice (temoin) | 3,427481 | non | 116 |
+| sampler derive des registres RSX | **0,000000** | **oui** | **620** |
+
+Sans le correctif le miroir n'atteint jamais l'egalite ; avec, il l'atteint exactement. Le nombre
+de couleurs distinctes (116 contre 620, et 620 = celui de la surface Vulkan) est l'explication :
+116 correspond a un echantillonnage NEAREST sans mip, 620 au filtrage derive.
+
+### 4.2 Images
+
+| fichier | contenu |
+|---|---|
+| `evidence/exact_pair_stacked.png` | Vulkan (haut) et WebGPU (bas), memes octets |
+| `evidence/vulkan_exact_1280x480.png` | la surface Vulkan de reference |
+| `evidence/wgpu_exact_1280x480.png` | la capture WebGPU, SHA-256 identique |
+| `evidence/before_after_stack.png` | ref / avant / diff avant / apres / diff apres (1280x720) |
+| `evidence/diff_before.png`, `evidence/diff_after.png` | les deux images de difference |
+
 ## 5. Tableau ecran | RMS avant | RMS apres | draw fautif | cause | correction
 
 | ecran | RMS avant | RMS apres | draw fautif | cause | correction |
@@ -206,7 +235,28 @@ Je ne peux donc livrer trois lignes sur trois : **une seule est mesuree**, et c'
 ## 9. Correction d'une affirmation de K2
 
 K2 ecrivait (sec. 6) que « le sampler RSX n'est pas derive » etait la piste la plus courte. C'etait
-vrai mais **insuffisant tel quel** : corriger le sampler sans la chaine de mip ni la vue fait
-passer le RMS de 10,57 a 13,33. La piste ne paye qu'avec les deux autres correctifs, qui ne sont
-visibles qu'ensemble. Le chiffre a retenir est donc 0,0000 a resolution appariee, pas une
-amelioration du 10,57 mesure a une resolution qui n'est pas celle dans laquelle Vulkan dessine.
+vrai, mais **insuffisant tel quel** : corriger le sampler sans la chaine de mip ni la vue fait
+passer le RMS de 10,57 a 13,33. La piste ne paye qu'avec les deux autres correctifs, et le temoin
+de la section 4.1 le mesure : sampler factice = 3,427 et jamais l'egalite, sampler derive =
+0,000000 et egalite d'octets.
+
+Le chiffre a retenir est donc 0,0000 **a resolution appariee**, pas une amelioration du 10,57
+mesure a une resolution qui n'est pas celle dans laquelle Vulkan dessine. Le 10,57 de K2 et mon
+12,09 sont tous deux mesures contre une image 1280x720 que Vulkan a produite en dessinant en
+1280x480 puis en laissant le presenteur agrandir : comparer a cette echelle mesure le presenteur
+autant que le renderer.
+
+## 10. Dette nommee
+
+1. **La cible du miroir suit maintenant le draw** (1280x480 sur ces frames), donc `capture_ppm`
+   rend une image 1280x480 et non plus 1280x720. Un consommateur qui attend du 720 doit agrandir
+   comme le presenteur le fait, ou demander au miroir de composer dans une cible de presentation.
+   Ce n'est pas fait ici : le miroir n'a pas de presenteur.
+2. **Le viewport et le scissor ne sont pas poses** par le miroir. Les poser avec les valeurs du
+   renderer (espace 480) sur une cible 720 a fait monter le RMS a 155,20. Le defaut WebGPU (cible
+   entiere) est correct tant que la cible a la taille du draw ; il faudra les poser le jour ou le
+   miroir dessinera dans une cible de taille differente.
+3. **Le sampler d'ombre (comparaison)** n'est pas implemente : le layout declare tous les samplers
+   en `Filtering`, et un vrai draw d'ombre demanderait `Comparison`. Aucun ecran de ce titre
+   (logo) n'en utilise ; le cas est logge.
+4. **Ecran titre et menu non mesures** (sec. 6) : blocage `cellPadGetData`, anterieur a la session.
