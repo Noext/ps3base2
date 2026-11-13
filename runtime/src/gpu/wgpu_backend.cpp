@@ -482,6 +482,9 @@ void begin_pass() {
      * would be reading undefined memory here. */
     ca.loadOp = g.web ? WGPULoadOp_Clear : WGPULoadOp_Load;
     if (g.web) ca.clearValue = {0.0, 0.0, 0.0, 1.0};
+    /* MODE 3 clears to magenta, so a visible background proves the pass ran even if
+     * the game's triangle is off-screen or degenerate. */
+    if (g_debug_mode.load() == 3) ca.clearValue = {1.0, 0.0, 1.0, 1.0};
     ca.storeOp = WGPUStoreOp_Store;
     WGPURenderPassDepthStencilAttachment da = WGPU_RENDER_PASS_DEPTH_STENCIL_ATTACHMENT_INIT;
     da.view = g.depth_view;
@@ -2652,8 +2655,14 @@ void end_frame() {
         return;
     }
 
-    if (dbg >= 1) {
-        /* MODE 1: magenta clear of OUR texture. Modes 2..6 add the test triangle. */
+    if (dbg >= 1 && dbg != 3) {
+        /* MODE 1, 2, 4..6: our own pass, opened and closed here.
+         *
+         * MODE 3 IS DELIBERATELY EXCLUDED: its draws are the GAME's, they go through
+         * draw() -> begin_pass(), and begin_pass returns immediately when g.pass is
+         * already set. Opening a pass here therefore recorded the clear and left the
+         * game's draws with nowhere to go -- measured: ?dbg=3 showed the magenta clear
+         * and no red at all. Mode 3's clear comes from begin_pass() instead. */
         WGPURenderPassColorAttachment ca = WGPU_RENDER_PASS_COLOR_ATTACHMENT_INIT;
         ca.view = g.offscreen_view;
         ca.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
