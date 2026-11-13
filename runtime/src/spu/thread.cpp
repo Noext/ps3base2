@@ -318,7 +318,7 @@ uint32_t SpuThread::pop_out_mbox() {
     return out_mbox;
 }
 
-uint32_t SpuThread::channel_count(uint32_t ch) {
+uint32_t SpuThread::channel_count_impl(uint32_t ch) {
     switch (ch) {
     case 21: return mfc_queued_count();
     case 23: return 1;
@@ -347,6 +347,126 @@ uint32_t SpuThread::channel_count(uint32_t ch) {
 }
 
 uint32_t SpuThread::read_channel(uint32_t ch) {
+    const uint32_t v = read_channel_impl(ch);
+    ch_note(ch, v, ctx.pc, 0);
+    return v;
+}
+
+void SpuThread::write_channel(uint32_t ch, uint32_t value) {
+    ch_note(ch, value, ctx.pc, 1);
+    write_channel_impl(ch, value);
+}
+
+uint32_t SpuThread::channel_count(uint32_t ch) {
+    const uint32_t n = channel_count_impl(ch);
+    ch_note(ch, n, ctx.pc, 2);
+    return n;
+}
+
+/* N3b: every channel access of every SPU thread, with the value it carried.
+ *
+ * The refusal dump recorded ch16-19 only, which answers "what arguments built
+ * the refused transfer". It cannot answer "did the mixer ever see its block
+ * event", because that is ch0 (event status), ch1 (event mask), ch2 (ack) and
+ * ch7/ch8 (the decrementer) -- the channels a mixer waits on. So the ring and
+ * the per-channel table below carry all of them.
+ *
+ * Cheap when off: g_ch_trace is read once per access from a cached bool, and
+ * the per-channel counters are plain fields owned by this thread (an SPU thread
+ * runs its own channel accesses; another thread only writes the mailboxes,
+ * never this ring). */
+static const bool g_ch_trace = std::getenv("PS3BASE_SPU_CH_TRACE") != nullptr;
+static const bool g_ch_table = std::getenv("PS3BASE_SPU_CH_TABLE") != nullptr;
+
+void SpuThread::ch_note(uint32_t ch, uint32_t value, uint32_t pc, int kind) {
+    if (!g_ch_trace && !g_ch_table) return;
+    if (ch < 128) {
+        ChStat& s = ch_stat[ch];
+        if (kind == 1) {
+            if (!s.wr++) s.wr_first = value;
+            s.wr_last = value;
+        } else if (kind == 2) {
+            if (!s.cnt++) s.cnt_last = value;
+            s.cnt_last = value;
+        } else {
+            if (!s.rd++) s.rd_first = value;
+            s.rd_last = value;
+        }
+    }
+    if (!g_ch_trace) return;
+    ChRec& r = ch_ring[ch_ring_i++ & 255u];
+    r.pc = pc; r.ch = ch; r.value = value; r.wr = static_cast<uint8_t>(kind);
+}
+
+/* The table: one line per channel the guest touched, with counts and the first
+ * and last value. This is the artifact that turns a trace into an answer: a
+ * mixer that never receives its block event shows ch1 (mask) never naming the
+ * event, or ch0 read returning 0 forever while ch7 is never written. */
+void SpuThread::dump_channel_table(const char* why) {
+    if (!g_ch_table && !g_ch_trace) return;
+    /* Channel names, verbatim from rpcs3/Emu/Cell/SPUThread.h:40-62 (SPU
+     * channels) and :66-81 (MFC channels). Written as a switch because clang
+     * rejects out-of-order designated initialisers in C++. */
+    auto names = [](uint32_t ch) -> const char* {
+        switch (ch) {
+        case 0: return "RdEventStat";
+        case 1: return "WrEventMask";
+        case 2: return "WrEventAck";
+        case 3: return "RdSigNotify1";
+        case 4: return "RdSigNotify2";
+        case 7: return "WrDec";
+        case 8: return "RdDec";
+        case 9: return "WrMSSyncReq";
+        case 11: return "RdEventMask";
+        case 12: return "RdTagMask";
+        case 13: return "RdMachStat";
+        case 14: return "WrSRR0";
+        case 15: return "RdSRR0";
+        case 16: return "LSA";
+        case 17: return "EAH";
+        case 18: return "EAL";
+        case 19: return "Size";
+        case 20: return "TagID";
+        case 21: return "MFC_Cmd";
+        case 22: return "WrTagMask";
+        case 23: return "WrTagUpdate";
+        case 24: return "RdTagStat";
+        case 25: return "RdListStallStat";
+        case 26: return "WrListStallAck";
+        case 27: return "RdAtomicStat";
+        case 28: return "WrOutMbox";
+        case 29: return "RdInMbox";
+        case 30: return "WrOutIntrMbox";
+        case 69: return "Set_Bkmk_Tag";
+        case 70: return "PM_Start_Ev";
+        case 71: return "PM_Stop_Ev";
+        default: return "?";
+        }
+    };
+    LOG_ERROR("spu", "channel table for thread 0x%x '%s' (%s): pc 0x%05x ie %d mask 0x%x events 0x%x count %d dec_frozen %d dec 0x%08x",
+              id, name.c_str(), why, ctx.pc, ctx.interrupts_enabled ? 1 : 0, event_mask, events,
+              event_count ? 1 : 0, dec_frozen ? 1 : 0, dec_now());
+    for (uint32_t ch = 0; ch < 128; ch++) {
+        const ChStat& s = ch_stat[ch];
+        if (!s.rd && !s.wr) continue;
+        LOG_ERROR("spu", "  ch%-2u %-16s rd %-8llu first 0x%08x last 0x%08x   wr %-8llu first 0x%08x last 0x%08x   cnt %-8llu last 0x%08x",
+                  ch, names(ch), (unsigned long long)s.rd, s.rd_first, s.rd_last,
+                  (unsigned long long)s.wr, s.wr_first, s.wr_last,
+                  (unsigned long long)s.cnt, s.cnt_last);
+    }
+    if (g_ch_trace && ch_ring_i) {
+        const uint32_t n = ch_ring_i < 256 ? ch_ring_i : 256;
+        LOG_ERROR("spu", "  ch_ring: %u access(es), most recent first", n);
+        for (uint32_t k = 0; k < n; k++) {
+            const ChRec& r = ch_ring[(ch_ring_i - 1 - k) & 255u];
+            LOG_ERROR("spu", "    -%u: %s ch%-2u (%s) value 0x%08x at pc 0x%05x",
+                      k + 1, r.wr == 1 ? "wrch" : r.wr == 2 ? "rchcnt" : "rdch",
+                      r.ch, names(r.ch), r.value, r.pc);
+        }
+    }
+}
+
+uint32_t SpuThread::read_channel_impl(uint32_t ch) {
     switch (ch) {
     case 8: return dec_now();
     case 12: return tag.tag_mask;
@@ -483,7 +603,7 @@ uint32_t SpuThread::read_channel(uint32_t ch) {
     }
 }
 
-void SpuThread::write_channel(uint32_t ch, uint32_t value) {
+void SpuThread::write_channel_impl(uint32_t ch, uint32_t value) {
     /* PS3BASE_SPU_PC_TRAP=<pc>: log the registers at one instruction. The
      * question "where did this zero come from" is answered by the argument
      * registers, which exist only at the instruction that builds them. */
@@ -1297,6 +1417,11 @@ void SpuThread::branch_note(uint32_t pc, uint32_t a, uint32_t b, bool taken) {
  *               the zero came from can be read as the SPU saw it.
  */
 void SpuThread::dump_refusal_context() {
+    /* N3b: the full channel picture first. The MFC history below answers "what
+     * built this transfer"; this table answers "what was this thread doing with
+     * its event status and decrementer", which is the question when a mixer
+     * emits silence rather than a bad address. */
+    dump_channel_table("refusal");
     if (mfc_hist_i) {
         const uint32_t n = mfc_hist_i < 64 ? mfc_hist_i : 64;
         LOG_ERROR("spu", "  mfc_hist: %u write(s), most recent first", n);
@@ -2468,6 +2593,7 @@ void status_dump() {
     for (SpuThread* t : g_reg) {
         LOG_INFO("status", "spu 0x%x '%s' pc 0x%05x ie %d srr0 0x%05x insns %llu mask 0x%x events 0x%x raddr 0x%08x running %d", t->id, t->name.c_str(), t->ctx.pc, t->ctx.interrupts_enabled ? 1 : 0, t->ctx.srr0,
                  static_cast<unsigned long long>(t->insns.load()), t->event_mask, t->events, t->raddr, t->running ? 1 : 0);
+        t->dump_channel_table("status");
         std::map<uint32_t, int> hist;
         for (uint32_t pc : t->pc_samples) hist[pc & ~0x3Fu]++;
         std::vector<std::pair<int, uint32_t>> top;

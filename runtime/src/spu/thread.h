@@ -131,6 +131,26 @@ struct SpuThread : Host {
     void* native = nullptr;
 
     uint32_t mfc_lsa = 0, mfc_eal = 0, mfc_size = 0, mfc_tag = 0;
+    /* N3b: EVERY rdch/wrch of this thread, not just the MFC parameter channels.
+     * The refusal dump could only say what ch16-19 held; the question "did the
+     * mixer ever receive its block event" is about ch0/ch1/ch2/ch7/ch8, so the
+     * ring has to carry every channel. 256 entries because a mixer polling its
+     * event status in a loop fills 64 with ch0 reads in microseconds and the
+     * reads that matter are the ones just before the write that follows them. */
+    struct ChRec { uint32_t pc = 0, ch = 0, value = 0; uint8_t wr = 0; } ch_ring[256]{};
+    uint32_t ch_ring_i = 0;
+    /* Per-channel aggregate, printed as a table. Counts and the first/last value
+     * are what turn "the trace has 4096 lines" into "ch0 was read 3102 times and
+     * last returned 0x0". */
+    struct ChStat {
+        uint64_t rd = 0, wr = 0, cnt = 0;
+        uint32_t rd_first = 0, rd_last = 0, wr_first = 0, wr_last = 0, cnt_last = 0;
+    } ch_stat[128]{};
+    /* kind: 0 = rdch, 1 = wrch, 2 = rchcnt. RCHCNT is the poll a mixer performs
+     * to decide whether to read the event-status channel at all, so leaving it
+     * out would hide the very loop the question is about. */
+    void ch_note(uint32_t ch, uint32_t value, uint32_t pc, int kind);
+    void dump_channel_table(const char* why);
     struct MfcHist { uint32_t ch = 0, value = 0, pc = 0; } mfc_hist[64]{};
     struct TrapRec { uint32_t pc = 0, ch = 0, value = 0, r3 = 0, r4 = 0, r0 = 0; } trap_ring[16]{};
     uint32_t trap_ring_i = 0;
@@ -188,6 +208,13 @@ struct SpuThread : Host {
     uint32_t read_channel(uint32_t ch) override;
     void write_channel(uint32_t ch, uint32_t value) override;
     uint32_t channel_count(uint32_t ch) override;
+    uint32_t channel_count_impl(uint32_t ch);
+    /* The traced entry points. The public override records what the channel
+     * actually returned, then calls these; keeping the recording in one place
+     * means a channel handled on a fast path (ch8 returns before the lock) is
+     * still in the table. */
+    uint32_t read_channel_impl(uint32_t ch);
+    void write_channel_impl(uint32_t ch, uint32_t value);
     bool stop_and_signal(uint32_t code) override;
     void halt(uint32_t pc, uint32_t word) override;
     bool interrupt_pending() override;
