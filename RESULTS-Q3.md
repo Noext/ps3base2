@@ -406,3 +406,76 @@ because BOTH build slots were held by leaked locks from dead agents --
 build-slot semaphore exists to bound (its comment says "at most two compilations at
 a time"), so it was run directly. The 40/40 above is the real result either way.
 
+### M10 -- POST-REBASE verification: the whole result reproduces on main 00560dc
+
+Rebased onto origin/main (00560dc) before declaring done, as the merge queue
+requires. The rebase was clean.
+
+No runtime source changed between d2269e5 and 00560dc, so build-rdr/ps3base is still
+the binary these numbers came from:
+
+    $ git diff --stat d2269e5..origin/main -- runtime/ src/ CMakeLists.txt
+    (nothing)
+    $ git diff --name-only d2269e5..origin/main -- tools/
+    tools/drive_rdr.py
+    tools/regress.sh
+
+Both arms re-run on the rebased tree, savedata/ cleared between them, same display
+:146, back to back 12:45:02 -> 12:46:45 at load 5.06 -> 13.18:
+
+    SQUARE  23.79 TITLE -> start -> 28.09 MENU -> right,right,cross
+            35.95 ALERT -> square (Continue Without Saving)
+            37.97 WARNING "Autosave has been disabled. You may enable autosave in the options menu."
+                  -> cross (Continue)
+            41.72 LOADING -> 43.68 CHAPTER "EXODUS IN AMERICA"
+            exit -6 elapsed 52.4
+            states {"OTHER":27,"TITLE":2,"SCANNING":2,"MENU":4,"ALERT":3,"WARNING":3,"LOADING":1,"CHAPTER":6}
+
+    CROSS   24.60 TITLE -> start -> 28.14 MENU -> right,right,cross
+            34.85 ALERT -> cross (Create A New Save Game)
+            36.99 WARNING "This game saves data automatically at certain points. Do not switch off the power when the HDD access indicator is flashing..."
+                  -> cross (Continue)
+            41.78 CHAPTER "EXODUS IN AMERICA"
+            exit -6 elapsed 51.0
+            states {"OTHER":26,"TITLE":2,"SCANNING":2,"MENU":4,"ALERT":3,"WARNING":2,"CHAPTER":7}
+
+    save writes, same two arms:   square 0,  cross 3
+
+The crash is the same on both arms and the same as M4:
+
+    square  F 51.511327 ppu: unknown indirect target 0x00ae5818 -- rdr+0xad5618 (no lifted code) (lr=0x00adc030)
+    cross   F 50.671565 ppu: unknown indirect target 0x00ae5818 -- rdr+0xad5618 (no lifted code) (lr=0x00adc030)
+
+One honest difference from M4: the last flip before the fault is 1201 in this pair,
+against 1381 in the M3 pair. The two arms still agree WITHIN a pair, and the fault
+address, the faulting instruction and lr are identical across all four runs, so the
+crash is deterministic in where it happens and the flip count is what the machine's
+speed changes. 1201 is also the number P3 recorded for the cellFiber HLE run, which
+is consistent with this being the same execution path.
+
+### M11 -- the worktree was deleted mid-task by another agent's cleanup, and recovered
+
+At 12:46 the directory /root/Dev/wt-Q3 no longer existed:
+
+    $ cd /root/Dev/wt-Q3
+    bash: line 1: cd: /root/Dev/wt-Q3: No such file or directory
+    $ git worktree list
+    /root/Dev/ps3base2   a1961c5 [main]
+    /root/Dev/wasm-base  169be60 (detached HEAD)
+    /root/Dev/wt-Q2      6091e6c [explore/q2]
+
+My commits were safe because they were already on main (b8eb6f2, 7bcf727, 5fdd1e1,
+0d1a9d8 all appear in `git log main`), but the branch head daedbb5 ("Q3: ctest
+40/40") was not merged, and the working directory was gone. Recovered with:
+
+    $ git worktree prune
+    $ git worktree add /root/Dev/wt-Q3 explore/q3
+    HEAD is now at daedbb5 Q3: ctest 40/40
+    $ wc -l RESULTS-Q3.md
+    408 RESULTS-Q3.md
+
+Nothing was lost: the branch object still held every commit, and RESULTS-Q3.md came
+back at 408 lines. This is worth recording because the delivery rule in the task
+("worktree, commit after every measurement") is exactly what made the recovery a
+two-command operation instead of a lost session.
+
