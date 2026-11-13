@@ -82,3 +82,106 @@ Aucune capture n'est acceptee sans les quatre :
 - Aucun processus de jeu natif : `pgrep -f 'ps3base --no-launcher' | wc -l` -> 0.
 
 Les sections suivantes sont remplies AU FUR ET A MESURE des annonces, avec commande + sortie brute.
+
+---
+
+## 5. Criteres a preserver — etat mesure sur la base d41c834
+
+### 5.1 Critere 4 (test C) : **ABSENT DE LA BASE**. Un SKIP est un ECHEC, et ici il n'y a meme pas de SKIP.
+
+```
+$ cd /root/Dev/wasm-base && git ls-tree -r --name-only d41c834 | grep -i 'rsx_fifo_synth'
+(rien)
+$ git ls-tree -r --name-only d41c834 | grep -i synth
+third_party/glslang/Test/baseResults/hlsl.synthesizeInput.frag.out
+third_party/glslang/Test/hlsl.synthesizeInput.frag
+$ git log --oneline d41c834 -- 'tests/rsx_fifo_synth*'
+(rien)
+$ git merge-base --is-ancestor 8df4d6b d41c834 && echo YES || echo NO
+NO
+$ git branch -a --contains 8df4d6b
+  explore/zZ4
+```
+
+**Constat** : `tests/rsx_fifo_synth.cpp`, `tests/rsx_fifo_synth_support.cpp` et
+`tests/rsx_fifo_synth.sh` n'existent **pas** sur d41c834. Ils vivent sur la seule branche
+`explore/zZ4` (commit 8df4d6b « Z4: tests/rsx_fifo_synth 12 PASS / 0 FAIL on HEAD »), qui n'est
+pas un ancetre de d41c834. Le commit `960a77a` (« wip: sauvegarde avant nettoyage ») les porte
+aussi mais n'est pas non plus un ancetre.
+
+Consequence pour la file de fusion : **toute annonce de ce tour qui ecrit « test C 12 PASS / 0
+FAIL » sans dire sur quelle branche est un REJET**, parce que la base sur laquelle le tour est
+construit ne contient pas le test. Le « 12 PASS » de I2-ETAT.md et de Z0-METHODES-VUES.md a ete
+obtenu sur `explore/zZ4`, pas sur d41c834. Le critere 4 est donc **ROUGE par absence** sur la base
+du tour, et il le reste tant que le test n'est pas fusionne dans main.
+
+### 5.2 Critere 2 (`_gcm_intr_thread`) : ce n'est PAS un symbole du binaire, c'est une ligne de log
+
+```
+$ grep -c '_gcm_intr_thread' /tmp/out-T/game.js      -> 0
+$ strings /tmp/out-T/game.wasm | grep -c '_gcm_intr_thread' -> 0
+$ grep -c 'gcm_intr_thread' /tmp/out-T/game.wasm     -> 0
+```
+
+Le nom n'apparait dans aucun des deux artefacts. C'est normal : `_gcm_intr_thread` est le **nom de
+thread** que le guest passe a `sys_ppu_thread_create`, donc il n'apparait que dans le LOG d'un run
+(`stacks: thread ... '_gcm_intr_thread'`). La mesure valide est donc, sur un log de run :
+
+    grep -oE '_gcm_intr_thread' run.log | wc -l      (5 attendu, cf. docs/explore/H4-QUATRE-CRITERES.md)
+
+**Aucune annonce ne peut prouver le critere 2 par inspection du binaire.** Une annonce qui cite un
+`grep` sur game.wasm pour ce critere est rejetee pour methode.
+
+### 5.3 Critere 3 (flips par 0x102) : la sonde existe, elle est compilee-hors par defaut
+
+```
+$ grep -n 'PS3BASE_FLIP_PROBE' runtime/src/lv2/rsx.cpp
+216:    case 0x102: {
+217:#if defined(PS3BASE_FLIP_PROBE) && PS3BASE_FLIP_PROBE
+```
+
+La sonde est dans la base mais **desactivee par defaut** : il faut `-DPS3BASE_FLIP_PROBE=1` au
+build. Un module construit sans cette option ne peut pas prouver le critere 3 par la sonde ; il ne
+peut le prouver que par `rsx: flip <n>` dans le log (regle 2 : `grep -oE 'flip [0-9]+' log | tail -1`).
+
+### 5.4 Critere 1 (40 en-tetes FIFO) : instrument `PS3BASE_RSXB_PROBE`, lui aussi compile-hors
+
+```
+$ grep -Rl 'PS3BASE_RSXB_PROBE' .
+./tools/build_wasm.sh  ./docs/explore/H4-QUATRE-CRITERES.md  ./runtime/src/lv2/rsx.cpp
+```
+
+Meme remarque : sans `-DPS3BASE_RSXB_PROBE=1`, le log ne porte pas de ligne `rsxb:` et le critere 1
+n'est pas mesurable sur ce build. La reference de format (H4) : premier en-tete
+`raw 00040060 56616661`, appel vers offset 0 `ea 0x40100000`, `put 0x000013a0`.
+
+### 5.5 Critere 5 (tests unitaires) : la liste des cibles existe, l'execution est hors de mon perimetre
+
+```
+$ grep -n 'add_executable\|add_test' CMakeLists.txt | head
+244:enable_testing()
+245:add_executable(lv2_enosys tests/lv2_enosys.cpp)
+248:add_test(NAME lv2_enosys COMMAND lv2_enosys)
+...
+```
+
+Les cibles sont declarees dans le `CMakeLists.txt` racine (pas de `tests/CMakeLists.txt`). Le build
+natif est un travail de T1/T2/T3 ; je verifie leur sortie, je ne le lance pas.
+
+### 5.6 Provenance de l'oracle natif du logo (critere 3 des captures)
+
+```
+$ md5sum /tmp/V-native/native-logo.png
+21a792fe661397702f5773d67453c59b  /tmp/V-native/native-logo.png
+$ python3 tools/verify-capture.py /tmp/V-native/native-logo.png
+   IHDR 1280x720 depth 8 colourtype 2
+   mesure: 1280x720  couleurs=49699  mean=0.5406  std=0.2979  alpha=1.000  dominante=0.230
+   centre RGBA [207, 207, 207, 255]
+```
+
+**Caveat de provenance, dit franchement** : ce PNG est un **oracle natif du logo** utilisable pour le
+critere 3, mais son log associe (`/tmp/V-native/run.log`) **ne contient aucune ligne de capture**
+(pas de `import`/`xwd`/`screenshot`). Le fichier est donc un oracle d'IMAGE valide (49 699 couleurs,
+1280x720, non plat) mais sa **commande de capture n'est pas tracee** dans le log. Je l'accepte comme
+reference de comparaison, je ne l'accepte pas comme preuve de provenance independante.
+
