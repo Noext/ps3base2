@@ -101,6 +101,17 @@ uint32_t t1_replay_adopt(uint32_t width, uint32_t height) {
 
 
 
+/* THE TEXTURE THE PAGE PRESENTS.
+ *
+ * The C++ renders into its own persistent texture and exports that texture's id.
+ * The page reads the JS object with WebGPU.getJsObject(id) and copies it into the
+ * canvas itself -- no import, no internal allocator, no second object table. */
+uint32_t t1_texture_id(void) { return gpu::wgpu::texture_id(); }
+
+/* Frames the C++ has finished and submitted. The page presents only when this
+ * advances, so it never copies a half-written texture. */
+uint32_t t1_frames_done(void) { return uint32_t(gpu::wgpu::frames_done()); }
+
 /* Set the bisection mode (?dbg=N on the page). 0 = the game's own draws. */
 void t1_set_debug_mode(uint32_t mode) { gpu::wgpu::set_debug_mode(mode); }
 

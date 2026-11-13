@@ -63,7 +63,6 @@ extern "C" {
 /* Configure the canvas for the adopted device and size, once per size change. */
 int s1_canvas_configure(uint32_t w, uint32_t h);
 /* The current frame's canvas texture, imported as a WGPUTexture. */
-uint32_t s1_canvas_texture();
 /* The canvas's WGPUTextureFormat, from the browser's preferred format. */
 int s1_canvas_format();
 /* The device the page created and this module adopted, obtained on the realm
@@ -310,6 +309,16 @@ void release_frame_buffers() {
 
 void end_pass();
 
+/* Build the target and report whether it exists. The callers need the verdict:
+ * a null offscreen texture is a target failure, not a frame to submit. */
+/* T1 -- what the PAGE needs to present: the id of the texture the C++ rendered
+ * into, and how many frames it has finished. The page reads the JS texture with
+ * WebGPU.getJsObject(id) and copies it into the canvas itself. */
+std::atomic<uint32_t> g_exported_texture_id{0};
+std::atomic<uint64_t> g_frames_done{0};
+
+bool make_targets_ok(uint32_t width, uint32_t height);
+
 void make_targets(uint32_t width, uint32_t height) {
 #if defined(__EMSCRIPTEN__)
     /* THE PERSISTENT OFFSCREEN TARGET, not the canvas texture.
@@ -439,6 +448,22 @@ void make_targets(uint32_t width, uint32_t height) {
     }
 #endif  // __EMSCRIPTEN__
 }
+
+bool make_targets_ok(uint32_t width, uint32_t height) {
+    make_targets(width, height);
+#if defined(__EMSCRIPTEN__)
+    if (!g.offscreen || !g.offscreen_view) return false;
+    /* The id the PAGE presents with. WebGPU.getJsObject(id) returns this exact
+     * texture object, so the page copies the texture the C++ actually rendered
+     * into -- no import, no internal allocator, no second object table. */
+    g_exported_texture_id.store(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g.offscreen)),
+                       std::memory_order_release);
+    return true;
+#else
+    return g.color != nullptr;
+#endif
+}
+
 
 void begin_pass() {
     if (g.pass) return;
@@ -1398,6 +1423,7 @@ std::atomic<uint64_t> g_off_thread_refused{0};
  * Set from the page with ?dbg=N; the page passes it to t1_set_debug_mode().
  */
 std::atomic<uint32_t> g_debug_mode{0};
+
 std::atomic<uint32_t> g_scope_errors{0};
 
 
@@ -2532,140 +2558,97 @@ void end_frame() {
     const uint32_t dbg = g_debug_mode.load();
     end_pass();
 
-    /* ===================================================================
-     * THE CANVAS CYCLE, ALL INSIDE THIS ONE CALLBACK.
+    /* THE C++ NEVER TOUCHES THE CANVAS.
      *
-     * Order, with no await and no asynchronous callback between the steps:
-     *     getCurrentTexture() -> view -> render pass(es) -> submit -> release
+     * It renders into its OWN persistent texture and exports that texture's id. The
+     * PAGE presents it: it reads the JS texture with WebGPU.getJsObject(id) and copies
+     * it into canvasCtx.getCurrentTexture().
      *
-     * Nothing is kept across animation callbacks. The browser destroys a canvas
-     * texture once it has been composed, so a view imported for the NEXT frame is a
-     * view of a dead texture -- which is exactly what the previous design did, and
-     * why 91 magenta clears into a view WebGPU accepted produced a black canvas.
-     *
-     * The game's own rendering still goes to g.offscreen (a frame can span several
-     * callbacks); at presentation the offscreen is copied into the canvas texture
-     * acquired here. In the diagnostic modes there is no offscreen at all: the
-     * magenta clear and the test triangle are drawn straight into the canvas. */
-    if (g.web) {
-        const uint32_t canvas_tex = s1_canvas_texture();
-        if (!canvas_tex) {
-            static std::atomic<uint32_t> nf{0};
-            if (nf.fetch_add(1) < 5) LOG_ERROR("wgpu", "end_frame: s1_canvas_texture returned 0");
-            wgpuDevicePopErrorScope(g.device, WGPU_POP_ERROR_SCOPE_CALLBACK_INFO_INIT);
-            return;
-        }
-        WGPUTexture ct = reinterpret_cast<WGPUTexture>(uintptr_t(canvas_tex));
-        WGPUTextureView cv = wgpuTextureCreateView(ct, nullptr);
-        if (!cv) {
-            LOG_ERROR("wgpu", "end_frame: canvas view creation failed");
-            wgpuTextureRelease(ct);
-            wgpuDevicePopErrorScope(g.device, WGPU_POP_ERROR_SCOPE_CALLBACK_INFO_INIT);
-            return;
-        }
-
-        WGPUCommandEncoder enc = wgpuDeviceCreateCommandEncoder(g.device, nullptr);
-        if (!enc) {
-            wgpuTextureViewRelease(cv);
-            wgpuTextureRelease(ct);
-            wgpuDevicePopErrorScope(g.device, WGPU_POP_ERROR_SCOPE_CALLBACK_INFO_INIT);
-            return;
-        }
-
-        if (dbg >= 1) {
-            /* MODE 1: a magenta clear straight into the canvas texture. */
-            WGPURenderPassColorAttachment ca = WGPU_RENDER_PASS_COLOR_ATTACHMENT_INIT;
-            ca.view = cv;
-            ca.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
-            ca.loadOp = WGPULoadOp_Clear;
-            ca.storeOp = WGPUStoreOp_Store;
-            ca.clearValue = {1.0, 0.0, 1.0, 1.0};
-            WGPURenderPassDescriptor rp = WGPU_RENDER_PASS_DESCRIPTOR_INIT;
-            rp.colorAttachmentCount = 1;
-            rp.colorAttachments = &ca;
-            WGPURenderPassEncoder cp = wgpuCommandEncoderBeginRenderPass(enc, &rp);
-            if (cp) {
-                if (dbg >= 2 && dbg <= 6) {
-                    /* MODE 2..6: our own full-screen triangle over the clear. */
-                    WGPURenderPipeline dp = diag_pipeline(dbg >= 4, false, dbg >= 6);
-                    if (dp) {
-                        wgpuRenderPassEncoderSetPipeline(cp, dp);
-                        wgpuRenderPassEncoderDraw(cp, 3, 1, 0, 0);
-                        wgpuRenderPipelineRelease(dp);
-                    }
-                }
-                wgpuRenderPassEncoderEnd(cp);
-                wgpuRenderPassEncoderRelease(cp);
-                static uint32_t ncl = 0;
-                if (ncl++ < 200) std::fprintf(stderr, "wgpu: diag mode %u drew into the CANVAS texture\n", dbg);
-            }
-        } else if (g.offscreen) {
-            /* MODE 0: copy the frame the game rendered into the canvas. */
-            WGPUTexelCopyTextureInfo src = WGPU_TEXEL_COPY_TEXTURE_INFO_INIT;
-            src.texture = g.offscreen;
-            src.mipLevel = 0;
-            src.aspect = WGPUTextureAspect_All;
-            WGPUTexelCopyTextureInfo dst = WGPU_TEXEL_COPY_TEXTURE_INFO_INIT;
-            dst.texture = ct;
-            dst.mipLevel = 0;
-            dst.aspect = WGPUTextureAspect_All;
-            WGPUExtent3D sz = {g.width, g.height, 1};
-            wgpuCommandEncoderCopyTextureToTexture(enc, &src, &dst, &sz);
-        }
-
-        WGPUCommandBuffer cb = wgpuCommandEncoderFinish(enc, nullptr);
-        wgpuCommandEncoderRelease(enc);
-        if (cb) {
-            wgpuQueueSubmit(g.queue, 1, &cb);
-            wgpuCommandBufferRelease(cb);
-            static std::atomic<uint32_t> np{0};
-            if (np.fetch_add(1) < 200)
-                std::fprintf(stderr, "wgpu: presented frame %u (canvas tex 0x%08x)\n",
-                             np.load(), canvas_tex);
-        }
-        /* Release the VIEW, but NOT the canvas texture.
-         *
-         * The canvas texture belongs to the canvas, not to us: the browser presents
-         * it after this callback returns. wgpuTextureRelease on it calls destroy(),
-         * which kills the very texture that is about to be composed -- measured: 30
-         * frames rendered straight into the canvas texture, 0 validation errors, and a
-         * canvas of srgba(0,0,0,0) on every shot. The spec says the application must
-         * not destroy a canvas texture; the canvas handles its lifetime. */
-        wgpuTextureViewRelease(cv);
-        release_frame_buffers();
-        {
-            struct ScopeOut { std::atomic<uint32_t>* count; char* msg; size_t cap; };
-            static char scope_msg[512] = {0};
-            static ScopeOut out{&g_scope_errors, scope_msg, sizeof scope_msg};
-            WGPUPopErrorScopeCallbackInfo pci = WGPU_POP_ERROR_SCOPE_CALLBACK_INFO_INIT;
-            pci.mode = WGPUCallbackMode_AllowProcessEvents;
-            pci.callback = [](WGPUPopErrorScopeStatus status, WGPUErrorType type, WGPUStringView msg, void* u1, void*) {
-                auto* o = static_cast<ScopeOut*>(u1);
-                if (status == WGPUPopErrorScopeStatus_Success && type != WGPUErrorType_NoError) {
-                    const uint32_t n = o->count->fetch_add(1);
-                    if (n < 5 && msg.data) {
-                        const size_t len = msg.length < (o->cap - 1) ? msg.length : (o->cap - 1);
-                        std::memcpy(o->msg, msg.data, len);
-                        o->msg[len] = 0;
-                        std::fprintf(stderr, "wgpu: FRAME VALIDATION ERROR: %s\n", o->msg);
-                    }
-                }
-            };
-            pci.userdata1 = &out;
-            wgpuDevicePopErrorScope(g.device, pci);
-            wgpuDevicePoll(g.device, false, nullptr);
-        }
+     * Why the previous design could not work: the C++ imported the canvas texture
+     * through the port's INTERNAL allocator (_emwgpuCreateTexture + jsObjectInsert).
+     * The import produced a handle WebGPU accepted, the pass recorded into it, the
+     * submit reported no error -- and the canvas stayed black, because the handle was
+     * not the object the presentation reads. Measured: 30 renders straight into the
+     * canvas texture, 0 validation errors, every PNG srgba(0,0,0,0), while a
+     * page-owned clear into the SAME canvas produced srgb(255,0,255) immediately. */
+    /* ALWAYS go through make_targets_ok: it is what publishes the texture id the
+     * page presents with. Guarding it with "if (!g.offscreen)" meant the id stayed 0
+     * for the whole run -- measured: "frame 1 done, texture id 0x00000000" on every
+     * frame, and the page's presentation block never ran because it skips a zero id. */
+    if (!make_targets_ok(g.width, g.height)) {
+        wgpuDevicePopErrorScope(g.device, WGPU_POP_ERROR_SCOPE_CALLBACK_INFO_INIT);
         return;
     }
 
-    /* Native path. */
-    if (!g.encoder) { wgpuDevicePopErrorScope(g.device, WGPU_POP_ERROR_SCOPE_CALLBACK_INFO_INIT); return; }
+    if (!g.encoder) g.encoder = wgpuDeviceCreateCommandEncoder(g.device, nullptr);
+    if (!g.encoder) {
+        wgpuDevicePopErrorScope(g.device, WGPU_POP_ERROR_SCOPE_CALLBACK_INFO_INIT);
+        return;
+    }
+
+    if (dbg >= 1) {
+        /* MODE 1: magenta clear of OUR texture. Modes 2..6 add the test triangle. */
+        WGPURenderPassColorAttachment ca = WGPU_RENDER_PASS_COLOR_ATTACHMENT_INIT;
+        ca.view = g.offscreen_view;
+        ca.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+        ca.loadOp = WGPULoadOp_Clear;
+        ca.storeOp = WGPUStoreOp_Store;
+        ca.clearValue = {1.0, 0.0, 1.0, 1.0};
+        WGPURenderPassDescriptor rp = WGPU_RENDER_PASS_DESCRIPTOR_INIT;
+        rp.colorAttachmentCount = 1;
+        rp.colorAttachments = &ca;
+        WGPURenderPassEncoder cp = wgpuCommandEncoderBeginRenderPass(g.encoder, &rp);
+        if (cp) {
+            if (dbg >= 2 && dbg <= 6) {
+                WGPURenderPipeline dp = diag_pipeline(dbg >= 4, false, dbg >= 6);
+                if (dp) {
+                    wgpuRenderPassEncoderSetPipeline(cp, dp);
+                    wgpuRenderPassEncoderDraw(cp, 3, 1, 0, 0);
+                    wgpuRenderPipelineRelease(dp);
+                }
+            }
+            wgpuRenderPassEncoderEnd(cp);
+            wgpuRenderPassEncoderRelease(cp);
+            static uint32_t ncl = 0;
+            if (ncl++ < 200) std::fprintf(stderr, "wgpu: diag mode %u drew into OUR texture\n", dbg);
+        }
+    }
+
     WGPUCommandBuffer cb = wgpuCommandEncoderFinish(g.encoder, nullptr);
     wgpuCommandEncoderRelease(g.encoder);
     g.encoder = nullptr;
-    if (cb) { wgpuQueueSubmit(g.queue, 1, &cb); wgpuCommandBufferRelease(cb); }
+    if (cb) {
+        wgpuQueueSubmit(g.queue, 1, &cb);
+        wgpuCommandBufferRelease(cb);
+        g_frames_done.fetch_add(1, std::memory_order_release);
+        static std::atomic<uint32_t> np{0};
+        if (np.fetch_add(1) < 200)
+            std::fprintf(stderr, "wgpu: frame %u done, texture id 0x%08x\n",
+                         np.load(), g_exported_texture_id.load());
+    }
     release_frame_buffers();
-    wgpuDevicePopErrorScope(g.device, WGPU_POP_ERROR_SCOPE_CALLBACK_INFO_INIT);
+    {
+        struct ScopeOut { std::atomic<uint32_t>* count; char* msg; size_t cap; };
+        static char scope_msg[512] = {0};
+        static ScopeOut out{&g_scope_errors, scope_msg, sizeof scope_msg};
+        WGPUPopErrorScopeCallbackInfo pci = WGPU_POP_ERROR_SCOPE_CALLBACK_INFO_INIT;
+        pci.mode = WGPUCallbackMode_AllowProcessEvents;
+        pci.callback = [](WGPUPopErrorScopeStatus status, WGPUErrorType type, WGPUStringView msg, void* u1, void*) {
+            auto* o = static_cast<ScopeOut*>(u1);
+            if (status == WGPUPopErrorScopeStatus_Success && type != WGPUErrorType_NoError) {
+                const uint32_t n = o->count->fetch_add(1);
+                if (n < 5 && msg.data) {
+                    const size_t len = msg.length < (o->cap - 1) ? msg.length : (o->cap - 1);
+                    std::memcpy(o->msg, msg.data, len);
+                    o->msg[len] = 0;
+                    std::fprintf(stderr, "wgpu: FRAME VALIDATION ERROR: %s\n", o->msg);
+                }
+            }
+        };
+        pci.userdata1 = &out;
+        wgpuDevicePopErrorScope(g.device, pci);
+        wgpuDevicePoll(g.device, false, nullptr);
+    }
 }
 
 /* T1 -- capture the CURRENT TARGET into a buffer the PAGE can read.
@@ -2714,6 +2697,9 @@ bool capture_ppm(const std::string& path, uint32_t, uint32_t) {
 }
 
 /* T1 -- the bisection mode and the per-frame validation error count. */
+uint32_t texture_id() { return g_exported_texture_id.load(std::memory_order_acquire); }
+uint64_t frames_done() { return g_frames_done.load(std::memory_order_acquire); }
+
 void set_debug_mode(uint32_t mode) {
     g_debug_mode.store(mode, std::memory_order_release);
     std::fprintf(stderr, "wgpu: debug mode set to %u\n", mode);

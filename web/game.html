@@ -195,6 +195,7 @@ async function main() {
    */
   let replayAdopted = false;
   let replayTicks = 0;
+  let lastPresentedFrame = 0;
   let replayPopped = 0;
   let replayLastLog = 0;
   const statsAddr = (() => { try { return mod._t1_replay_stats ? mod._t1_replay_stats() >>> 0 : 0; } catch (e) { return 0; } })();
@@ -245,6 +246,40 @@ async function main() {
       /* THE CAPTURE, in the same callback and immediately after the replay, before
        * any new getCurrentTexture() invalidates the frame. toBlob() encodes exactly
        * the canvas the browser is about to composite. */
+      /* ===============================================================
+       * THE PAGE PRESENTS. The C++ renders into its own texture and exports the id;
+       * the page reads the JS object with WebGPU.getJsObject(id) and copies it into
+       * canvasCtx.getCurrentTexture(). Only public emdawnwebgpu functions are used.
+       *
+       * This is the fix for the black canvas: the C++ used to import the canvas
+       * texture through the port's internal allocator, and the handle it got back was
+       * not the object the presentation reads. The page's own clear into the same
+       * canvas produced srgb(255,0,255) immediately, which is what proved it. */
+      if (mod._t1_texture_id && mod._t1_frames_done) {
+        const done = mod._t1_frames_done();
+        if (done !== lastPresentedFrame) {
+          const id = mod._t1_texture_id() >>> 0;
+          if (id) {
+            try {
+              const src = mod._t1_get_js_texture ? mod._t1_get_js_texture(id) : null;
+              const dst = canvasCtx.getCurrentTexture();
+              if (src && dst && src.width === dst.width && src.height === dst.height && src.format === dst.format) {
+                const enc = device.createCommandEncoder();
+                enc.copyTextureToTexture({ texture: src }, { texture: dst }, [src.width, src.height, 1]);
+                device.queue.submit([enc.finish()]);
+                lastPresentedFrame = done;
+                if (!window.__T1_PRES_OK) { window.__T1_PRES_OK = 1;
+                  console.log('T1PRESENT copying C++ texture ' + id + ' (' + src.width + 'x' + src.height + ' ' + src.format + ') into the canvas'); }
+              } else if (!window.__T1_PRES_ERR) { window.__T1_PRES_ERR = 1;
+                console.log('T1PRESENT mismatch src=' + (src && (src.width + 'x' + src.height + ' ' + src.format)) +
+                            ' dst=' + (dst && (dst.width + 'x' + dst.height + ' ' + dst.format))); }
+            } catch (e) {
+              if (!window.__T1_PRES_THREW) { window.__T1_PRES_THREW = 1;
+                console.log('T1PRESENT threw: ' + (e && e.message || e)); }
+            }
+          }
+        }
+      }
       takeShot(now);
       if (now - replayLastLog > 2000) {
         replayLastLog = now;

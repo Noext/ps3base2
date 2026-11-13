@@ -22,6 +22,26 @@
  * stale handle (the same trap track X6 documents for readback).
  */
 addToLibrary({
+  /* THE PUBLIC WAY TO TURN A WGPU TEXTURE ID INTO ITS JS OBJECT.
+   *
+   * WebGPU.getJsObject is a public emdawnwebgpu function, but `WebGPU` itself is a
+   * library-local binding: the page cannot see it (measured: "T1PRESENT threw:
+   * WebGPU is not defined"). This entry hands the same call to the page without
+   * exposing the whole object, and without any Internals access. */
+  t1_get_js_texture: (id) => {
+    try {
+      if (typeof WebGPU === 'undefined' || !WebGPU.getJsObject) {
+        if (!Module.t1GetErr) { Module.t1GetErr = 1; console.error('t1get: WebGPU.getJsObject unavailable'); }
+        return null;
+      }
+      return WebGPU.getJsObject(id >>> 0) || null;
+    } catch (e) {
+      if (!Module.t1GetThrew) { Module.t1GetThrew = 1; console.error('t1get: ' + e.message); }
+      return null;
+    }
+  },
+  t1_get_js_texture__proxy: 'sync',
+
   /* Configure the canvas for the adopted device, once per size change. */
   /* T1: the device handle the module adopted, for the replay to claim ownership of.
    * The port stores it in WebGPU.preinitializedDeviceId when it imports the device
@@ -78,52 +98,19 @@ addToLibrary({
   },
   s1_canvas_configure__proxy: 'sync',
 
-  /* The current frame's canvas texture, as a WGPUTexture handle the C++ side can
-   * use. _emwgpuCreateTexture is the port's OWN allocator for exactly this: it is
-   * what wgpuSurfaceGetCurrentTexture calls to wrap a JS texture. Using it keeps
-   * the handle in the same table every other wgpu call consults, which
-   * WebGPU.importJsTexture would not (that name does not exist in this port). */
-  s1_canvas_texture: () => {
-    var ctx = Module.s1CanvasContext;
-    if (!ctx) {
-      if (!Module.s1TexErr1) { Module.s1TexErr1 = 1; console.error('s1tex: no s1CanvasContext'); }
-      return 0;
-    }
-    var tex;
-    try {
-      tex = ctx.getCurrentTexture();
-    } catch (e) {
-      if (!Module.s1TexErr0) { Module.s1TexErr0 = 1; console.error('s1tex: getCurrentTexture threw: ' + e.message); }
-      return 0;
-    }
-    if (!tex) {
-      if (!Module.s1TexErr5) { Module.s1TexErr5 = 1; console.error('s1tex: getCurrentTexture returned null'); }
-      return 0;
-    }
-    /* _emwgpuCreateTexture is the port's OWN allocator, but it is a library-internal
-     * name: if the port did not export it to this scope, calling it throws and the
-     * whole texture import silently yields nothing -- the colour view stays null and
-     * every draw returns at its first line. Name each failure instead. */
-    if (typeof _emwgpuCreateTexture !== 'function') {
-      if (!Module.s1TexErr2) { Module.s1TexErr2 = 1; console.error('s1tex: _emwgpuCreateTexture is ' + typeof _emwgpuCreateTexture); }
-      return 0;
-    }
-    var ptr = _emwgpuCreateTexture(0);
-    if (!ptr) {
-      if (!Module.s1TexErr3) { Module.s1TexErr3 = 1; console.error('s1tex: allocator returned 0'); }
-      return 0;
-    }
-    try {
-      WebGPU.Internals.jsObjectInsert(ptr, tex);
-    } catch (e) {
-      if (!Module.s1TexErr4) { Module.s1TexErr4 = 1; console.error('s1tex: jsObjectInsert threw: ' + e.message); }
-      return 0;
-    }
-    Module.s1CanvasTexturePtr = ptr;
-    if (!Module.s1TexOk) { Module.s1TexOk = 1; console.log('s1tex: canvas texture imported ptr=' + ptr + ' ' + tex.width + 'x' + tex.height); }
-    return ptr;
-  },
-  s1_canvas_texture__proxy: 'sync',
+  /* THE CANVAS TEXTURE IMPORT IS GONE, and that is the fix.
+   *
+   * The C++ used to import the canvas texture through the port's INTERNAL
+   * allocator (_emwgpuCreateTexture + WebGPU.Internals.jsObjectInsert). The import
+   * produced a handle WebGPU accepted, the pass recorded into it, the submit
+   * reported no error -- and the canvas stayed black, because that handle is not the
+   * object the presentation reads. Measured: 30 renders straight into the imported
+   * canvas texture, 0 validation errors, every PNG srgba(0,0,0,0), while a
+   * page-owned clear into the SAME canvas produced srgb(255,0,255) immediately.
+   *
+   * The C++ now renders into its own texture and exports its id. The page reads it
+   * with WebGPU.getJsObject(id) and copies it into canvasCtx.getCurrentTexture().
+   * Only public emdawnwebgpu functions are used. */
 
   /* The canvas's WGPUTextureFormat, so the pipeline is built against the surface
    * the browser actually gave us (bgra8unorm on one machine, rgba8unorm on
