@@ -232,3 +232,64 @@ The numbers from such a run are void, and neither is a pass. The script now take
 an exclusive lock (a directory under /tmp/ps3base-regress.lock, released by a
 trap, with a liveness check so a killed run does not wedge the next one) and
 waits, bounded, rather than interleaving.
+### Measurement 5 -- the detector was throwing away dim title frames, and that is what the 0/7 was
+
+The run before this one reported the candidate 0/7 on the title screen while the
+reference was 3/7, on identical code. That is exactly the shape of a false
+regression, and it was not the title: it was the prefilter in frame_marker.py.
+
+The marker's brightness is not constant between presentations. Measured on two
+recordings of the same binary, in the same 300x48 window the prompt is drawn in:
+
+    recording A (title found):     glyph peak 200+
+    recording B (title reported missed): glyph peak 41
+    either recording, black frame: peak 2
+
+The prefilter skipped any frame whose window had no pixel >= 60, so every frame
+of the type-B presentation was discarded before tesseract ran, and the run was
+scored "screen missing". Re-measured on that very recording with the threshold
+lowered:
+
+    $ python3 tools/frame_marker.py /tmp/m4-vt8/regress-rdr-cand1.mkv 'Press START'
+    hit f00762.png 25.37 Press START
+    EXIT=0
+
+and the same frames are visible as the prompt in the recording:
+
+    $ python3 -c '... crop (0,480)-(1280,720) of f00762.png and save'
+    <- "Press START" in grey on black, dim but present
+
+The threshold is now 24, which is 12x above the black frame's peak and still
+below the dim glyph's 41. The negative direction is checked in the same pass --
+a recording from a run where the title never appeared still misses:
+
+    $ python3 tools/frame_marker.py /tmp/m4-fp/m4-pair-ref2.mkv 'Press START'
+    miss: 816 frames, 19 with lit text in the window, 19 OCR'd
+    EXIT=1
+
+19 frames reach tesseract there (the Rockstar mark and the notice), and none of
+them reads as the prompt.
+
+### Measurement 6 -- the order of the pair does not explain the misses
+
+Because the reference always ran first and the candidate second, a plausible
+alternative was "the second run loses the race". Tested by swapping the roles --
+the main checkout's binary as candidate, the worktree's as reference:
+
+    $ RDR_BIN=/root/Dev/ps3base2/build-rdr/ps3base \
+      RDR_REF_BIN=/root/Dev/wt-M4/build-rdr/ps3base \
+      DISPLAY_NUM=:963 sh tools/regress.sh rdr
+      rdr-ref1       SPURS abort   flips=541    crashes=0   abort=23.508914  26s
+      rdr-cand1      SPURS abort   flips=601    crashes=0   abort=23.495855  26s
+      rdr-ref2       SPURS abort   flips=601    crashes=0   abort=22.699934  25s
+        hit f00741.png 24.67 Press START
+      ...
+      rdr-ref5       SPURS abort   flips=601    crashes=0   abort=22.803637  25s
+        hit f00744.png 24.77 Press START
+      rdr          FAIL ... screen=PressSTART 0/7 candidate, 2/7 reference
+
+The worktree binary, now in the candidate slot, still hit 0/7, and the main
+checkout binary, now in the reference slot, hit 2/7. So the miss follows the
+slot, not the code -- and the slot is only distinguished by where in the pair it
+runs. That is what sent the investigation to the detector rather than to the
+pair ordering, and the detector was the cause.
