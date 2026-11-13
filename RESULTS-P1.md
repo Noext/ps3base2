@@ -415,12 +415,19 @@ and the OPD resolves to the fiber trampoline:
 `[0x10000470]` read out of the crash memory dump (blackbox/memory_0.bin) is
 **0xd0024e90**, so the thunk switched r1 to **0xd0024e00**.
 
-The register file at the fault says **r1 = 0xd0032d30**: neither the value before
-the switch (0xd0032d30 is where the *previous* frame was) nor the switch target
-0xd0024e00. r1 has been restored a further time inside the fiber, by the one
-`ld r1,0(r3)` at 0x36000130. That is the fiber scheduler switching stacks while
-the thunk is suspended in `bctrl`, and it is exactly why the thunk's two
-self-written frame words read 0 on the way back.
+The two facts that pin the mechanism, both measured:
+
+1. `stdux r1,r1,r9` at 0x360002a8 stores the OLD r1 at EA = r1 + (r5 - r1) = r5,
+   i.e. the back-chain word lives at the NEW stack top. On return the thunk reads
+   `ld r9,0(r1)` expecting r1 to still be that new top. It read **0**.
+2. The register file at the fault says **r1 = 0xd0032d30**. The stack the thunk
+   established is 0xd0024e00. `0xd0032d30 != 0xd0024e00`.
+
+So r1 on return from `bctrl` is NOT the frame the thunk built: the guest stack
+was moved while the thunk was suspended in the indirect call. The only
+instruction in libfiber that ever loads r1 is `ld r1,0(r3)` at 0x36000130
+(fiber-context restore), and the runtime's own tracker agrees that 0xd0032d30 is
+79664 bytes below main_thread's deepest legitimate frame (r1_min 0xd0046460).
 
 Corroborating measurement from the runtime's own stack tracker:
 
@@ -433,4 +440,46 @@ crash:  r1 0xd0032d30
 
 main_thread's deepest legitimate r1 is 0xd0046460; the fault runs 79664 bytes
 below it, on a stack main_thread itself never descended to.
+
+### M14 -- verification, after the rebase onto origin/main a57223e
+
+Branch `explore/p1` rebased onto `origin/main` (a57223e) after every commit;
+the diff vs main touches no source file:
+
+```
+$ git diff --stat origin/main..HEAD
+ .agent-status/P1.json         |   9 +
+ RESULTS-P1.md                 | 436 +++++++
+ current_tasks/P1.claim        |   6 +
+ docs/findings/f-rdr-fiber-crash.md | 1 file
+```
+
+`git diff --stat origin/main..HEAD -- '*.cpp' '*.h' '*.hpp' '*.py' CMakeLists.txt`
+is empty, so the tree that runs is main's.
+
+```
+$ cd /root/Dev/ps3base2/build-rdr && ctest -j 8
+100% tests passed, 0 tests failed out of 40          (run 1)
+100% tests passed, 0 tests failed out of 40          (run 2)
+```
+
+The first attempt at this, run concurrently with other agents' `-j 8` builds,
+reported `21 - start_gate (Failed)`. Re-run alone it passes, and two full runs
+alone are 40/40: the failure was machine load, not the branch, and the two clean
+runs are recorded because one is not evidence.
+
+### M15 -- the reproduction, for anyone re-reading this
+
+```
+cd /root/Dev/ps3base2
+GOWA_FLASH_DIR=/root/Dev/devflash-out/dev_flash \
+PS3BASE_DISC_DIR=/root/Dev/rdr-port/vfs/dev_bdvd PS3BASE_LOG=info \
+GOWA_EVTRACE=import GOWA_EVTRACE_FILE=/tmp/ev.bin \
+DISPLAY=:0 ./build-rdr/ps3base --no-launcher
+```
+
+Four runs measured, crash at 39.4 s / 42.9 s / 78.1 s / 163.7 s -- the time
+moves with machine load, the site, the register file and the 24 frames do not.
+Recording `GOWA_EVTRACE=import` costs about 400 MB per run; the trace is what
+gave the last-30-imports list, and it is deleted after reading.
 
