@@ -2137,8 +2137,9 @@ namespace {
 
 const char* kFullscreenWgsl =
     "@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {"
-    "  var p = array<vec2f, 3>(vec2f(-1.0, -1.0), vec2f(3.0, -1.0), vec2f(-1.0, 3.0));"
-    "  return vec4f(p[i], 0.0, 1.0);"
+    "  let x = f32(i32(i) - 1) * 3.0;"
+    "  let y = f32(i32(i & 1u) * 2 - 1) * 3.0;"
+    "  return vec4f(x, y, 0.0, 1.0);"
     "}"
     "@fragment fn fs() -> @location(0) vec4f { return vec4f(1.0, 0.0, 0.0, 1.0); }";
 
@@ -2168,7 +2169,22 @@ WGPURenderPipeline diag_pipeline(bool cull, bool depth, bool blend) {
     WGPUShaderModule fs = g_diag_fs ? g_diag_fs : (g_diag_fs = diag_module(kFullscreenWgsl));
     if (!g_diag_vs || !fs) return nullptr;
     WGPURenderPipelineDescriptor pd = WGPU_RENDER_PIPELINE_DESCRIPTOR_INIT;
-    pd.layout = g.pipe_layout;
+    /* AN EXPLICIT EMPTY LAYOUT for the diagnostic pipeline.
+     *
+     * Reusing g.pipe_layout declares four uniform buffers and 32 samplers, and WebGPU
+     * then requires a bind group for it at draw time. The test triangle binds nothing,
+     * so the draw is dropped -- silently: 30 draws issued, 0 validation errors, and a
+     * black canvas. An empty layout matches what this pipeline actually uses. */
+    {
+        static WGPUPipelineLayout empty_layout = nullptr;
+        if (!empty_layout) {
+            WGPUPipelineLayoutDescriptor pld = WGPU_PIPELINE_LAYOUT_DESCRIPTOR_INIT;
+            pld.bindGroupLayoutCount = 0;
+            pld.bindGroupLayouts = nullptr;
+            empty_layout = wgpuDeviceCreatePipelineLayout(g.device, &pld);
+        }
+        pd.layout = empty_layout;
+    }
     pd.vertex.module = g_diag_vs;
     pd.vertex.entryPoint = {"vs", 2};
     pd.primitive.topology = WGPUPrimitiveTopology_TriangleList;
