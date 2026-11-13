@@ -251,3 +251,20 @@ switches stacks in f_360002a0, runs a fiber body through call_indirect, and on
 return f_360002a0 reloads the saved back-chain (gpr[9] = ld64(sp+0)) and finds 0.
 The stack is the fiber's, and the missing value is the fiber's own return link.
 Thread recorded by the crash: main_thread 0x1000000.
+
+## M11. Build observation (environment, not code)
+`cmake --build build-rdr -j 8` fails at 692/780 on an UNRELATED target:
+
+    FAILED: CMakeFiles/spu_bench.dir/runtime/src/spu/edge/edge_ovl.cpp.o
+    runtime/src/spu/edge/edge_ovl.cpp:2:10: fatal error: edge_ovl_gen.h:
+        No such file or directory
+
+edge_ovl_gen.h exists nowhere in either tree (find over /root/Dev/ps3base2 and
+/root/Dev/wt-P2 returns nothing), so this is a pre-existing test-target breakage,
+not caused by the census edit. The shipping target builds separately:
+
+    tools/build_slot.sh cmake --build build-rdr -j 8 --target ps3base
+
+Also observed: both build slots were held by dead waiters (no ninja, no cc1plus,
+only the build_slot.sh shell alive) -- the semaphore leaks on a killed build.
+Clearing the stale slot dirs let this build proceed.
