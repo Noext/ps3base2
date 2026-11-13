@@ -2,6 +2,31 @@
 
 **Mesuré le 2026-11-13. Trois sous-agents indépendants sont arrivés à la même conclusion.**
 
+## CORRECTION IMPORTANTE (Q2, 2026-11-13)
+
+Une première version de ce document affirmait que `cellFiberPpuYield` n'était
+**pas liftée**, parce que la table d'imports pointe `0x3600e930` et que le lift
+semblait s'arrêter à `0x36005c80`. **C'était une erreur de catégorie.**
+
+`0x3600e930` est dans **PT_LOAD 1** de `libfiber.elf` (`0x36006560..0x3600eb58`,
+flags `0x600006`, **X=0**) : c'est un **`.opd`**, pas du code. Le descripteur y
+lit `{code 0x360033dc, toc 0x36016a80}`, et `0x360033dc` **est** liftée
+(`table.cpp:153490`, `{0x360033dc, f_360033dc}`).
+
+Comparer une adresse `.opd` à une borne de texte est une erreur. Le lift de
+libfiber est complet : 89 fonctions, et **0 des 962 cibles de branchement
+directes** ne manque de label.
+
+Et le `PERM` retourné 426 077 fois est **libfiber qui se comporte correctement** :
+`0x360033ec` lit le pointeur par thread, `0x36003400` le compare à -1, et
+`0x3600340c` retourne `PERM` quand le thread n'a pas de contexte fibre. Le titre
+appelle `Yield` 426 077 fois **avant** de créer une fibre.
+
+Le crash reste réel et la correction HLE reste juste — mais sa cause n'est pas un
+lift incomplet.
+
+---
+
 ## Le symptôme
 
 RDR avançait jusqu'à son écran ALERT puis à l'écran WARNING, et mourait sur un
@@ -10,22 +35,6 @@ SIGSEGV hôte, sans timeout :
     crash: signal 11 ... fault 0x74ad28000010 (guest 0x10) thread main_thread 0x1000000
       #0 exe+0x17aa2b6   -> ppu::ld64, dans f_360002a0_body (libfiber_000.cpp:232)
       #3 ppu::call_indirect
-
-## La cause
-
-`cellFiberPpuYield` est dans la table d'imports à `0x3600e930` :
-
-    table.cpp:78072: {"cellFiber", 0x0C44F441u, "cellFiberPpuYield", 7, 0x3600e930}
-
-Or **le lift de libfiber s'arrête à `0x36005c80`** — 89 fonctions, et la
-fonction Yield n'en fait pas partie. Elle n'est pas liftée.
-
-Conséquence mesurée : **426 077 appels à `cellFiberPpuYield` sur 426 077 ont
-retourné `0x80760009` = `CELL_FIBER_ERROR_PERM`**. Le jeu ne vérifie pas ce
-retour (`rdr_052.cpp:18552 f_0053338c`), donc il continue. Puis :
-
-    cellFiberPpuCreateFiber(0x165d580, 0xd0033100, 0x1385418) -> 0
-    ... 2 ms plus tard, SIGSEGV
 
 ## La mécanique exacte
 
@@ -54,15 +63,10 @@ valeurs de `r1` sont **dans la pile invitée de la fibre elle-même**, alors que
 les 24 439 yields précédents de ce thread tournaient à `r1=0xd004f440`. La faute
 se produit **à l'intérieur d'un `RunFibers` non terminé** (profondeur 2).
 
-Et `*NO NAME*` (les mots `2a4e4f20 4e414d45` du rapport de crash) est le nom
-par défaut d'une fibre : présent dans `libfiber.prx` en `.rodata` à
-`0x36006478`, à côté de `fiber_ppu.c`. Absent de `EBOOT.elf`.
-
 ## La correction
 
-`cellFiber` **ne peut pas rester en LLE** : le lift est incomplet.
-`runtime/src/hle/cellFiber.cpp` (547 lignes) l'implémente avec de vraies fibres
-hôtes `ucontext` :
+`cellFiber` est maintenant en **HLE** (`runtime/src/hle/cellFiber.cpp`, 547
+lignes) avec de vraies fibres hôtes `ucontext` :
 
 - une pile hôte par fibre ;
 - une table de fibres par thread ;
@@ -71,7 +75,7 @@ hôtes `ucontext` :
   puisse pas lire zéro ;
 - `JoinFiber`.
 
-`GOWA_FIBER_HLE=0` restaure le LLE pour tout A/B.
+`GOWA_FIBER_HLE=0` restaure le LLE pour tout A/B. **Défaut : ON.**
 
 ## L'effet, mesuré
 
@@ -86,16 +90,9 @@ créées, joins rendant un statut.
 
 ## Ce qui reste
 
-Le titre s'arrête maintenant à **48 s sur `rdr+0xad5618`** :
+Le titre s'arrête à **48-71 s sur `rdr+0xad5618`** :
 
-    F 40.172663 ppu: unknown indirect target 0x00ae5818 -- rdr+0xad5618 (no lifted code)
+    F ppu: unknown indirect target 0x00ae5818 -- rdr+0xad5618 (no lifted code) (lr=0x00adc030)
 
-C'est un **trou de couverture du lifter**, pas un défaut de fibre. Prochaine
-frontière.
-
-## Une leçon de méthode
-
-Le crash est **intermittent** : 4 runs LLE sur 8 aujourd'hui. Aucun taux de crash
-n'est revendiqué ici. Et trois sous-agents ont trouvé la même cause par trois
-chemins différents (addr2line, census TLS, ring buffer) — c'est ce qui en fait un
-fait et non une hypothèse.
+C'est une **table de sauts à `0x013e5c8c`, 17 entrées**, et `0xae5818` est
+l'entrée 13. Les deux détecteurs la ratent. Prochaine frontière.
