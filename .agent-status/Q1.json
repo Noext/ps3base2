@@ -1,0 +1,8 @@
+{
+  "status": "running",
+  "agent": "Q1",
+  "branch": "explore/q1",
+  "worktree": "/root/Dev/wt-Q1",
+  "task": "lift gap at rdr+0xad5618",
+  "updated": "2026-11-13T12:26:00Z"
+}
