@@ -337,3 +337,19 @@ driver. The fix is one variable in the arm's environment:
 I am NOT changing tools/regress.sh: it is shared by every agent's merge check and a
 silent edit by me would change what everybody's PASS means. Left as a named finding
 for the lead to assign.
+## Summary
+
+DELIVERABLE: the screen that follows the RDR ALERT dialogue is a second dialogue in
+the same red panel, headed **WARNING**. Committed as
+docs/evidence/rdr-p4-warning.png (Continue Without Saving branch) and
+docs/evidence/rdr-p4-warning-new-save.png (Create A New Save Game branch), both
+full 1280x720 frames. After it: the RDR key-art Loading screen, then the known
+null+0x10 SIGSEGV.
+
+What actually gated it: not input, not the loader, not dev_flash. The tree's
+default VFS holds three RDR saves; with them the title loads a save and drives on
+into the world. With dev_hdd0/home/00000001/savedata empty, ListAutoLoad matches 0
+and the title draws its own ALERT and waits -- indefinitely, with no crash.
+
+Merge-queue state: rebased on origin/main 01c5e16, no deletions, 40/40 ctest on
+build-rdr, claim removed.
