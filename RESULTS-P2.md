@@ -268,3 +268,116 @@ not caused by the census edit. The shipping target builds separately:
 Also observed: both build slots were held by dead waiters (no ninja, no cc1plus,
 only the build_slot.sh shell alive) -- the semaphore leaks on a killed build.
 Clearing the stale slot dirs let this build proceed.
+
+## CORRECTION to M5/M7: the block stride is 0x480, not 0x474
+M5 and M7 above assumed block = mem + 0x30 = 0x474. The measured block bases
+from the live thread table (C1 below) are on a 0x480 grid, not 0x474:
+
+    gaps between the 24 sorted block bases: 0x480 x21, 0x900 x2
+    0x900 = 2 * 0x480 (a skipped slot, i.e. a block freed and not yet reused)
+    remainders under stride 0x474: 23 of 24 nonzero  -> 0x474 is WRONG
+    remainders under stride 0x480:  0 of 24 zero     -> 0x480 is the grid
+
+so the allocator rounds the per-thread block up (0x444+0x30=0x474 -> 0x480),
+and slots 21 and 24 are holes. The M5/M7 arithmetic that used 0x474 is
+therefore superseded; the conclusions that survive are restated in C3.
+M3's byte reads and M4's padding observation are unaffected: they are reads of
+specific addresses, not products of the stride.
+
+## C1. MEASURED thread/TLS table at the crash (instrumented census, own binary)
+Method: runtime/src/thread.cpp tls_census(), called from the crash handler
+(runtime/src/crash_posix.cpp:381). No gdb, no perturbation of the fault.
+Command:
+
+    cd /root/Dev/wt-P2 && ulimit -s unlimited && DISPLAY=:0 \
+      PS3BASE_DISC_DIR=/root/Dev/rdr-port/vfs/dev_bdvd \
+      GOWA_FLASH_DIR=/root/Dev/devflash-out/dev_flash \
+      timeout 240 ./build-rdr/ps3base --no-launcher
+
+    E 56.110659 crash: signal 11 ... (guest 0x10) thread main_thread 0x1000000
+    I 56.140688 tls: census (crash): image 0x01397654 file 0x54 mem 0x444
+                              -> block 0x474 (tbss 0x3f0)
+    I 56.140694 tls: census: 24 thread(s) registered
+
+    0x01000000 main_thread          r13=10007060 block=10000030 tdata=NOT-COPIED
+    0x01000001 PrimarySpursHdlr1    r13=100074e0 block=100004b0 tdata=copied
+    0x01000002 PrimarySpursHdlr0    r13=10007960 block=10000930 tdata=copied
+    0x01000003 SecondarySpursHdlr1  r13=10007de0 block=10000db0 tdata=copied
+    0x01000004 SecondarySpursHdlr0  r13=10008260 block=10001230 tdata=copied
+    0x01000005 [RAGE] netThreadPool Thread 1 r13=100086e0 block=100016b0
+    0x01000006 [RAGE] netThreadPool Thread 2 r13=10008b60 block=10001b30
+    0x01000007 [RAGE] DVD Reader    r13=10008fe0 block=10001fb0
+    0x01000008 [RAGE] DVD Streamer  r13=10009460 block=10002430
+    0x01000009 [RAGE] HDD Reader    r13=100098e0 block=100028b0
+    0x0100000a [RAGE] HDD Streamer  r13=10009d60 block=10002d30
+    0x0100000b _gcm_intr_thread     r13=1000a1e0 block=100031b0 tdata=copied
+    0x0100000e [RAGE] DiskCache Reader r13=1000af60 block=10003f30
+    0x0100000f [RAGE] DiskCache Worker r13=1000b3e0 block=100043b0
+    0x01000013 [RDR2] Render Thread r13=1000b860 block=10004830
+    0x01000014 [RAGE Audio] Multistream r13=1000aae0 block=10003ab0
+    0x01000015 [RAGE Audio] - Engine Thread r13=1000bce0 block=10004cb0
+    0x01000016 [RDR2] DecalUpdate   r13=1000c160 block=10005130
+    0x01000017 [RAGE] Navigation Thread r13=1000c5e0 block=100055b0
+    0x01000018 [RAGE] netConnectionManager Worker r13=1000ca60 block=10005a30
+    0x0100001a [RAGE] rlAchievement Worker r13=1000d360 block=10006330
+    0x0100001b [RAGE] rlTitleStorage Worker r13=1000d7e0 block=100067b0
+    0x0100001c AsyncProbeMgr       r13=1000a660 block=10003630
+    0x0100001e [RAGE] crmtScheduler[0] r13=1000e0e0 block=100070b0
+
+    I 56.140879 tls: census: alive 24, null thread-pointer 0,
+                    tdata copied 5/not 19, tbss zeroed 5/not 19
+
+24 threads alive, 24 distinct blocks, ZERO null thread pointers, and no block
+owned by two threads (the census's SHARED check printed nothing).
+
+## C2. Reading the table: "not copied" is the guest's own writes, not a defect
+tdata=NOT-COPIED on 19 of 24 threads does NOT mean the image was never copied.
+The .tdata template's live words are its statics (the 0xffffffff/0x00000003
+pair and the final -1/0x011807c0 pair); every thread that has RUN has already
+overwritten its own thread-locals, so a byte-compare against the template can
+only match on a thread whose TLS statics are still at their initial values.
+The 5 matches are the 5 threads that had not yet touched their TLS. This is
+the expected signature of an initialised-and-then-used block. M3 shows the same
+thing at byte level for block 0.
+
+## C3. What the measurements establish, and what they do not
+ESTABLISHED:
+  1. Per-thread block table exists and is complete: one block per thread,
+     distinct, none null, none shared (C1).
+  2. r13 = block + 0x7030, and 0x10007060 is exactly block 0x10000030 + 0x7030.
+     The thread pointer is correctly computed by the guest allocator (C1, M2).
+  3. The block r13 names IS initialised, and the guest has written its own TLS
+     variables into it (M3 bytes; C2 pattern).
+  4. The r13 +/- 64 window the crash reporter prints is the unused 0x7000-byte
+     gap above the thread pointer and is SUPPOSED to be zero (M4). Its
+     all-zero content is a diagnostic artifact with no bearing on the fault.
+  5. The fatal fault is NOT a TLS dereference. It is
+     f_360002a0_body libfiber_000.cpp:232
+         ld64(base, gpr[9] + 0x10)   with gpr[9] = 0
+     reached from libfiber's stack switch through call_indirect (M8, M9, M10).
+     gpr[9] is the fiber's saved back-chain, loaded from [sp]+0; it is zero, so
+     the switch returns onto a NULL stack link. The title frames above it are
+     rdr_115/rdr_129, i.e. ordinary game code calling into the fiber library.
+
+NOT ESTABLISHED / still open:
+  * why [sp] holds 0 at that point. Candidates, neither proven here: the fiber
+    entry saved the old sp somewhere else, or the slot was clobbered by an
+    overrun of the fiber's own stack. Distinguishing them needs a write watch
+    on that exact slot, which this task's TLS census cannot see.
+
+## C4. The two candidate diagnoses, answered
+ps3recomp #253 ("TLS blocks sized by the TLS image", CHANGELOG.md:50):
+  the rule IS implemented the way #253 describes -- one block per thread, sized
+  from the TLS image plus a 0x30 system area, on a rounded-up grid -- and this
+  title fits: 24 live threads occupy distinct slots 0..25 of a 0x10000-byte
+  region (57 slots at stride 0x480), with the highest block ending at 0x10007530
+  well inside 0x10010000. There is NO exhaustion and NO null block here.
+  #253 is not this crash.
+ps3recomp #68: NOT a TLS issue at all -- CHANGELOG.md:631 lists #68 as
+  "lmw/stmw", a PPU instruction-implementation item. The "reused block not
+  reinitialised" behaviour the brief associates with #68 is not in the reference
+  under that number, and it is not observed here either: every live block holds
+  its thread's own written TLS, and the two holes (slots 21, 24) belong to
+  threads that exited and were removed.
+The TLS arena is therefore NOT the cause of the host SIGSEGV at guest 0x10.
+The fault is a NULL fiber stack link in libfiber.
