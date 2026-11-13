@@ -445,3 +445,96 @@ PASS
         Elapsed (wall clock) time (m:ss): 0:00.21
 ```
 
+
+## Measurement 7 -- why the libfiber lift 'stops' at 0x36005c80, from the lifter code
+
+Answered by reading `recomp/ppu/analysis.py`, then confirming the number with one
+bounded run. No lift was regenerated (disk is at 90%).
+
+### What bounds a module's lift
+
+`analysis.Image.__init__` picks its branch on section headers:
+
+```python
+if self.elf.shdrs:
+    ...                                  # disc ELF: read the .opd section
+else:
+    seg = next(p for p in self.elf.phdrs if p[0] == 1 and p[1] & 1)   # R+X LOAD
+    self.text_lo, self.text_hi = seg[3], seg[3] + seg[5]             # the WHOLE segment
+    self.toc = int(prx["toc"], 16)
+    self.opd = []
+    for p in self.elf.phdrs:
+        if p[0] != 1 or p[1] & 1 or not p[5]: continue   # data LOADs only
+        blob = self.elf.d[p[2]:p[2] + p[5]]
+        for k in range(0, len(blob) - 7, 4):
+            code, toc = struct.unpack_from(">II", blob, k)
+            if toc == self.toc and self.in_text(code):
+                self.opd.append((code, toc))
+```
+
+A relocated PRX has **no section headers** (`len(e.shdrs) == 0` for libfiber), so
+it takes the second branch. The text range is the whole R+X segment --
+0x36000000..0x36006558, nothing truncates it -- and the function seeds come from
+scanning the data LOADs for `{code, toc}` pairs whose `toc` matches the module
+TOC and whose `code` is inside the text.
+
+`discover()` then starts from exactly that set:
+
+```python
+entries = {c for c, _ in img.opd if img.in_text(c)} | set(extra)
+```
+
+and grows it by following `f.calls | f.tail_calls`. A branch into an import stub
+is not a call: `explore()` turns it into `f.import_calls` (`if t in img.stubs`),
+so the trampolines are never seeds and never functions -- by design.
+
+### The number
+
+Reproducing that scan on libfiber, bounded, one run:
+
+```
+section headers present: 0
+  -> analysis.Image takes the else (PRX) branch
+text_lo 0x36000000 text_hi 0x36006558  toc 0x36016a80
+seeds the lifter gets from the PRX .opd scan: 87
+  unique: 87
+  highest seed: 0x36005c80
+```
+
+**0x36005c80 is the highest seed the .opd scan produces.** The lift does not
+stop there; there is nothing above it to seed. The lift then produced 89
+functions from those 87 seeds plus two island entries (0x3600026c, 0x360002a0,
+the ELFv1 fiber-entry thunks), and Measurement 5 shows all 962 direct branch
+targets in the text land on a label the lift emitted.
+
+So the answer to 'why did the lift stop at 0x36005c80' is: **it did not stop.
+0x36005c80 is the top of the module's own function-descriptor table, and above it
+the module contains only nine import trampolines and data.** The finding
+document reached the right number and the wrong conclusion -- it compared that
+number against 0x3600e930, which is an address in the *second* PT_LOAD (the .opd
+slot of cellFiberPpuYield), and read 'a .opd address is above the last lifted
+code address' as 'the lift is incomplete'.
+
+### What was actually wrong, and it was not coverage
+
+`cellFiberPpuYield` at 0x360033dc is lifted, is reached through the .opd at
+0x3600e930, and runs -- the crash backtrace in RESULTS-P1.md frame #2 says so.
+It returns `CELL_FIBER_ERROR_PERM` because of what it *does*, not because it is
+missing:
+
+```
+360033ec  lwz   r11, -0x7fc8(r2)      ; per-thread pointer, initialised by
+360033f8  lwz   r9, 0(r11)            ; _cellFiberPpuInitialize = r13 - r3
+360033fc  addi  r0, r9, 0x20          ; the +0x20 context header
+36003400  cmpwi cr7, r9, -1           ; r9 == -1  ->  return PERM
+3600340c  beq-  cr7, 0x36003418
+36003414  bne   cr6, 0x3600342c       ; else take the real path
+```
+
+`_cellFiberPpuInitialize` (0x36003d18) is `stw r3, 0(r9)` where
+`r9 = *(r2 - 0x7f90)` -- it stores `r13 - r3` into the module's per-thread slot,
+and `r13` is the guest TLS pointer. The PERM is the library correctly reporting
+that the current thread has no fibre context. The title calls Yield 426 077
+times before it ever creates a fibre. That is a behaviour gap in LLE libfiber
+under this title's usage, which is what the HLE implementation addresses.
+
