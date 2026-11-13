@@ -139,3 +139,58 @@ the ALERT's transparent background. The state machine now checks the CENTRE band
 for the ALERT sentence before looking at the bottom band for menu rows.
 
 Cropped proof: docs/evidence/rdr-p4-alert-options.png.
+### M5 -- THE DELIVERABLE: the screen that follows the ALERT dialogue
+
+Closed-loop drive, plan [square, cross], clean savedata VFS, binary at
+/root/Dev/p4work/rdrx (a hard link of build-rdr/ps3base under a name another
+agent's tools/regress.sh clear_strays() does not pattern-match -- see below).
+
+Driver journal, verbatim:
+
+      0.34 STATE OTHER
+     27.74 STATE TITLE     Press START
+     27.74 -> start
+     29.81 STATE SCANNING  Scanning for installed downloadable content... please wait.
+     32.10 STATE MENU      Online Multiplayer Downloadable Content 2 Single Player
+     32.10 -> right,right,cross
+     43.47 STATE OTHER
+     51.73 STATE ALERT     A Red Dead Redemption single player save could not be found. What would you like to do?
+     51.73 -> square (alert action 1)      <- Continue Without Saving
+     52.71 -> cross (alert action 2)
+     54.19 STATE OTHER     Autosave has been disabled. You may enable autosave in the options menu.
+     57.83 STATE LOADING   Loading...
+     exit -11 elapsed 66.8
+
+The screen that follows the ALERT dialogue is a SECOND DIALOGUE, in the same
+red RDR frame, headed WARNING:
+
+    WARNING
+    Autosave has been disabled. You may enable autosave in the options menu.
+                                                                Continue  [X]
+
+It appeared 2.5 s after the square press and stayed until the cross press
+(54.19). The screen after THAT is the RDR key-art loading screen
+(Loading..., 57.83), and the run then dies in the known null+0x10 SIGSEGV
+(exit -11).
+
+Evidence, all full 1280x720 frames:
+  docs/evidence/rdr-p4-alert.png              the ALERT screen as driven
+  docs/evidence/rdr-p4-warning.png            THE DELIVERABLE: the WARNING that follows
+  docs/evidence/rdr-p4-postalert-loading.png  the loading screen after the warning
+
+The exact sequence in one run, three screens, no interpretation:
+  ALERT --[square]--> WARNING --[cross]--> LOADING --> SIGSEGV at guest 0x10
+
+### Contamination to know about (not mine to fix)
+
+tools/regress.sh clear_strays() kills every process whose cmdline matches
+*ps3base*--no-launcher*:
+
+    case "$c" in
+        *ps3base*--no-launcher*) ... kill -9 ...
+
+Measured: my first closed-loop run of this sequence died at 1.6 s (journal one
+sample, no guest activity) while /tmp/out-V/regress-rdr-current.out showed
+another agent's regress.sh at 10:19 running its rdr arms. The same run with
+the binary hard-linked to a non-matching name completed all 66.8 s. A driver
+that shares this machine can be killed by any concurrent regress run.
