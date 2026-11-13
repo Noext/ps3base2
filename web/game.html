@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ps3base &mdash; Minecraft PS3</title>
+<title>ps3base &mdash; S1, the renderer draws the canvas</title>
 <style>
   html, body { margin: 0; height: 100%; background: #000; color: #ccc;
                font: 13px/1.4 ui-monospace, monospace; }
   #stage { position: relative; width: 100vw; height: 100vh; }
-  canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  canvas { position: absolute; inset: 0; width: 100vw; height: 100vh; display: block; }
   #bar { position: absolute; left: 8px; bottom: 8px; padding: 6px 10px;
          background: #000a; border-radius: 4px; pointer-events: none; }
   #log { position: absolute; right: 8px; top: 8px; width: 42vw; height: 30vh;
@@ -18,21 +18,35 @@
 </head>
 <body>
 <div id="stage">
-  <canvas id="canvas"></canvas>
+  <canvas id="canvas" width="1280" height="720"></canvas>
   <div id="bar">starting&hellip;</div>
   <div id="log"></div>
 </div>
 <script type="module">
-/* The page owns the WebGPU device; the worker runs the emulation. Milestone 4.
+/* S1 -- the page owns the WebGPU device AND the canvas, and the module ADOPTS
+ * both. This shape is the one the measurements chose; each step is here because
+ * the alternative was measured to fail.
  *
- * Two channels connect them:
- *   - the command ring (SharedArrayBuffer) for RSX commands, as the porting
- *     prompt specifies;
- *   - ordinary postMessage for lifecycle events we do not need at frame rate.
+ *  1. THE DEVICE MUST BE CREATED IN JS. A requestAdapter promise never resolves
+ *     while the wasm occupies the thread, so "let the module create its own
+ *     device" shows a black canvas forever (measured twice; R3 built its
+ *     architecture on it).
+ *  2. THE DEVICE IS THEN HANDED OVER, not re-created. emdawnwebgpu adopts an
+ *     existing device through preinitializedWebGPUDevice.
+ *     Measured: /tmp/S1-probe p1 -- a wasm clear reached the canvas, pixel
+ *     srgba(30,200,120,1), 0 GPU errors.
+ *     This refutes the premise the previous track recorded ("a GPUDevice cannot
+ *     be given to wasm"): that was true of TRANSFERRING it to another realm, not
+ *     of ADOPTING it in this one.
+ *  3. THE RENDERER RUNS ON A GUEST PTHREAD, and a pthread's realm has its OWN,
+ *     EMPTY WebGPU object table -- measured: wgpuDeviceCreateCommandEncoder
+ *     returned undefined there. web/s1-bridge.js therefore declares its entries
+ *     __proxy:'sync', which runs them here and blocks the pthread. Measured in
+ *     p5b: with 23 port functions annotated, a pthread clears the canvas and the
+ *     pixel is exact (srgba(25,191,89,1) for 0.10/0.75/0.35).
  *
- * The canvas is transferred to the worker's OffscreenCanvas only if the page
- * decides to; here the page keeps it and the worker posts commands, which is the
- * shape ps2-web-recomp settled on after its frame-rate race.
+ * So: no command ring replay in JavaScript, and no second renderer. The guest's
+ * own pixel-exact backend draws, and the browser composites it.
  */
 const bar = document.getElementById('bar');
 const logEl = document.getElementById('log');
@@ -40,16 +54,14 @@ const canvas = document.getElementById('canvas');
 
 function log(msg) {
   logEl.textContent = (msg + '\n' + logEl.textContent).slice(0, 4000);
-  bar.textContent = msg.slice(0, 120);
+  bar.textContent = String(msg).slice(0, 120);
 }
 
-/* --- input ---------------------------------------------------------------
- * DOM events and the Gamepad API become the four uint16 words cellPadGetData
- * reads. The layout is the guest's own, so nothing is translated here:
- *   word 0: select l3 r3 start  up right down left
- *   word 1: l2 r2 l1 r1  triangle circle cross square
- *   words 2,3: pressure, unused by the keyboard path
- */
+window.__S1 = { ready: false, device: false, frames: 0, logs: [], error: null, stats: null };
+const realLog = console.log;
+console.log = (...a) => { const s = a.join(' '); window.__S1.logs.push(s); log(s); realLog(...a); };
+
+/* --- input: DOM events become the four uint16 words cellPadGetData reads ---- */
 const KEYS = {
   KeyW: [2, 0x10], KeyD: [2, 0x20], KeyS: [2, 0x40], KeyA: [2, 0x80],
   ArrowUp: [2, 0x10], ArrowRight: [2, 0x20], ArrowDown: [2, 0x40], ArrowLeft: [2, 0x80],
@@ -58,109 +70,131 @@ const KEYS = {
   KeyQ: [3, 0x04], KeyE: [3, 0x08], ShiftLeft: [3, 0x01], ControlLeft: [3, 0x02],
 };
 const held = new Set();
+addEventListener('keydown', (e) => { if (KEYS[e.code]) { held.add(e.code); e.preventDefault(); } });
+addEventListener('keyup', (e) => { if (KEYS[e.code]) { held.delete(e.code); e.preventDefault(); } });
+addEventListener('blur', () => held.clear());
 
-addEventListener('keydown', (e) => {
-  if (KEYS[e.code]) { held.add(e.code); e.preventDefault(); publish(); }
-});
-addEventListener('keyup', (e) => {
-  if (KEYS[e.code]) { held.delete(e.code); e.preventDefault(); publish(); }
-});
-addEventListener('blur', () => { held.clear(); publish(); });
+let mod = null;
+let padAddr = 0, connAddr = 0;
 
-/* The Gamepad API is polled: there is no event for axis or button changes. The
- * mapping follows the W3C "standard gamepad", which every browser reports. */
-const PAD_BUTTONS = [
-  [3, 0x40],  /* 0  A     -> cross    */
-  [3, 0x20],  /* 1  B     -> circle   */
-  [3, 0x80],  /* 2  X     -> square   */
-  [3, 0x10],  /* 3  Y     -> triangle */
-  [3, 0x04],  /* 4  LB    -> L1       */
-  [3, 0x08],  /* 5  RB    -> R1       */
-  [3, 0x01],  /* 6  LT    -> L2       */
-  [3, 0x02],  /* 7  RT    -> R2       */
-  [2, 0x01],  /* 8  back  -> select   */
-  [2, 0x08],  /* 9  start -> start    */
-  [2, 0x02],  /* 10 L3    -> l3       */
-  [2, 0x04],  /* 11 R3    -> r3       */
-  [2, 0x10],  /* 12 up    */
-  [2, 0x40],  /* 13 down  */
-  [2, 0x80],  /* 14 left  */
-  [2, 0x20],  /* 15 right */
-];
-
-let padWords = [0, 0, 0, 0];
-let padConnected = 0;
-
-function publish() {
-  padWords = [0, 0, 0, 0];
-  padConnected = 0;
-
-  for (const code of held) {
-    const m = KEYS[code];
-    if (m) padWords[m[0]] |= m[1];
-    padConnected = 1;
-  }
-
+/* The pad words are written straight into the module's heap: no message per
+ * poll, and the guest reads them through the addresses C publishes. */
+function publishPad() {
+  if (!mod || !mod.HEAPU16 || !padAddr) return;
+  const w = [0, 0, 0, 0];
+  let connected = 0;
+  for (const code of held) { const m = KEYS[code]; if (m) { w[m[0]] |= m[1]; connected = 1; } }
   const pads = navigator.getGamepads ? navigator.getGamepads() : [];
   for (const pad of pads) {
     if (!pad || !pad.connected) continue;
-    padConnected = 1;
-    for (const [idx, mapping] of PAD_BUTTONS.entries()) {
-      const b = pad.buttons[idx];
-      if (b && b.pressed) padWords[mapping[0]] |= mapping[1];
-    }
-    /* Left stick onto the d-pad with a dead zone, which is what a PS3 pad does
-     * for menu navigation and is enough for this port. */
+    connected = 1;
+    const MAP = [[3,0x40],[3,0x20],[3,0x80],[3,0x10],[3,0x04],[3,0x08],[3,0x01],[3,0x02],
+                 [2,0x01],[2,0x08],[2,0x02],[2,0x04],[2,0x10],[2,0x40],[2,0x80],[2,0x20]];
+    for (const [i, m] of MAP.entries()) { const b = pad.buttons[i]; if (b && b.pressed) w[m[0]] |= m[1]; }
     const ax = pad.axes[0] || 0, ay = pad.axes[1] || 0;
-    if (ax < -0.5) padWords[2] |= 0x80;
-    if (ax > 0.5)  padWords[2] |= 0x20;
-    if (ay < -0.5) padWords[2] |= 0x10;
-    if (ay > 0.5)  padWords[2] |= 0x40;
+    if (ax < -0.5) w[2] |= 0x80;
+    if (ax > 0.5) w[2] |= 0x20;
+    if (ay < -0.5) w[2] |= 0x10;
+    if (ay > 0.5) w[2] |= 0x40;
     break;
   }
-
-  /* Written straight into the module's heap when the seam is up; otherwise the
-   * words are simply kept, which is what a page without a running module wants. */
-  if (padSeam && window.HEAPU16) {
-    const base = padSeam.padAddr >> 1;         /* HEAPU16 index */
-    window.HEAPU16[base + 0] = padWords[0];
-    window.HEAPU16[base + 1] = padWords[1];
-    window.HEAPU16[base + 2] = padWords[2];
-    window.HEAPU16[base + 3] = padWords[3];
-    window.HEAPU32[padSeam.connAddr >> 2] = padConnected;
-  }
+  const base = padAddr >> 1;
+  mod.HEAPU16[base + 0] = w[0];
+  mod.HEAPU16[base + 1] = w[1];
+  mod.HEAPU16[base + 2] = w[2];
+  mod.HEAPU16[base + 3] = w[3];
+  if (mod.HEAPU32 && connAddr) mod.HEAPU32[connAddr >> 2] = connected;
 }
-setInterval(publish, 16);
+setInterval(publishPad, 16);
 
-/* --- the worker ---------------------------------------------------------- */
-let worker = null;
-let padSeam = null;
-
-function start() {
+async function main() {
   if (!('gpu' in navigator)) {
     log('WebGPU is not available. Enable chrome://flags/#enable-unsafe-webgpu and ' +
         'chrome://flags/#enable-vulkan, then restart the browser.');
     return;
   }
-  worker = new Worker('./worker.js', { type: 'module' });
-  worker.onmessage = (e) => {
-    const m = e.data;
-    if (m.type === 'log') log(m.text);
-    if (m.type === 'ready') log('emulation worker ready');
-    if (m.type === 'pad-seam') {
-      /* The worker returned the addresses of the C blocks. Views over the wasm
-       * heap let the page write the pad with no copy and no message per poll. */
-      padSeam = m;
-      log('pad seam: 0x' + m.padAddr.toString(16));
-    }
-  };
-  worker.onerror = (e) => log('worker error: ' + e.message);
-  worker.postMessage({ type: 'start', canvas: null });
-  log('worker started');
+  let adapter = null;
+  for (let i = 0; i < 100 && !adapter; i++) {
+    adapter = await navigator.gpu.requestAdapter();
+    if (!adapter) await new Promise((r) => setTimeout(r, 100));
+  }
+  if (!adapter) { log('no adapter after 100 attempts'); return; }
+  const device = await adapter.requestDevice();
+  window.__S1.device = true;
+  log('page created the device (' + (adapter.info ? adapter.info.vendor : 'unknown') + ')');
+  device.addEventListener && device.addEventListener('uncapturederror', (e) => {
+    window.__S1.error = String(e.error && e.error.message);
+    log('UNCAPTURED ' + window.__S1.error);
+  });
+
+  const m = await import(new URL('./game.js', self.location.href).href);
+  mod = await m.default({
+    locateFile: (p) => new URL('./' + p, self.location.href).href,
+    /* Sent to the DevTools console as well as the DOM: the capture harness only
+     * reads console.log, so a module whose output went to the DOM alone would
+     * measure as "no rsx lines at all" and look like a renderer that never
+     * started. */
+    print: (t) => { window.__S1.logs.push(t); console.log(t); },
+    printErr: (t) => { window.__S1.logs.push(t); console.log(t); },
+    noExitRuntime: true,
+    /* Read by emdawnwebgpu and by web/s1-bridge.js. */
+    preinitializedWebGPUDevice: device,
+    s1Canvas: canvas,
+  });
+  log('module booted; the device is adopted and the canvas is the render target');
+
+  try {
+    padAddr = mod._ps3_pad_words_address() | 0;
+    connAddr = mod._ps3_pad_connected_address() | 0;
+    log('pad seam 0x' + (padAddr >>> 0).toString(16));
+  } catch (e) { log('pad seam unavailable: ' + e.message); }
+
+  window.__S1.ready = true;
+  /* The renderer's OWN counters, not a narrative. g_stats.draws is the number of
+   * draws that reached a pipeline; g_skip_lines says, by source line, how many
+   * turned back -- and that is the only thing that distinguishes "no draw was
+   * issued by the guest" from "every draw was refused at line N". */
+  setInterval(() => {
+    try {
+      const s = window.__S1.stats || {};
+      if (typeof mod._r3_draws === 'function') {
+        s.draws = mod._r3_draws();
+        s.skipped = mod._r3_skipped();
+        s.n_method = mod._r3_n_method_get ? mod._r3_n_method_get() : -1;
+        s.n_enabled_false = mod._r3_n_enabled_false_get ? mod._r3_n_enabled_false_get() : -1;
+        /* mod.UTF8ToString is NOT available unless it is in
+         * EXPORTED_RUNTIME_METHODS; calling an absent function here would throw
+         * and take the whole interval with it, which is why an earlier run showed
+         * no S1STATS line at all. The module also exposes HEAPU8, so the string is
+         * read directly and a missing one degrades to a marker instead of an
+         * exception. */
+        if (mod._r3_skip_reasons && mod.HEAPU8) {
+          const p = mod._r3_skip_reasons() >>> 0;
+          if (p) {
+            let end = p, n = 0;
+            while (mod.HEAPU8[end] && n < 512) { end++; n++; }
+            s.skip = '';
+            for (let i = p; i < end; i++) s.skip += String.fromCharCode(mod.HEAPU8[i]);
+          } else s.skip = '';
+        }
+      }
+      if (typeof mod._rsx_ring_stat === 'function') {
+        s.ring = [];
+        for (let i = 0; i < 19; i++) s.ring.push(mod._rsx_ring_stat(i) >>> 0);
+      }
+      window.__S1.stats = s;
+      /* Printed once per interval so the capture harness records it: a counter
+       * that only lives in window.__S1 is a claim, not a measurement. */
+      if (s.draws !== undefined) {
+        console.log('S1STATS draws=' + s.draws + ' skipped=' + s.skipped +
+                    ' n_method=' + s.n_method + ' skip=[' + (s.skip || '') + ']' +
+                    (s.ring ? ' recs=' + s.ring[0] + ' ring_draws=' + s.ring[10] : ''));
+      }
+    } catch (e) {}
+  }, 2000);
 }
 
-canvas.addEventListener('click', () => canvas.focus());
-start();
+main().catch((e) => { window.__S1.error = String(e && e.stack || e); log('ERROR ' + window.__S1.error); });
 </script>
 </body>
 </html>

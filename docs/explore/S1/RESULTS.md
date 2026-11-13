@@ -1,179 +1,208 @@
-# S1 — la page draine l'anneau : ce qui est mesure
+# S1 — la page draine l'anneau : arret sur demande, etat mesure
 
-Worktree `/root/Dev/s-S1` (branche `explore/sS1`), base `083bdbe` + fusion de
-`explore/rR3` (producteur d'anneau, merge `b94ad19`). Arbres partages lies :
-`bin out out-mc fw ref`. Ce fichier est ecrit AVANT les mesures de build.
+**Arrete sur instruction de l'utilisateur (via le lead), a la demande "ne relance rien".**
+Aucun processus de jeu n'est laisse en vie : mes trois serveurs de page (ports 8899, 8971,
+8988) ont ete tues ; je n'ai jamais lance le binaire natif dans cette piste et il n'y en a
+aucun a moi.
 
-## 0. Provenance des binaires utilises dans ce document
+Worktree `/root/Dev/s-S1` (branche `explore/sS1`). Base `083bdbe`, plus la fusion de
+`explore/rR3` (producteur d'anneau) et de `explore/rR2` (backend WebGPU pixel-exact).
+Arbres partages lies : `bin out out-mc fw ref`.
 
-    $ cd /tmp/out-R3/web && md5sum game.wasm | cut -c1-16
-    (voir section 6, collee avec la sortie brute)
-    $ ls -la /tmp/out-R3/web/game.wasm /tmp/out-R3/web/game.js /tmp/out-R3/web/game.data
+---
 
-Le module utilise pour les mesures de la section 2 est celui construit par la piste R3
-(`/tmp/out-R3/web`, 45 676 153 o de wasm). Il porte le producteur d'anneau H4, le renderer
-lie via `vk_null.cpp`, et `emdawnwebgpu`.
+## 1. PROVENANCE — les trois elements exiges
 
-## 1. Antecedents (REGLE 12 — grep fait AVANT d'ecrire)
+    $ md5sum /tmp/out-S1/game.wasm | cut -c1-16
+    12850bede632b680
+    $ ls -la /tmp/out-S1/game.wasm /tmp/out-S1/game.js /tmp/out-S1/game.data
+    -rwxr-xr-x 45463954  /tmp/out-S1/game.wasm
+    -rw-r--r--   170437  /tmp/out-S1/game.js
+    -rw-r--r-- 158483841 /tmp/out-S1/game.data
 
-| Constat | Source (chemin:ligne) | S'applique ici ? |
-|---|---|---|
-| Aucun consommateur d'anneau cote page n'existe, seulement un compteur | `docs/explore/R3/RESULTS.md` sec. 5.4 | **oui** : c'est le chainon a ecrire |
-| Le producteur classifie 7 types de records et les pousse dans `CommandRing` | `runtime/include/gpu/rsx_ring.h:40-49` | **oui** : c'est le contrat de lecture |
-| Le producteur refuse (compte et jette) quand l'anneau est plein | `runtime/include/gpu/rsx_ring.h` (Back-pressure) | **oui** : `refused` est le compteur du symptome |
-| H4 a deja un consommateur JS qui LIT mais ne dessine pas | `explore/iH4 web/h4-ring.js` | **oui** : la lecture existe, le replay manque |
-| Le device est en page et le wasm ne peut pas le prendre (transfert) | `docs/explore/R3/RESULTS.md` sec. 2.2 | **NON — refute en section 3** |
-| WebGPU est disponible dans un Worker dedie | probe S1 p4 (section 3) | **oui** : ouvre une architecture plus simple |
-| `-sPROXY_TO_PTHREAD=1` met `main()` sur un pthread | `tools/build_wasm.sh:88` | **oui** : c'est ce qui separe les realms |
+Commande de build (complete) :
 
-## 2. L'anneau est PLEIN et personne ne le vide — mesure
+    $ cd /root/Dev/s-S1
+    $ DISK=/tmp/disk-r4 bash tools/build_wasm_s1.sh /root/Dev/s-S1 /tmp/out-S1
+    (compile 209 objets, puis link ; le link doit etre em++ car le port l'exige)
 
-Le module R3 lance dans un Worker (page servie par `web/serve.py`, COOP/COEP). Le worker
-principal JS cree un device WebGPU puis lit les compteurs de l'anneau par les exports
-`mod._rsx_ring_*`. Commande exacte :
+Commande de relink seule (celle qui a produit le binaire ci-dessus) :
 
-    $ cd /tmp/S1-probe/real && python3 serve.py 8971 &
+    $ cd /root/Dev/s-S1 && DISK=/tmp/disk-r4 bash tools/relink_s1.sh /root/Dev/s-S1 /tmp/out-S1
+
+Commande de capture exacte :
+
+    $ cd /tmp/out-S1/web && python3 serve.py 8988 &
     $ cd /root/Dev/wasm-base && node tools/x-capture.mjs \
-        --url http://127.0.0.1:8971/index.html \
-        --out /tmp/S1-probe/shots-real --seconds 80 --interval 20 --no-compositor
+        --url http://127.0.0.1:8988/game.html \
+        --out /tmp/out-S1/shots7 --seconds 80 --interval 40 \
+        --auto-hook docs/explore/X6/x6-inpage-hook.js
 
-Sortie brute (extraits de `/tmp/S1-probe/shots-real/capture.log`) :
+PNG produits : `/tmp/out-S1/shots{,2,3,4,5,6,7}/page-canvas-*.png` et
+`compositor-*.png`. Tous les `page-canvas` sont **vides** (`mean=0, meanA=0`,
+1 couleur) : le critere de l'enonce **n'est pas atteint**.
 
-    [1.24s] page console.log w: WORKER-MAIN: device OK
-    [1.99s] page console.log w: WORKER-MAIN: module booted; exports present=
-            _rsx_ring_address:function,_rsx_ring_capacity:function,
-            _rsx_ring_word:function,_rsx_ring_stat:function
-    [3.03s] page console.log w: I   1.036925 [   10] rsxring: first method through the seam: 0x0060 arg=0x56616661 io=0x00001000
-    [2.99s] page console.log RING {"addr":8535616,"cap":16777216,"recs":0,"draws":0,"clears":0,"flips":0,"refused":0,"used":0,"popped":0,"ticks":1}
-    [3.99s] page console.log RING {"addr":8535616,"cap":16777216,"recs":20,"draws":0,"clears":1,"flips":0,"refused":0,"used":3436,"popped":0,"ticks":2}
-    [17.99s] page console.log RING {"addr":8535616,"cap":16777216,"recs":923,"draws":26,"clears":53,"flips":13,"refused":1995,"used":16777200,"popped":0,"ticks":16}
-    [80.79s] page console.log w: I  78.829850 [   10] rsx: flip 1381 (buffer 0) worst 115.6 ms, >50ms 15, >100ms 1
+---
 
-Lecture, et c'est le defaut nomme chiffre :
+## 2. CE QUI EST MESURE, ET QUI COMPTE
 
-| grandeur | valeur | consequence |
+### 2.1 Le chainon manquant, mesure avec ses chiffres
+
+Le module R3 lance dans un Worker ; le thread JS principal cree un device WebGPU et lit les
+compteurs de l'anneau par les exports `mod._rsx_ring_*` (node x-capture, port 8971) :
+
+    RING {"addr":8535616,"cap":16777216,"recs":923,"draws":26,"clears":53,"flips":13,
+          "refused":1995,"used":16777200,"popped":0,"ticks":16}
+    I  1.036925 [   10] rsxring: first method through the seam: 0x0060 arg=0x56616661 io=0x00001000
+    I 78.829850 [   10] rsx: flip 1381 (buffer 0) worst 115.6 ms, >50ms 15, >100ms 1
+
+| grandeur | valeur | lecture |
 |---|---|---|
-| `recs` (enregistrements pousses) | **923** | l'anneau se remplit bien |
-| `draws` / `clears` / `flips` | **26 / 53 / 13** | le chemin de rendu du guest s'execute |
-| `used` / `cap` | **16 777 200 / 16 777 216** | l'anneau est plein a **16 octets pres** |
-| `popped` | **0** | **aucun consommateur ne lit** |
-| `refused` | **1995** | le producteur jette, donc des commandes sont perdues |
-| `flip` du renderer | **1381** a t=78 s | le renderer lie et flippe, mais ne peint rien |
+| `used` / `cap` | **16 777 200 / 16 777 216** | anneau plein a **16 octets pres** |
+| `popped` | **0** | **aucun consommateur** |
+| `recs` | **923** | le producteur pousse |
+| `refused` | **1995** | le producteur jette : des commandes sont perdues |
 
-**`used = cap - 16` et `popped = 0` ensemble sont la mesure directe du chainon manquant** :
-l'anneau est un tuyau dont le bout consommateur n'est pas raccorde. Le `refused=1995` de ce run
-(et non 1 160 458 comme dans R-final) vient de ce que ce run mesure sur 80 s avec un device
-present ; le compteur monte avec la duree, il ne change pas de nature.
+`used = cap - 16` avec `popped = 0` est la mesure directe du chainon manquant.
 
-## 3. Ce que R3 avait conclu faux : le device PEUT etre pris par le wasm
+### 2.2 R3 s'etait trompe sur le lieu du device — corrige par la mesure
 
-R3 (sec. 2.2) conclut « un `GPUDevice` n'est pas transferable dans un worker », donc « le device
-vit dans la PAGE ». La mesure ci-dessous montre que le transfert entre realms n'est pas la seule
-voie : **dans le meme realm, le wasm ADOPTE le device par `preinitializedWebGPUDevice`**, et le
-chemin complet (texture, passe, submit) fonctionne. Sonde minimale, 3 fichiers, dans
-`/tmp/S1-probe/` :
+R3 (sec. 2.2) : « un GPUDevice n'est pas transferable dans un worker », donc « le device vit
+dans la PAGE ». Vrai du TRANSFERT. Faux de l'ADOPTION : dans le meme realm, le wasm prend le
+device par `preinitializedWebGPUDevice`. Sonde minimale `/tmp/S1-probe/p.cpp` :
 
-    $ cd /tmp/S1-probe && /root/Dev/ps2-web-recomp/tools/emsdk/upstream/emscripten/em++ \
-        p.cpp -o p.js --use-port=emdawnwebgpu --js-library=bridge.js \
-        -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createP \
-        -sEXPORTED_FUNCTIONS=_probe_adopt,_probe_clear,_probe_status -O1
-    $ node tools/x-capture.mjs --url http://127.0.0.1:8899/index.html \
-        --out /tmp/S1-probe/shots --seconds 8 --interval 2 --no-compositor
+    c: P: ADOPTED device=0x11438 queue=0x11418
+    c: P: canvas texture ptr=0x11488
+    c: P: CLEAR SUBMITTED 1280x720 rgb(30,200,120) errors=0
+    PAGE-CANVAS .../page-canvas-000-0.png | 1280x720 centre=srgba(30,200,120,1) colours=1
 
-    [1.30s] page console.log device OK, format rgba8unorm
-    [1.32s] page console.log c: P: ADOPTED device=0x11438 queue=0x11418
-    [1.33s] page console.log c: P: canvas texture ptr=0x11488
-    [1.33s] page console.log c: P: CLEAR SUBMITTED 1280x720 rgb(30,200,120) errors=0
-    [1.33s] page console.log clear=1 status=110
-    [2.24s] PAGE-CANVAS /tmp/S1-probe/shots/page-canvas-000-0.png canvas=c |
-            size=1280x720 mean=0.457516 meanA=1 centre=srgba(30,200,120,1) colours=1
+Le canvas porte **exactement** la couleur demandee : le wasm a ecrit dans la texture de canvas.
 
-Le canvas porte **exactement** la couleur demandee (`srgba(30,200,120,1)`), ce qui prouve que le
-wasm a ecrit dans la texture de canvas de la page. Ce n'est pas une lecture de retour : c'est le
-canvas lui-meme.
+### 2.3 Le vrai mur : un pthread n'a pas l'etat WebGPU du port
 
-## 4. Le vrai mur, mesure : un pthread n'a pas l'etat WebGPU
+Le renderer tourne sur le thread 10, un **pthread** (toute ligne `[   10] rsx:`). Sondes
+`p2`/`p3`/`p5` :
 
-Le renderer RSX du guest tourne sur le thread 10, qui est un **pthread Emscripten** (visible dans
-toutes les lignes `[   10] rsx:` ci-dessus). La sonde p2 mesure si ce realm voit le device :
+    c: P: adopted on main realm=0 dev=0x24f80
+    c: P: clear ok realm=0 rgb(30,200,120)
+    c: P: pthread start realm=1
+    c: P: pthread clear rc=-2
+    c: P: pthread queue=0x24f50
+    c: p3.js:380 Uncaught TypeError: Cannot read properties of undefined (reading 'createCommandEncoder')
 
-    [1.14s] page console.log c: P: adopted on main realm=0 dev=0x24f80
-    [1.15s] page console.log c: P: clear ok realm=0 rgb(30,200,120)
-    [1.15s] page console.log c: P: pthread start realm=1
-    [1.15s] page console.log c: P: pthread clear rc=-2
+`emdawnwebgpu` garde son etat dans `WebGPU.Internals`, un global **par realm**; celui d'un
+pthread est vide. C'est le mur.
 
-`realm=1` n'arrive meme pas a configurer le canvas (`rc=-2`). La sonde p3 isole la cause :
+### 2.4 La breche, mesuree : proxy synchrone
 
-    [1.27s] page console.log c! worker sent an error! p3.js:380: Uncaught TypeError:
-            Cannot read properties of undefined (reading 'createCommandEncoder')
+En annotant les entrees du port en `__proxy: 'sync'`, un pthread peint le canvas :
 
-Le port `emdawnwebgpu` garde son etat dans `WebGPU.Internals`, un global **par realm**. Un pthread
-a le sien, vide. C'est **le** mur, et il explique pourquoi le chemin « le vrai renderer dessine »
-n'est pas un simple cablage.
+    c: P5: adopted on main
+    c: P5: pthread queue=0x24f50
+    c: P5: canvas tex ptr=0x378b0 (from proxied main)
+    c: P5: pthread encoder=0x378c8
+    c: P5: PTHREAD CLEAR SUBMITTED
+    c: P5: pthread rc=1
+    PAGE-CANVAS .../page-canvas-000-0.png | 1280x720 centre=srgba(25,191,89,1) colours=1
 
-La sonde p5 verifie la seule echappatoire : proxifier les entrees JS par `__proxy: 'sync'`.
+`0.10/0.75/0.35` -> `srgba(25,191,89,1)` : exact. 79 entrees annotees dans le port
+vendore (`third_party/emdawnwebgpu/`, 14 Ko).
 
-    [1.19s] page console.log c: P5: pthread queue=0x24f50
-    [1.19s] page console.log c: P5: canvas tex ptr=0x378b0 (from proxied main)
-    [1.19s] page console.log c! worker sent an error! p5.js:380: Uncaught TypeError:
-            Cannot read properties of undefined (reading 'createCommandEncoder')
+### 2.5 Le backend pixel-exact COMPILE pour le wasm, avec 1 symbole manquant
 
-Le proxy fonctionne pour MES fonctions (le canvas a bien ete configure, le pointeur de texture
-vient du main), **mais pas pour les fonctions du port** : `wgpuDeviceCreateCommandEncoder` est
-l'une des siennes et elle s'execute toujours dans le realm appelant. Il faudrait annoter ~46
-fonctions de `library_webgpu.js` ; ce n'est pas fait ici et je ne l'annonce pas comme fait.
-
-## 5. La piste qui marche sans anneau : un seul realm, dans un Worker
-
-La sonde p4 met tout dans un seul realm : le Worker cree le device et un `OffscreenCanvas`, le
-wasm (sans `PROXY_TO_PTHREAD`) les adopte et peint.
-
-    [0.55s] page console.log w: W: worker realm gpu=true offscreen=true
-    [1.48s] page console.log w: W: device OK in worker realm
-    [1.49s] page console.log w: c: P4: main on worker main thread
-    [1.49s] page console.log w: c: P4: adopted device (main thread, no proxy)
-    [1.49s] page console.log w: c: P4: CLEAR SUBMITTED from main()
-    [1.50s] page console.log w: c: P4: RESULT clear=1
-
-WebGPU **est** disponible dans un Worker. Ceci ouvre une architecture sans anneau — mais elle ne
-suffit pas non plus : le renderer du guest tourne sur un pthread (section 4), pas sur le thread
-principal du worker.
-
-## 6. Le backend natif pixel-exact compile pour le web
-
-`runtime/src/gpu/wgpu_backend.cpp` (2 089 l., RMS 0.0000 contre Vulkan) inclut `<webgpu/wgpu.h>`,
-le header de wgpu-native, absent du port. Un shim de 20 lignes
-(`/tmp/S1-probe/shim/webgpu/wgpu.h`) redirige vers `<webgpu/webgpu.h>` du port.
-
-    $ cd /root/Dev/r-R2 && em++ -std=c++20 -c runtime/src/gpu/wgpu_backend.cpp \
-        -o /tmp/S1-probe/wb.o --use-port=emdawnwebgpu -I /tmp/S1-probe/shim \
-        -I runtime/include -I runtime/src -w
-    $ echo $?
-    0
-
-**0 erreur.** Sur les 46 symboles `wgpu*` que ce fichier appelle, **un seul** manque au port :
+`runtime/src/gpu/wgpu_backend.cpp` (2 089 l., RMS 0.0000 contre Vulkan) inclut
+`<webgpu/wgpu.h>`, absent du port. Sur les 46 symboles `wgpu*` qu'il appelle :
 
     $ for s in $(cat /tmp/wgpu-syms.txt); do grep -q "\b$s\b" .../webgpu.h || echo "MISSING $s"; done
     MISSING wgpuDevicePoll
+    $ em++ -std=c++20 -c runtime/src/gpu/wgpu_backend.cpp --use-port=... -I shim -w
+    $ echo $?
+    0
 
-`wgpuInstanceProcessEvents` existe (header ligne 2734) et le port pompe ses callbacks lui-meme.
-La sonde p1 a d'ailleurs peint sans aucun poll. Donc le cout de portage du backend est **1 symbole
-et 1 shim**, pas une reecriture.
+**1 symbole et 1 shim de 20 lignes**, pas une reecriture.
 
-## 7. Ce qui n'est PAS fait
+### 2.6 Le module S1 : le renderer reel TOURNE dans Chromium, et le backend adopte le device
 
-1. **Le logo n'est pas peint.** Le critere de l'enonce n'est pas atteint. La cause est nommee
-   section 4 : le renderer tourne sur un pthread dont le realm n'a pas l'etat WebGPU du port.
-2. Aucun consommateur d'anneau n'est ecrit : `popped` reste a 0 (section 2).
-3. Le producteur ne transporte pas le WGSL : `rsx_ring.h` porte un hash d'ucode, pas la source.
-   Un consommateur JS devrait donc soit refaire le decodage RSX, soit recevoir le WGSL par un
-   nouveau type de record (le renderer l'a deja dans `e.wgsl` sur le chemin web).
-4. Le proxy des ~46 fonctions du port n'est pas fait (section 4).
+Run `/tmp/out-S1/shots4` (md5 `2a3b7d12ba3e1dab`, un binaire anterieur a la correction) :
 
-## 8. Les trois chemins qui restent, par ordre de cout
+    I   1.545050 [    2] rsx: local memory 0xf900000 bytes at 0x58000000
+    I  17.585055 [   10] rsx: new color surface at local 0x280000 1280x480 format 44 pitch 0x1400
+    I  17.593610 [   10] rsx: vertex program fd4be450bbeda1e5 start 9: queued
+    s1: device adopted on the owning realm (handle 2625294792)
+    wgpu: web: adopted device 0x9c7ad1c8 queue 0x9bc2be80 colourFormat 22
+    wgpu: clear 1..4 mask 0x3 ...
+    I  80.700555 [   10] rsx: flip 1141 (buffer 0)
 
-| chemin | ce qu'il faut | cout mesure |
+`fd4be450bbeda1e5` est **le hash du programme de vertex du logo** mesure par K2/R2. Le
+renderer lie, decode, et le backend WebGPU tient un device dans Chromium.
+
+### 2.7 Le defaut exact qui reste, nomme par les compteurs du renderer
+
+Run `/tmp/out-S1/shots7` (binaire md5 `12850bede632b680`) :
+
+    S1STATS draws=0 skipped=98064 n_method=1184451 skip=[3284:83966 3287:14098]
+             recs=923 ring_draws=26
+
+- `n_method=1 184 451` : le decodeur consomme bien le flux RSX.
+- `draws=0` : aucun draw n'atteint une pipeline.
+- `skip=[3284:83966 3287:14098]` : **tout** tombe sur deux lignes de
+  `rsx_renderer.cpp`, `if (!vp || !vp->ready || !vp->ok)` (3284) et l'equivalent fragment
+  (3287). Les programmes ne sont pas marques « ok ».
+
+Cause trouvee, et corrigee dans l'arbre mais **pas encore mesuree** : `finish_vp`/`finish_fp`
+sont appeles par le worker de compilation **asynchrone** et ils ASSIGNENT `e.ok`. L'emission
+WGSL faite au site d'appel (dans `vertex_program()`) etait donc ecrasee par
+`e.ok = compile_glsl(...)` = false. Correction : l'emission WGSL se fait desormais AVANT
+`compile_entry` (pour que l'entree la porte deja), et `finish_*` honore `e.wgsl`.
+
+Etat au moment de l'arret : la correction est ecrite dans
+`runtime/src/gpu/rsx_renderer.cpp` mais la recompilation a echoue sur une variable hors
+portee (`vp` referencee dans le bloc async du chemin vertex, ligne 938), et **le binaire
+`12850bede632b680` ne contient donc PAS le correctif**. C'est exactement pourquoi le dernier
+run mesure encore `draws=0`.
+
+---
+
+## 3. CE QUI N'EST PAS FAIT
+
+1. **Le logo n'est pas peint.** Le critere de l'enonce (1280x720 ou 1280x480, des centaines de
+   couleurs, structure comparable a la capture native) n'est **pas** atteint. Tous les
+   `page-canvas-*.png` sont vides.
+2. La correction de l'ordre d'emission WGSL n'a jamais ete compilee ni mesuree (erreur de
+   compilation non corrigee, ligne 938).
+3. Aucun consommateur d'anneau cote page n'est ecrit : `popped` reste a 0. La strategie
+   retenue n'en a plus besoin (le renderer dessine directement), mais ce n'est pas mesure
+   jusqu'au bout.
+4. Le producteur ne transporte pas le WGSL (`rsx_ring.h` porte un hash d'ucode). Sans objet
+   pour la strategie retenue.
+
+## 4. Antecedents (REGLE 12)
+
+| Constat | Source (chemin:ligne) | S'applique ici ? |
 |---|---|---|
-| A. renderer reel sur pthread | annoter ~46 fonctions de `library_webgpu.js` en `__proxy:'sync'` + module WGSL au lieu de SPIR-V | 1 copie locale du port + relink |
-| B. consommateur JS de l'anneau | nouveau record WGSL + reconstruction des uniforms en JS | gros : le decode RSX est dans `rsx_renderer.cpp` |
-| C. un realm sans pthread | deplacer les threads du guest hors des pthreads | hors budget |
+| Aucun consommateur d'anneau cote page, seulement un compteur | `docs/explore/R3/RESULTS.md` sec. 5.4 | **oui** : c'etait le chainon a ecrire |
+| 7 types de records, back-pressure par refus compte | `runtime/include/gpu/rsx_ring.h:40-49` | **oui** : contrat de lecture |
+| Le device ne peut pas etre TRANSFERE | `docs/explore/R3/RESULTS.md` sec. 2.2 | **non, refute** : l'adoption marche (sec. 2.2 ici) |
+| WebGPU dispo dans un Worker dedie | sonde p4 | **oui**, mais insuffisant (renderer sur pthread) |
+| `-sPROXY_TO_PTHREAD=1` met main() sur un pthread | `tools/build_wasm.sh:88` | **oui** : separe les realms |
+| Le backend natif est pixel-exact (RMS 0.0000) | `docs/explore/R-FINAL.md` | **oui** : c'est lui qu'on porte, pas un reimplemente |
+
+## 5. Les fichiers produits, et ou ils sont
+
+| fichier | contenu |
+|---|---|
+| `tools/build_wasm_s1.sh` | build complet S1 (renderer + port + bridge + STACK 8 Mo) |
+| `tools/relink_s1.sh` | relink seul (~1 min au lieu de ~40) |
+| `web/s1-bridge.js` | pont canvas/device, toutes entrees `__proxy:'sync'` |
+| `web/game.html` | page : cree le device, l'offre au module, lit les compteurs |
+| `web/worker.js` | worker (variante device-transfere, non retenue) |
+| `third_party/emdawnwebgpu/` | le port vendore, 79 entrees annotees |
+| `runtime/include/gpu/wgpu_web_shim.h` | le shim du seul symbole manquant |
+| `runtime/src/gpu/wgpu_backend.cpp` | backend R2 + branche web (adoption, canvas, WGSL) |
+
+## 6. La prochaine action, si la piste reprend
+
+Une seule, et elle est nommee : corriger la ligne 938 de `rsx_renderer.cpp` (la reference a
+`vp` dans le bloc async du chemin vertex), recompiler, relinker, recapturer. Le reste de la
+chaine est mesure : device adopte, renderer lie, anneau alimente, compteurs de skip qui
+designent exactement les deux portes a franchir.

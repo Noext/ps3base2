@@ -167,12 +167,20 @@ struct DrawInputs {
     uint32_t stencil_mask = 0;
     bool stencil_test = false;
 
-    /* Shader identity: the SPIR-V the Vulkan path compiled for this draw. */
+    /* Shader identity: the SPIR-V the Vulkan path compiled for this draw.
+     * Native only: the browser takes WGSL, and there is no SPIR-V front end in
+     * it at all. On the web these stay null and the two WGSL strings below are
+     * what the pipeline is built from. */
     const uint32_t* vs_spirv = nullptr;
     size_t vs_words = 0;
     const uint32_t* fs_spirv = nullptr;
     size_t fs_words = 0;
     uint64_t vp_hash = 0, fp_hash = 0;
+    /* The same two programs as WGSL, emitted by runtime/src/gpu/wgsl_emit.cpp at
+     * the program's own call site in the renderer (where the ucode is still
+     * live). Empty on a native build. */
+    std::string vs_wgsl;
+    std::string fs_wgsl;
 
     /* The render target the pass draws into, then the viewport and scissor
      * WITHIN it. The target is a property of the frame, not of the draw, but it
@@ -185,6 +193,15 @@ struct DrawInputs {
 
 /* Replay one draw. No-op when not enabled. */
 void draw(const DrawInputs& in);
+
+/* Finish the frame: close the pass, finish and submit the encoder.
+ *
+ * Native builds call this only around the capture path, because there the
+ * colour target is a private mirror and nothing has to reach a screen. On the
+ * web the target IS the canvas, so this is what makes a frame visible, and it is
+ * called on every present. Without it the canvas would stay at its clear colour
+ * no matter how many draws were recorded. */
+void end_frame();
 
 /* Clear the current target. `color` is RGBA in 0..1; pass clear_depth = false
  * to leave depth untouched. */

@@ -24,7 +24,14 @@
 #include "gpu/wgpu_backend.h"
 
 #include <webgpu/webgpu.h>
+#if defined(__EMSCRIPTEN__)
+/* The browser takes WGSL, not SPIR-V, and has no <webgpu/wgpu.h>. The shim
+ * supplies the one symbol the port lacks (wgpuDevicePoll) and leaves the C API
+ * identical, so the rest of this file is the same code on both targets. */
+#include "gpu/wgpu_web_shim.h"
+#else
 #include <webgpu/wgpu.h>
+#endif
 
 #include <algorithm>
 #include <cmath>
@@ -37,6 +44,27 @@
 #include <thread>
 #include <string>
 #include <vector>
+
+/* Implemented in web/s1-bridge.js. Declared at FILE scope, before the anonymous
+ * namespace: a declaration inside an anonymous namespace is a different entity,
+ * the linker then sees a fresh undefined symbol, and the wasm import aborts on
+ * the first call. (Measured in this workspace before: the same mistake on the
+ * ring's io hook produced "RuntimeError: unreachable" on the first texture.) */
+#if defined(__EMSCRIPTEN__)
+extern "C" {
+/* Configure the canvas for the adopted device and size, once per size change. */
+int s1_canvas_configure(uint32_t w, uint32_t h);
+/* The current frame's canvas texture, imported as a WGPUTexture. */
+uint32_t s1_canvas_texture();
+/* The canvas's WGPUTextureFormat, from the browser's preferred format. */
+int s1_canvas_format();
+/* The device the page created and this module adopted, obtained on the realm
+ * that owns it. See web/s1-bridge.js: s1_adopt_device() wraps the port's
+ * emscripten_webgpu_get_device() and is __proxy:'sync', because calling that
+ * from a guest pthread fills a per-realm table the pthread cannot use. */
+WGPUDevice s1_adopt_device();
+}
+#endif
 
 namespace gpu {
 namespace wgpu {
@@ -60,6 +88,10 @@ struct Device {
     WGPUDevice device = nullptr;
     WGPUQueue queue = nullptr;
     bool ready = false;
+    /* True on the browser target: the device was adopted from JS and the colour
+     * target is the CANVAS texture, which is re-imported every frame because a
+     * canvas texture is invalidated at the next getCurrentTexture(). */
+    bool web = false;
     uint32_t width = 0;
     uint32_t height = 0;
 
@@ -190,6 +222,37 @@ WGPUShaderModule module_from_spirv(const uint32_t* words, size_t count) {
     return wgpuDeviceCreateShaderModule(g.device, &d);
 }
 
+/* The browser's shader source. The RSX program was emitted as WGSL by
+ * runtime/src/gpu/wgsl_emit.cpp (track H3: 11/11 real Minecraft programs valid
+ * in naga and in Chromium), so there is no GLSL and no SPIR-V in between. */
+WGPUShaderModule module_from_wgsl(const std::string& code) {
+    if (code.empty()) return nullptr;
+    WGPUShaderSourceWGSL wg = WGPU_SHADER_SOURCE_WGSL_INIT;
+    wg.code = {code.c_str(), code.size()};
+    WGPUShaderModuleDescriptor d = WGPU_SHADER_MODULE_DESCRIPTOR_INIT;
+    d.nextInChain = &wg.chain;
+    return wgpuDeviceCreateShaderModule(g.device, &d);
+}
+
+/* One shader module for a draw, from whichever source this target can take.
+ *
+ * Native: the renderer's own SPIR-V, passed through unchanged, so the two
+ * backends differ by the API and nothing else (that is what makes their pixel
+ * comparison mean anything).
+ * Web: the WGSL emitted for the same program, because Chromium has no SPIR-V
+ * device feature at all.
+ * A refused module is reported through g.errors, which the pipeline path uses to
+ * count a skip instead of drawing with a broken pipeline and losing the frame. */
+WGPUShaderModule shader_module(const std::string& wgsl, const uint32_t* spirv, size_t words) {
+#if defined(__EMSCRIPTEN__)
+    (void)spirv; (void)words;
+    return module_from_wgsl(wgsl);
+#else
+    (void)wgsl;
+    return module_from_spirv(spirv, words);
+#endif
+}
+
 WGPUBuffer make_buffer(WGPUBufferUsage usage, uint64_t size, const void* data) {
     WGPUBufferDescriptor d = WGPU_BUFFER_DESCRIPTOR_INIT;
     d.usage = usage;
@@ -213,6 +276,47 @@ void release_frame_buffers() {
 void end_pass();
 
 void make_targets(uint32_t width, uint32_t height) {
+#if defined(__EMSCRIPTEN__)
+    /* The web target is the CANVAS TEXTURE, and it is re-fetched every frame.
+     *
+     * A canvas texture is only valid between getCurrentTexture() and the next
+     * one; it is invalidated at presentation. Measured by track X6 for the same
+     * reason: a copy issued in a later task returns zeros. So the view is rebuilt
+     * here, at the frame boundary, from whatever texture the canvas hands out
+     * now -- importing it through the bridge, which runs on the realm that owns
+     * the device (the renderer is on a pthread and cannot reach it; see
+     * web/s1-bridge.js).
+     *
+     * The depth attachment is a real, private texture: WebGPU REJECTS a pass
+     * whose depth-stencil view is stale or missing while the pipeline declares
+     * depth, and dropping the command buffer is a black frame with no error. */
+    if (s1_canvas_configure(width, height)) {
+        const uint32_t tex = s1_canvas_texture();
+        if (tex) {
+            if (g.color_view) wgpuTextureViewRelease(g.color_view);
+            /* The previous canvas texture is released by the canvas itself; only
+             * the imported handle is dropped, never destroyed. */
+            g.color = reinterpret_cast<WGPUTexture>(uintptr_t(tex));
+            g.color_view = wgpuTextureCreateView(g.color, nullptr);
+        }
+    }
+    if (!g.depth || g.width != width || g.height != height) {
+        if (g.depth_view) { wgpuTextureViewRelease(g.depth_view); g.depth_view = nullptr; }
+        if (g.depth) { wgpuTextureRelease(g.depth); g.depth = nullptr; }
+        WGPUTextureDescriptor dz = WGPU_TEXTURE_DESCRIPTOR_INIT;
+        dz.usage = WGPUTextureUsage_RenderAttachment;
+        dz.dimension = WGPUTextureDimension_2D;
+        dz.size = {width, height, 1};
+        dz.format = g.depth_format;
+        dz.mipLevelCount = 1;
+        dz.sampleCount = 1;
+        g.depth = wgpuDeviceCreateTexture(g.device, &dz);
+        if (g.depth) g.depth_view = wgpuTextureCreateView(g.depth, nullptr);
+    }
+    g.width = width;
+    g.height = height;
+    return;
+#else
     static int resizes = 0;
     if (g.color && g.width == width && g.height == height) return;
     if (resizes++ < 6) std::fprintf(stderr, "wgpu: target resize %d -> %ux%u (had %ux%u) encoder %p\n",
@@ -292,6 +396,7 @@ void make_targets(uint32_t width, uint32_t height) {
         wgpuQueueSubmit(g.queue, 1, &cb);
         wgpuCommandBufferRelease(cb);
     }
+#endif  // __EMSCRIPTEN__
 }
 
 void begin_pass() {
@@ -300,7 +405,12 @@ void begin_pass() {
     WGPURenderPassColorAttachment ca = WGPU_RENDER_PASS_COLOR_ATTACHMENT_INIT;
     ca.view = g.color_view;
     ca.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
-    ca.loadOp = WGPULoadOp_Load;
+    /* On the web this is a fresh canvas texture every frame: WebGPU requires the
+     * attachment to be CLEARED, because a canvas texture's contents at
+     * getCurrentTexture() are undefined. Loading it is the native behaviour and
+     * would be reading undefined memory here. */
+    ca.loadOp = g.web ? WGPULoadOp_Clear : WGPULoadOp_Load;
+    if (g.web) ca.clearValue = {0.0, 0.0, 0.0, 1.0};
     ca.storeOp = WGPUStoreOp_Store;
     WGPURenderPassDepthStencilAttachment da = WGPU_RENDER_PASS_DEPTH_STENCIL_ATTACHMENT_INIT;
     da.view = g.depth_view;
@@ -361,7 +471,7 @@ WGPURenderPipeline pipeline_for(const DrawInputs& in) {
         vs = vit->second;
     } else {
         const int before = g.errors;
-        vs = module_from_spirv(in.vs_spirv, in.vs_words);
+        vs = shader_module(in.vs_wgsl, in.vs_spirv, in.vs_words);
         wgpuDevicePoll(g.device, true, nullptr);
         if (!vs || g.errors != before) {
             s.skipped++;
@@ -394,7 +504,7 @@ WGPURenderPipeline pipeline_for(const DrawInputs& in) {
             fs = fit->second;
         } else {
             const int before = g.errors;
-            fs = module_from_spirv(in.fs_spirv, in.fs_words);
+            fs = shader_module(in.fs_wgsl, in.fs_spirv, in.fs_words);
             wgpuDevicePoll(g.device, true, nullptr);
             if (!fs || g.errors != before) {
                 s.skipped++;
@@ -1199,10 +1309,57 @@ void report_at_exit() {
 }  // namespace
 
 bool enabled() {
+#if defined(__EMSCRIPTEN__)
+    /* On by DEFAULT in the browser: there is no Vulkan there at all, so the
+     * "mirror" is not an optional second path, it is the only one. Gating it
+     * behind an env var would make the module link, flip and paint nothing with
+     * no line saying why -- which is exactly the failure this track exists to
+     * remove. PS3BASE_WGPU=0 turns it off for an A/B. */
+    static const bool on = [] {
+        const char* v = std::getenv("PS3BASE_WGPU");
+        return !(v && v[0] == '0');
+    }();
+    return on;
+#else
     static const bool on = [] { return std::getenv("PS3BASE_WGPU") != nullptr; }();
     return on;
+#endif
 }
 
+#if defined(__EMSCRIPTEN__)
+/* The JS side owns the device and this function ADOPTS it.
+ *
+ * Measured (docs/explore/S1/RESULTS.md sec. 3): a wasm module can take a WebGPU
+ * device that JS created in its own realm, through the port's
+ * preinitializedWebGPUDevice. The native path below cannot: a JS promise does
+ * not resolve while the wasm occupies the thread, so the adapter callback never
+ * fires. That measurement is why R3 put the device in the page; what it missed
+ * is that adoption needs no request at all.
+ *
+ * The colour target is the CANVAS itself (make_targets below), so a drawn frame
+ * reaches the visible canvas rather than a private mirror.
+ */
+bool init(uint32_t width_hint, uint32_t height_hint) {
+    if (g.ready) return true;
+    g.device = s1_adopt_device();
+    if (!g.device) { std::fprintf(stderr, "wgpu: web: no adopted device\n"); return false; }
+    g.queue = wgpuDeviceGetQueue(g.device);
+    if (!g.queue) { std::fprintf(stderr, "wgpu: web: no queue\n"); return false; }
+    /* The canvas format is the browser's preferred one, not a constant: the same
+     * binary must work on a BGRA8 and an RGBA8 surface. A pipeline whose
+     * colourTarget.format disagrees with the canvas is rejected at draw time and
+     * the whole command buffer is dropped. */
+    const int fmt = s1_canvas_format();
+    if (fmt > 0) g.color_format = static_cast<WGPUTextureFormat>(fmt);
+    g.width = width_hint;
+    g.height = height_hint;
+    g.web = true;
+    g.ready = true;
+    std::fprintf(stderr, "wgpu: web: adopted device %p queue %p colourFormat %d\n",
+                 (void*)g.device, (void*)g.queue, int(g.color_format));
+    return true;
+}
+#else
 bool init(uint32_t width, uint32_t height) {
     if (g.ready) return true;
     if (!enabled()) return false;
@@ -1334,6 +1491,7 @@ bool init(uint32_t width, uint32_t height) {
     g.ready = true;
     return true;
 }
+#endif  // __EMSCRIPTEN__
 
 namespace {
 
@@ -2013,6 +2171,41 @@ bool readback(std::vector<uint8_t>& out, uint32_t& width, uint32_t& height) {
 }
 
 }  // namespace
+
+/* Submit the recorded frame and present it.
+ *
+ * On the web the colour view IS the canvas texture, so finishing the encoder and
+ * submitting is the whole of "present": the browser composites the canvas at the
+ * end of the task. The texture itself is re-imported at the next make_targets,
+ * because a canvas texture does not survive a presentation.
+ *
+ * Nothing is read back: a readback would stall the renderer on the GPU once per
+ * frame, and the capture harness reads the canvas through its own hook instead. */
+void end_frame() {
+    if (!g.ready) return;
+    end_pass();
+    if (!g.encoder) {
+        /* Nothing was recorded this frame (a present with no clear and no draw).
+         * Submitting an empty frame would still cost a command buffer and would
+         * re-clear the canvas to black, so it is skipped. */
+        return;
+    }
+    WGPUCommandBuffer cb = wgpuCommandEncoderFinish(g.encoder, nullptr);
+    wgpuCommandEncoderRelease(g.encoder);
+    g.encoder = nullptr;
+    if (!cb) return;
+    wgpuQueueSubmit(g.queue, 1, &cb);
+    wgpuCommandBufferRelease(cb);
+    release_frame_buffers();
+    /* The next frame writes into a new canvas texture; forcing color_view to null
+     * makes make_targets fetch it rather than reuse a view whose texture the
+     * canvas has already invalidated. */
+    if (g.web) {
+        if (g.color_view) { wgpuTextureViewRelease(g.color_view); }
+        g.color_view = nullptr;
+        g.color = nullptr;
+    }
+}
 
 bool capture_ppm(const std::string& path, uint32_t, uint32_t) {
     if (!g.ready) return false;

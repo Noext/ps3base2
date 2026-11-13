@@ -740,6 +740,22 @@ bool async_compile() {
 template <typename Entry>
 void wgpu_variant(ShaderStage stage, const std::string& glsl, Entry& e) {
     if (!wgpu::enabled() || !e.ok) return;
+#if defined(__EMSCRIPTEN__)
+    /* NO-OP in the browser, deliberately, and the reason is not a stub.
+     *
+     * This builds a SECOND SPIR-V variant (1.5 instead of 1.6) for wgpu-native.
+     * The browser has no SPIR-V front end at all: it takes WGSL, which
+     * wgsl_emit.cpp already produced at the program's call site and which
+     * travels to the backend as DrawInputs::vs_wgsl / fs_wgsl. So there is
+     * nothing to compile here, and shader_compiler.cpp -- which needs glslang, a
+     * host library with no wasm build -- is not linked.
+     *
+     * Without this branch the link fails on compile_glsl_wgpu, measured:
+     * "undefined symbol ... compile_glsl_wgpu" on the first S1 link. */
+    (void)stage; (void)glsl;
+    /* The WGSL for this program is already on the entry (e.wgsl), filled where the
+     * ucode was still live. */
+#else
     std::vector<uint32_t> w;
     std::string wlog;
     if (compile_glsl_wgpu(stage, glsl, w, wlog)) {
@@ -747,6 +763,7 @@ void wgpu_variant(ShaderStage stage, const std::string& glsl, Entry& e) {
     } else if (g_vp_failures++ < 20) {
         dump_failure("wgpu_fail", e.hash, glsl, wlog);
     }
+#endif
 }
 
 void finish_vp(VpEntry& e, const std::string& glsl) {
@@ -759,12 +776,21 @@ void finish_vp(VpEntry& e, const std::string& glsl) {
         wgpu_variant(ShaderStage::Vertex, e.wgpu_glsl.empty() ? glsl : e.wgpu_glsl, e);
     }
 #if defined(__EMSCRIPTEN__)
-    else if (g_vp_failures++ < 20) {
-        /* finish_vp runs on the compile worker, AFTER g_vp_canon has been replaced
-         * by the next program, so the WGSL emit happens at the CALL SITE in
-         * vertex_program() where the ucode is still live. Reaching here means that
-         * site already tried and the emitter refused, so this only reports it. */
-        dump_failure("vp_fail", e.hash, glsl, "no SPIR-V on the web path and the WGSL emit was refused");
+    /* THE WEB PATH IS DECIDED HERE, not at the call site.
+     *
+     * finish_vp runs on the compile worker and it ASSIGNS e.ok, so a WGSL emit
+     * performed at the call site in vertex_program() was overwritten by the next
+     * line: measured, every draw was skipped at rsx_renderer.cpp:3284 with
+     * "3284:82087" after 80 s and draws=0, even though the emit had produced a
+     * valid program. The decision that makes a program usable has to live where
+     * e.ok is set, which is this function.
+     *
+     * No glslang exists in the browser, so compile_glsl above always fails; the
+     * WGSL carried on the entry (filled where the ucode was still live) is the
+     * program. */
+    if (!e.ok && !e.wgsl.empty()) e.ok = true;
+    if (!e.ok && g_vp_failures++ < 20) {
+        dump_failure("vp_fail", e.hash, glsl, "no SPIR-V on the web path and no WGSL either");
     }
 #else
     else if (g_vp_failures++ < 20) dump_failure("vp_fail", e.hash, glsl, log);
@@ -782,11 +808,13 @@ void finish_fp(FpEntry& e, const std::string& glsl) {
         wgpu_variant(ShaderStage::Fragment, e.wgpu_glsl.empty() ? glsl : e.wgpu_glsl, e);
     }
 #if defined(__EMSCRIPTEN__)
-    else if (g_fp_failures++ < 20) {
-        /* The web build has no glslang. The WGSL form of this program is emitted at
-         * its CALL SITE in fragment_program(), where `read` and `key` are live;
-         * reaching here means that emit already refused it. */
-        dump_failure("fp_fail", e.hash, glsl, "no SPIR-V on the web path and the WGSL emit was refused");
+    /* Same decision, same reason as finish_vp: THIS function assigns e.ok, so the
+     * web path is decided here rather than at the call site. Measured before the
+     * change: every draw was skipped at rsx_renderer.cpp:3287 ("3287:14098" after
+     * 80 s) and draws stayed 0. */
+    if (!e.ok && !e.wgsl.empty()) e.ok = true;
+    if (!e.ok && g_fp_failures++ < 20) {
+        dump_failure("fp_fail", e.hash, glsl, "no SPIR-V on the web path and no WGSL either");
     }
 #else
     else if (g_fp_failures++ < 20) dump_failure("fp_fail", e.hash, glsl, log);
@@ -897,10 +925,30 @@ VpEntry* vertex_program() {
         g_compile_frame.deferred++;
         recent[start] = {g_vp_ucode_serial, &e};
         std::vector<uint32_t> canon(g_vp_canon, g_vp_canon + 544 * 4);
-        g_compile_pool.submit([&e, canon = std::move(canon), st = g_vp_canon_start] {
+#if defined(__EMSCRIPTEN__)
+        /* The WGSL emit MUST happen here, in the caller, for the same reason as in
+         * the synchronous path: the worker below cannot call emit_vertex_wgsl
+         * because g_vp_canon belongs to the caller's frame, and if the worker is
+         * what fills e.wgsl the draw() gate refuses the entry. The ucode copy is
+         * already made above, so only the emit needs the caller's state. */
+        std::string wgsl;
+        {
+            WgslShader w = emit_vertex_wgsl(g_vp_canon, g_vp_canon_start);
+            if (w.valid) wgsl = std::move(w.source);
+            else if (g_vp_failures++ < 20) dump_failure("vp_wgsl_fail", h, vp.glsl, "WGSL emitter refused this vertex program");
+        }
+#endif
+        g_compile_pool.submit([&e, canon = std::move(canon), st = g_vp_canon_start
+#if defined(__EMSCRIPTEN__)
+                               , wgsl = std::move(wgsl)
+#endif
+        ] {
             VertexProgramInfo vp = decompile_vertex_program(canon.data(), st);
             if (wgpu::enabled() && vp.valid) g_vp_wgpu_glsl = decompile_vertex_program_wgpu(canon.data(), st).glsl;
             e.inputs = vp.input_mask | 1u;
+#if defined(__EMSCRIPTEN__)
+            e.wgsl = wgsl;
+#endif
             if (vp.valid) finish_vp(e, vp.glsl);
             else e.ready.store(true, std::memory_order_release);
         });
@@ -918,27 +966,27 @@ VpEntry* vertex_program() {
      * decompiling a second time. */
     e.wgpu_glsl = g_vp_wgpu_glsl;
     g_vp_wgpu_glsl.clear();
+#if defined(__EMSCRIPTEN__)
+    /* THE WGSL EMIT RUNS BEFORE compile_entry, and the order is load-bearing.
+     *
+     * compile_entry hands the job to the compile worker when async_compile() is on
+     * (it is, by default), and that worker calls finish_vp, which ASSIGNS e.ok.
+     * Emitting afterwards meant finish_vp had already stored e.ok=false, so the
+     * draw() gate at line 3284 refused every draw: measured, draws=0 with
+     * skip=["3284:82087"] after 80 s while the emitter had in fact produced a
+     * program. Emitting first, and letting finish_vp honour e.wgsl, closes that.
+     *
+     * The canonical ucode and its start slot are live only here, which is why this
+     * is the site. Track H3 measured the emitter on 11/11 real Minecraft programs
+     * (valid in naga and in Chromium). */
+    if (vp.valid) {
+        WgslShader w = emit_vertex_wgsl(g_vp_canon, g_vp_canon_start);
+        if (w.valid) e.wgsl = w.source;
+        else if (g_vp_failures++ < 20) dump_failure("vp_wgsl_fail", h, vp.glsl, "WGSL emitter refused this vertex program");
+    }
+#endif
     if (vp.valid) {
         compile_entry(e, ShaderStage::Vertex, vp.glsl, finish_vp);
-#if defined(__EMSCRIPTEN__)
-        /* No glslang on the web, so compile_glsl fails and e.ok would stay false --
-         * and draw() bails on exactly that at rsx_renderer.cpp:3043. Measured: 72 775
-         * of 72 775 draws skipped there in a 35 s run, so nothing downstream of it
-         * ever ran.
-         *
-         * The program is emitted as WGSL instead (track H3's emitter: 11/11 real
-         * Minecraft programs valid in naga and in Chromium). The canonical ucode and
-         * its start slot are both live HERE, which is why this is the site. */
-        if (!e.ok) {
-            WgslShader w = emit_vertex_wgsl(g_vp_canon, g_vp_canon_start);
-            if (w.valid) {
-                e.wgsl = w.source;
-                e.ok = true;
-            } else if (g_vp_failures++ < 20) {
-                dump_failure("vp_wgsl_fail", h, vp.glsl, "WGSL emitter refused this vertex program");
-            }
-        }
-#endif
     } else {
         if (g_vp_failures++ < 20) dump_failure("vp_fail", h, vp.glsl, "");
         e.ready.store(true, std::memory_order_release);
@@ -1092,9 +1140,28 @@ FpEntry* fragment_program(uint32_t ea) {
          * tell which shader it is compiling, and a hash-gated override (or a
          * dump keyed on the hash) silently does nothing on this path. */
         key.hash = h;
-        g_compile_pool.submit([&e, code = std::move(code), key] {
+#if defined(__EMSCRIPTEN__)
+        /* The emit needs a reader over the SAME code the worker gets, and it must
+         * run before the worker stores e.ok (see finish_fp). Built here, from the
+         * copied words, so it cannot race the worker's own reader. */
+        std::string wgsl;
+        {
+            FpWordReader r0 = [&code](uint32_t i) { return i < code.size() ? code[i] : 0u; };
+            WgslShader w = emit_fragment_wgsl(r0, key);
+            if (w.valid) wgsl = std::move(w.source);
+            else if (g_fp_failures++ < 20) dump_failure("fp_wgsl_fail", h, "", "WGSL emitter refused this fragment program");
+        }
+#endif
+        g_compile_pool.submit([&e, code = std::move(code), key
+#if defined(__EMSCRIPTEN__)
+                               , wgsl = std::move(wgsl)
+#endif
+        ] {
             FpWordReader r = [&code](uint32_t i) { return i < code.size() ? code[i] : 0u; };
             FragmentProgramInfo fp = decompile_fragment_program(r, key);
+#if defined(__EMSCRIPTEN__)
+            e.wgsl = wgsl;
+#endif
             if (wgpu::enabled() && fp.valid) {
                 FragmentProgramInfo w = decompile_fragment_program_wgpu(r, key);
                 if (w.valid && w.texture_mask == fp.texture_mask && w.literal_slots.size() == fp.literal_slots.size()) e.wgpu_glsl = w.glsl;
@@ -1144,29 +1211,21 @@ FpEntry* fragment_program(uint32_t ea) {
             if (!e.wgpu_glsl.empty()) dump_failure("fpgpu", h, e.wgpu_glsl, "");
         }
     }
+#if defined(__EMSCRIPTEN__)
+    /* The WGSL emit runs BEFORE compile_entry, for the same measured reason as the
+     * vertex program: finish_fp assigns e.ok, so an emit performed afterwards was
+     * overwritten and every draw was refused at line 3287. The reader and the key
+     * are live only here -- the emitter needs the control bits, the per-unit
+     * dimension codes, the unnormalized/shadow masks and the MRT count, and the key
+     * is the draw's texture mask, i.e. the same key the Vulkan path uses. */
+    if (fp.valid) {
+        WgslShader w = emit_fragment_wgsl(read, key);
+        if (w.valid) e.wgsl = w.source;
+        else if (g_fp_failures++ < 20) dump_failure("fp_wgsl_fail", h, fp.glsl, "WGSL emitter refused this fragment program");
+    }
+#endif
     if (fp.valid) {
         compile_entry(e, ShaderStage::Fragment, fp.glsl, finish_fp);
-#if defined(__EMSCRIPTEN__)
-        /* The web build has no glslang, so compile_glsl fails and this entry would
-         * stay ok=false -- and draw() bails on exactly that at rsx_renderer.cpp:3043.
-         * Measured: 72 775 of 72 775 draws skipped on line 3043 in one 35 s run, so
-         * no draw ever reached the rest of the decode path.
-         *
-         * The fragment program is emitted as WGSL instead, HERE, where the reader and
-         * the key are both live: the H3 emitter needs the control bits, the per-unit
-         * dimension codes, the unnormalized/shadow masks and the MRT count, and the
-         * key is derived from the draw's texture mask, so it is the same key the Vulkan
-         * path would have used. */
-        if (!e.ok) {
-            WgslShader w = emit_fragment_wgsl(read, key);
-            if (w.valid) {
-                e.wgsl = w.source;
-                e.ok = true;
-            } else if (g_fp_failures++ < 20) {
-                dump_failure("fp_wgsl_fail", h, fp.glsl, "WGSL emitter refused this fragment program");
-            }
-        }
-#endif
     } else {
         if (g_fp_failures++ < 20) dump_failure("fp_fail", h, fp.glsl, "");
         e.ready.store(true, std::memory_order_release);
@@ -4006,6 +4065,12 @@ bool draw() {
         win.blend_enable = k.blend_mask & 1;
         /* Convert through the renderer own table first: k.* holds RSX codes, and
          * WebGPU factors/ops are numbered like the Vulkan ones, not like RSX. */
+#if defined(__EMSCRIPTEN__)
+        /* The browser has no SPIR-V front end; the WGSL emitted at each
+         * program's call site is the only shader source it can take. */
+        win.vs_wgsl = vp->wgsl;
+        win.fs_wgsl = fp->wgsl;
+#endif
         win.sfactor = uint32_t(wgpu::blend_for(int(blend_factor(k.sfactor & 0xFFFF))));
         win.dfactor = uint32_t(wgpu::blend_for(int(blend_factor(k.dfactor & 0xFFFF))));
         win.sfactor_alpha = uint32_t(wgpu::blend_for(int(blend_factor(k.sfactor >> 16))));
@@ -5017,6 +5082,13 @@ bool present(uint32_t buffer_id) {
             if (wgpu::capture_ppm(nm, 0, 0)) LOG_INFO("wgpu", "captured %s", nm);
             else LOG_WARN("wgpu", "capture failed at present %llu", static_cast<unsigned long long>(kw));
         }
+#if defined(__EMSCRIPTEN__)
+        /* The web target is the CANVAS, so the frame has to be submitted here or
+         * nothing reaches the screen. Measured before this call existed: the
+         * renderer flipped 1381 times and the canvas stayed black, because every
+         * frame's encoder was closed only by the capture path. */
+        wgpu::end_frame();
+#endif
     }
     end_pass();
     {
