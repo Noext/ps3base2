@@ -41,3 +41,36 @@ Captures: /tmp/p4drive/caps/s0026.png (scanning), s0040.png and s0056.png (menu)
 No crash in 100 s (log has zero "crash: signal"; 25 "rsx: flip" summary lines,
 last flip 1321+). The ALERT dialogue the task starts from is one step further, on
 Single Player -- see M2.
+### M2 -- the menu rows are reachable; "Single Player" leads to a loading screen and then the SIGSEGV
+
+Same binary and display. Schedule sent through PS3BASE_INPUT_CMD:
+
+    T+40.1 start 200 100      (title -> menu)
+    T+59.1 right 150 100
+    T+66.3 right 150 100
+    T+75.8 cross 150 100
+
+Screens (index, t s, px>8, mean luma), 1 s sampling:
+
+    22 23.6 369710 46.79  TITLE (stable)
+    37 41.3 372845 45.47  scanning banner ends, menu appears
+    66 75.8 373446 41.83  MAIN MENU, three rows
+    68 78.2 249229 30.13  transition (logo sliding out, "Single Player" only)
+    70 80.3 316092 11.07  LOADING screen: the RDR key art, horse, "Loading..." 
+    72 82.7 319109 11.17  same
+
+    exit -11 elapsed 83.9
+    E  82.889016 crash: signal 11 at 0x5d5d2934e2b6 (exe+0x17aa2b6)
+       fault 0x790d7c000010 (guest 0x10) thread main_thread 0x1000000
+    E  82.896245 crash:   #5 ppu::call_import(...)+0x877
+    E  82.897400 crash:   #6 f_0053338c(ppu::Context&, unsigned char*)+0x82
+    last flip 1441 at 82.13 s
+
+So the main menu, its three rows (Online Multiplayer / Downloadable Content /
+Single Player), and the Single Player loading screen are all reachable and
+captured. The ALERT dialogue is not reached in THIS ordering: the cross press at
+75.8 s is the one that starts the Single Player load, and the load dies in the
+known null+0x10 SIGSEGV inside f_0053338c.
+
+Captures: /tmp/p4drive/caps/s0066.png (menu), s0068.png (transition),
+s0070.png, s0072.png (loading).
