@@ -7,6 +7,7 @@
 #include "event.h"
 #include "gpu/presenter.h"
 #include "gpu/rsx.h"
+#include "gpu/rsx_ring.h"
 #include "runtime/trace.h"
 #include "ppu/ops.h"
 #include "runtime/reservation.h"
@@ -229,6 +230,12 @@ int64_t context_attribute(uint32_t package, uint64_t a3, uint64_t a4, uint64_t a
         uint32_t v = static_cast<uint32_t>(a4);
         uint32_t buffer = (v & 0x80000000u) ? (v & 0xF) : 0;
         if ((v & 0x80000000u) && buffer > 7) buffer = vm::read32(head_addr(head) + 0x14);
+        /* H4: the title's own presentation request, on the ring. This is the flip
+         * the game asks for (context attribute 0x102), not GCM_FLIP_COMMAND: this
+         * build's stream was measured to carry no 0xFEAC at all (the LLE libgcm
+         * drives flips through the context attribute), so a producer that only
+         * matched 0xFEAC would report flips=0 while the game flipped 1081 times. */
+        gpu::rsxring::on_method(0xE102u, buffer, 0);
         if (!gpu::rsx::present(buffer)) gpu::flip(buffer);
         if (hooks::fps_unlock_active()) {
             static int64_t next_flip = 0;
@@ -605,6 +612,10 @@ void fifo_thread() {
         if ((cmd & 0xE0000003) == 0x20000000 || (cmd & 0xE0000003) == 0x00000001) {
             uint32_t target = (cmd & 3) == 1 ? cmd & 0xFFFFFFFC : cmd & 0x1FFFFFFC;
             if (target == get) {
+                /* H4: the guest's idle marker is where a frame's stream ends in
+                 * this walker, so the last state batch is flushed here; the page
+                 * must not see state one frame late. */
+                gpu::rsxring::on_drain_end();
                 idle_wait(20000);
                 continue;
             }
@@ -666,9 +677,15 @@ void fifo_thread() {
             for (uint32_t i = 0; i < count;) {
                 uint32_t reg = method + i * 4;
                 if (uint32_t k = gpu::rsx::method_run(reg, args + i, count - i)) {
+                    /* H4: a grouped method reports the registers it consumed; the
+                     * ring producer needs them too, or the page would see a state
+                     * hole exactly where the transform constants are. */
+                    for (uint32_t j = 0; j < k; j++)
+                        gpu::rsxring::on_method(reg + j * 4, args[i + j], get);
                     i += k;
                     continue;
                 }
+                gpu::rsxring::on_method(reg, args[i], get);
                 execute(reg, args[i]);
                 i++;
             }
@@ -676,6 +693,12 @@ void fifo_thread() {
             for (uint32_t i = 0; i < count; i++) {
                 uint32_t reg = noninc ? method : method + i * 4;
                 uint32_t arg = reader.read(ea + 4 + i * 4);
+                /* H4: the seam is HERE, not only in execute(). The fast path below
+                 * writes the register file directly and never calls execute(), so a
+                 * seam inside execute() would miss every non-special method --
+                 * measured: 0 records for the whole menu. One call per method, with
+                 * the packet's own io offset. */
+                gpu::rsxring::on_method(reg, arg, get);
                 if (!full_dispatch && !special[reg >> 2]) {
                     regs[reg >> 2] = arg;
 #if defined(PS3BASE_GROUPED_PROBE) && PS3BASE_GROUPED_PROBE
@@ -791,6 +814,27 @@ uint32_t rsx_context_base() { return g_rsx.dma_control; }
 uint32_t rsx_control_block() { return g_rsx.dma_control ? g_rsx.dma_control + 0x40 : 0; }
 
 uint32_t rsx_io_to_ea(uint32_t io) { return io_to_ea(io); }
+
+/* The EA at which the guest's main-memory window begins in RSX io space.
+ *
+ * cellGcmMapEaIoAddress is called by libgcm with io == 0 for the command ring
+ * (measured: gcm_map_ea_io(buf, 0, 0x100000) in hle/cellGcmSys.cpp, and the ring
+ * boots at io 0x1000), so io page 0 IS the base of the main-memory window. A
+ * vertex-array offset is expressed in that same window: measured, an array offset
+ * of io 0x01480000 with no io-table entry, which is main memory at 0x40100000 +
+ * 0x01480000. Returning the window base lets a consumer recover that EA when the
+ * table itself has no page for it: this build's table only ever holds the pages
+ * the guest explicitly mapped, and it never maps its vertex buffers. */
+uint32_t rsx_io_base() {
+    const uint32_t page0 = g_rsx.io_table[0];
+    if (page0) return page0 << 20;
+    /* No page-0 mapping: derive it from the lowest mapped page instead, so the
+     * answer stays the window base rather than zero. */
+    for (uint32_t p = 1; p < 512; p++) {
+        if (g_rsx.io_table[p]) return (g_rsx.io_table[p] << 20) - (p << 20);
+    }
+    return 0;
+}
 
 uint64_t rsx_flip_count() { return std::atomic_ref<uint64_t>(g_rsx.flips).load(std::memory_order_relaxed); }
 
@@ -979,6 +1023,12 @@ LV2_SYSCALL(670, sys_rsx_context_allocate) {
         std::thread(vblank_thread).detach();
 #endif
     }
+    /* H4: the LLE path is the command processor in this build (the HLE cellGcmSys
+     * body is not reached: measured context at 0x50100000 with the driver tag, not
+     * "(hle init)"). Bind the ring producer's hooks here, where the io table and the
+     * guest map are both live, so the walker's on_method() calls can resolve
+     * addresses. */
+    gpu::rsxring::install_runtime_hooks();
     LOG_INFO("rsx", "context at 0x%08x (driver 0x%08x reports 0x%08x queue 0x%x)", area, g_rsx.driver_info, g_rsx.reports, g_rsx.queue_id);
     return CELL_OK;
 }

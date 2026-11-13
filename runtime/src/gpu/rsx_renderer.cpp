@@ -36,6 +36,9 @@
 #include "texture_decode.h"
 #include "vk_context.h"
 #include "vp_decompiler.h"
+#if defined(__EMSCRIPTEN__)
+#include "runtime/wgsl_emit.h"
+#endif
 
 #include <algorithm>
 #include <array>
@@ -246,6 +249,9 @@ struct VpEntry {
     uint64_t hash = 0;
     VkShaderModule module = VK_NULL_HANDLE;
     uint32_t inputs = 0;
+    /* The WGSL this program was emitted as on the web path (the H3 emitter).
+     * Empty on a native build, which draws from the SPIR-V module above. */
+    std::string wgsl;
 };
 
 struct FpEntry {
@@ -253,6 +259,7 @@ struct FpEntry {
     bool ok = false;
     uint64_t hash = 0;
     VkShaderModule module = VK_NULL_HANDLE;
+    std::string wgsl;
     std::vector<uint32_t> literal_slots;
     uint32_t start_slot = 0;
     uint32_t textures = 0;
@@ -687,7 +694,15 @@ void finish_vp(VpEntry& e, const std::string& glsl) {
     std::string log;
     e.ok = compile_glsl(ShaderStage::Vertex, glsl, spirv, log);
     if (e.ok) e.module = make_module(spirv);
-    else if (g_vp_failures++ < 20) dump_failure("vp_fail", e.hash, glsl, log);
+#if defined(__EMSCRIPTEN__)
+    else if (g_vp_failures++ < 20) {
+        /* finish_vp runs on the compile worker, AFTER g_vp_canon has been replaced
+         * by the next program, so the WGSL emit happens at the CALL SITE in
+         * vertex_program() where the ucode is still live. Reaching here means that
+         * site already tried and the emitter refused, so this only reports it. */
+        dump_failure("vp_fail", e.hash, glsl, "no SPIR-V on the web path and the WGSL emit was refused");
+    }
+#endif
     e.ready.store(true, std::memory_order_release);
 }
 
@@ -696,7 +711,14 @@ void finish_fp(FpEntry& e, const std::string& glsl) {
     std::string log;
     e.ok = compile_glsl(ShaderStage::Fragment, glsl, spirv, log);
     if (e.ok) e.module = make_module(spirv);
-    else if (g_fp_failures++ < 20) dump_failure("fp_fail", e.hash, glsl, log);
+#if defined(__EMSCRIPTEN__)
+    else if (g_fp_failures++ < 20) {
+        /* The web build has no glslang. The WGSL form of this program is emitted at
+         * its CALL SITE in fragment_program(), where `read` and `key` are live;
+         * reaching here means that emit already refused it. */
+        dump_failure("fp_fail", e.hash, glsl, "no SPIR-V on the web path and the WGSL emit was refused");
+    }
+#endif
     e.ready.store(true, std::memory_order_release);
 }
 
@@ -806,6 +828,25 @@ VpEntry* vertex_program() {
     e.inputs = vp.input_mask | 1u;
     if (vp.valid) {
         compile_entry(e, ShaderStage::Vertex, vp.glsl, finish_vp);
+#if defined(__EMSCRIPTEN__)
+        /* No glslang on the web, so compile_glsl fails and e.ok would stay false --
+         * and draw() bails on exactly that at rsx_renderer.cpp:3043. Measured: 72 775
+         * of 72 775 draws skipped there in a 35 s run, so nothing downstream of it
+         * ever ran.
+         *
+         * The program is emitted as WGSL instead (track H3's emitter: 11/11 real
+         * Minecraft programs valid in naga and in Chromium). The canonical ucode and
+         * its start slot are both live HERE, which is why this is the site. */
+        if (!e.ok) {
+            WgslShader w = emit_vertex_wgsl(g_vp_canon, g_vp_canon_start);
+            if (w.valid) {
+                e.wgsl = w.source;
+                e.ok = true;
+            } else if (g_vp_failures++ < 20) {
+                dump_failure("vp_wgsl_fail", h, vp.glsl, "WGSL emitter refused this vertex program");
+            }
+        }
+#endif
     } else {
         if (g_vp_failures++ < 20) dump_failure("vp_fail", h, vp.glsl, "");
         e.ready.store(true, std::memory_order_release);
@@ -988,6 +1029,27 @@ FpEntry* fragment_program(uint32_t ea) {
     }
     if (fp.valid) {
         compile_entry(e, ShaderStage::Fragment, fp.glsl, finish_fp);
+#if defined(__EMSCRIPTEN__)
+        /* The web build has no glslang, so compile_glsl fails and this entry would
+         * stay ok=false -- and draw() bails on exactly that at rsx_renderer.cpp:3043.
+         * Measured: 72 775 of 72 775 draws skipped on line 3043 in one 35 s run, so
+         * no draw ever reached the rest of the decode path.
+         *
+         * The fragment program is emitted as WGSL instead, HERE, where the reader and
+         * the key are both live: the H3 emitter needs the control bits, the per-unit
+         * dimension codes, the unnormalized/shadow masks and the MRT count, and the
+         * key is derived from the draw's texture mask, so it is the same key the Vulkan
+         * path would have used. */
+        if (!e.ok) {
+            WgslShader w = emit_fragment_wgsl(read, key);
+            if (w.valid) {
+                e.wgsl = w.source;
+                e.ok = true;
+            } else if (g_fp_failures++ < 20) {
+                dump_failure("fp_wgsl_fail", h, fp.glsl, "WGSL emitter refused this fragment program");
+            }
+        }
+#endif
     } else {
         if (g_fp_failures++ < 20) dump_failure("fp_fail", h, fp.glsl, "");
         e.ready.store(true, std::memory_order_release);
@@ -2981,6 +3043,46 @@ bool skip(int line) {
     return false;
 }
 
+
+uint32_t r3_n_method = 0, r3_n_begin = 0, r3_n_end = 0, r3_n_enabled_false = 0;
+
+#if defined(__EMSCRIPTEN__)
+/* R3: the renderer's own diagnostics, reachable from the page.
+ *
+ * Why this exists: present() prints the per-line skip reasons, but only at
+ * `presents % 600 == 0`, and a run that never gets 600 presents says nothing at all
+ * about why nothing was drawn. Measured: 961 flips and zero diagnostic lines. These
+ * three exports make the same counters readable at any instant, so "nothing was
+ * drawn" is never confused with "nothing was measured".
+ */
+extern "C" {
+uint32_t r3_draws(void) { return uint32_t(g_stats.draws); }
+uint32_t r3_n_method_get(void) { return r3_n_method; }
+uint32_t r3_n_begin_get(void) { return r3_n_begin; }
+uint32_t r3_n_end_get(void) { return r3_n_end; }
+uint32_t r3_n_enabled_false_get(void) { return r3_n_enabled_false; }
+uint32_t r3_skipped(void) { return uint32_t(g_stats.skipped); }
+/* "line:count line:count ..." for every line draw() bailed out at.
+ *
+ * A STATIC buffer with a pointer-returning accessor rather than a caller-supplied
+ * one: the page has no malloc export in this build, and adding one just to read a
+ * diagnostic string is a worse trade than 512 bytes of static storage. */
+static char r3_skip_buf[512];
+const char* r3_skip_reasons(void) {
+    int n = 0;
+    r3_skip_buf[0] = 0;
+    for (auto [l, c] : g_skip_lines) {
+        if (n >= int(sizeof r3_skip_buf) - 32) break;
+        n += std::snprintf(r3_skip_buf + n, sizeof r3_skip_buf - size_t(n),
+                           "%s%d:%llu", n ? " " : "", l, (unsigned long long)c);
+    }
+    return r3_skip_buf;
+}
+/* Totals, so "the map is empty" is distinguishable from "the map could not be read". */
+uint32_t r3_skip_line_count(void) { return uint32_t(g_skip_lines.size()); }
+}
+#endif
+
 bool g_mv_done = false;
 std::string g_mv_hudless;
 void mv_draw(const std::vector<Surface*>& colors, uint32_t w, uint32_t h, uint64_t fp_hash, uint64_t vp_hash, uint32_t verts);
@@ -4357,6 +4459,24 @@ void method(uint32_t reg, uint32_t arg) {
         if (handled) return;
     }
     if (immediate_method(reg, arg)) return;
+    /* R3 diagnostic: is this function reached at all, and is enabled() true?
+     * A zero here with flips advancing means the FIFO never dispatches to the
+     * renderer, not that the draw failed. */
+    {
+        static std::atomic<uint32_t> n_method{0}, n_begin{0}, n_end{0};
+        static std::atomic<uint32_t> n_enabled_false{0};
+        const uint32_t k = n_method.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (reg == BEGIN_END) {
+            if (arg & 0xFF) n_begin.fetch_add(1, std::memory_order_relaxed);
+            else n_end.fetch_add(1, std::memory_order_relaxed);
+        }
+        if (!enabled() && n_enabled_false.fetch_add(1, std::memory_order_relaxed) < 3)
+            LOG_INFO("rsxdiag", "method() reached with enabled()=false: reg 0x%04x arg 0x%08x", reg, arg);
+        r3_n_method = k;
+        r3_n_begin = n_begin.load(std::memory_order_relaxed);
+        r3_n_end = n_end.load(std::memory_order_relaxed);
+        r3_n_enabled_false = n_enabled_false.load(std::memory_order_relaxed);
+    }
     if (!enabled()) return;
     switch (reg) {
     case CLEAR_SURFACE: clear(arg); break;
