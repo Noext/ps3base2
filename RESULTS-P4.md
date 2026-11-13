@@ -120,3 +120,22 @@ waits at the prompt for as long as it is left alone.
 Captures: /tmp/p4drive_loopA/caps/0048-MENU.png (misclassified ALERT --
 the classifier matched "Single Player" in the same band) up to 0075-MENU.png.
 Evidence copied to docs/evidence/rdr-p4-alert-live.png.
+### M4 -- the ALERT's three buttons, read from the live capture
+
+Enlarged crop of /tmp/p4drive_loopA/caps/0050-MENU.png at (780,520,500x200):
+
+    Continue Without Saving  [SQUARE  pink square]
+    Create A New Save Game   [CROSS   blue X]
+    Retry                    [CIRCLE  red ring]
+
+The glyphs are the PS3 pad symbols, so the presses are square for the first row,
+cross for the second and circle for the third -- NOT the usual cross/OK on row 1.
+Reading this from the pixels matters: pressing cross first would pick "Create A
+New Save Game" and skip the step the task asks for first.
+
+Also noted, and fixed in the driver: the first classifier called this screen
+MENU, because the OCR band at the bottom still reads the main menu's rows through
+the ALERT's transparent background. The state machine now checks the CENTRE band
+for the ALERT sentence before looking at the bottom band for menu rows.
+
+Cropped proof: docs/evidence/rdr-p4-alert-options.png.
