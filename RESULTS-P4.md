@@ -194,3 +194,21 @@ sample, no guest activity) while /tmp/out-V/regress-rdr-current.out showed
 another agent's regress.sh at 10:19 running its rdr arms. The same run with
 the binary hard-linked to a non-matching name completed all 66.8 s. A driver
 that shares this machine can be killed by any concurrent regress run.
+### M6 -- the sequence reproduces on a second run (A/B not needed: same script, same VFS)
+
+Same command, run again 2 minutes later, machine load 30 (three other agents'
+regress arms were running):
+
+     42.57 STATE TITLE     Press START
+     45.00 STATE SCANNING  Scanning for installed downloadable content... please wait.
+     48.89 STATE MENU      Online Multiplayer Downloadable Content Single Player
+     72.23 STATE ALERT     A Red Dead Redemption single player save could not be found. What would you like to do?
+     72.23 -> square (alert action 1)
+     73.32 -> cross (alert action 2)
+     79.78 STATE OTHER     Autosave has been disabled. You may enable autosave in the options menu.
+     88.40 STATE LOADING   Loading...
+     exit -11 elapsed 88.7
+
+The same four screens in the same order, with 15 s of extra start-up because
+the machine was three times as loaded. The start time moved; the sequence did
+not. Captures: /tmp/p4drive_loopD/caps/OTHER-*.png, LOADING-*.png.
