@@ -2104,10 +2104,17 @@ void draw(const DrawInputs& in) {
     if (!no_resize && in.target_width && in.target_height && (in.target_width != g.width || in.target_height != g.height)) {
         end_pass();
         if (g.encoder) {
-            /* An open encoder holds references to the old views. Finish and
-             * submit it before swapping the targets, or the resize invalidates a
-             * command buffer that has not run yet. */
-            wgpuQueueSubmit(g.queue, 0, nullptr);
+            /* An open encoder holds references to the old views. FINISH AND SUBMIT
+             * it before swapping the targets -- the previous code submitted an EMPTY
+             * command list (wgpuQueueSubmit(g.queue, 0, nullptr)) and then released the
+             * encoder, which DISCARDED every draw recorded in it. Measured: 19 pipelines
+             * built, draws issued with real counts, 0 GPU errors, and a canvas of one
+             * colour, because the frame was thrown away at every resize. */
+            WGPUCommandBuffer old_cb = wgpuCommandEncoderFinish(g.encoder, nullptr);
+            if (old_cb) {
+                wgpuQueueSubmit(g.queue, 1, &old_cb);
+                wgpuCommandBufferRelease(old_cb);
+            }
             wgpuCommandEncoderRelease(g.encoder);
             g.encoder = nullptr;
             release_frame_buffers();
