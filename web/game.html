@@ -261,7 +261,10 @@ async function main() {
           const id = mod._t1_texture_id() >>> 0;
           if (id) {
             try {
-              const src = mod._t1_get_js_texture ? mod._t1_get_js_texture(id) : null;
+              /* The C++ resolves the texture to its JS object through the bridge;
+               * the object is left in Module.t1JsTexture for us to read. */
+              mod._t1_resolve_texture();
+              const src = mod.t1JsTexture || null;
               const dst = canvasCtx.getCurrentTexture();
               if (src && dst && src.width === dst.width && src.height === dst.height && src.format === dst.format) {
                 const enc = device.createCommandEncoder();

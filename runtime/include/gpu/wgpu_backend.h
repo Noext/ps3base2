@@ -232,6 +232,7 @@ void shutdown();
 /* T1 -- the bisection mode and the per-frame validation error count. */
 void set_debug_mode(uint32_t mode);
 uint32_t texture_id();
+uint32_t resolve_texture_for_page();
 uint64_t frames_done();
 uint32_t frame_error_count();
 

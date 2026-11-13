@@ -60,6 +60,10 @@
  * ring's io hook produced "RuntimeError: unreachable" on the first texture.) */
 #if defined(__EMSCRIPTEN__)
 extern "C" {
+/* The bridge entry that turns a WGPUTexture pointer into its JS object. Declared
+ * here so the wasm IMPORTS it: a library function nothing imports is tree-shaken
+ * out of game.js (measured twice on this track). */
+void* t1_get_js_texture(uint32_t id);
 /* Configure the canvas for the adopted device and size, once per size change. */
 int s1_canvas_configure(uint32_t w, uint32_t h);
 /* The current frame's canvas texture, imported as a WGPUTexture. */
@@ -2621,6 +2625,12 @@ void end_frame() {
         wgpuQueueSubmit(g.queue, 1, &cb);
         wgpuCommandBufferRelease(cb);
         g_frames_done.fetch_add(1, std::memory_order_release);
+        /* Resolve the texture to its JS object HERE, on the frame path, so the call
+         * is reachable and the wasm actually imports the bridge entry. A declaration
+         * alone does not create an import: Emscripten tree-shakes a library function
+         * nothing calls, which is why t1_get_js_texture was absent from game.js on the
+         * first attempt. */
+        resolve_texture_for_page();
         static std::atomic<uint32_t> np{0};
         if (np.fetch_add(1) < 200)
             std::fprintf(stderr, "wgpu: frame %u done, texture id 0x%08x\n",
@@ -2697,6 +2707,16 @@ bool capture_ppm(const std::string& path, uint32_t, uint32_t) {
 }
 
 /* T1 -- the bisection mode and the per-frame validation error count. */
+/* Resolve the exported texture to its JS object through the bridge, so the page can
+ * copy it. Returns 1 on success; the object is left in Module.t1JsTexture. This is
+ * what makes the wasm IMPORT the bridge entry -- a library function nothing calls is
+ * tree-shaken out of game.js. */
+uint32_t resolve_texture_for_page() {
+    const uint32_t id = g_exported_texture_id.load(std::memory_order_acquire);
+    if (!id) return 0;
+    return t1_get_js_texture(id) ? 1u : 0u;
+}
+
 uint32_t texture_id() { return g_exported_texture_id.load(std::memory_order_acquire); }
 uint64_t frames_done() { return g_frames_done.load(std::memory_order_acquire); }
 

@@ -32,12 +32,20 @@ addToLibrary({
     try {
       if (typeof WebGPU === 'undefined' || !WebGPU.getJsObject) {
         if (!Module.t1GetErr) { Module.t1GetErr = 1; console.error('t1get: WebGPU.getJsObject unavailable'); }
-        return null;
+        return 0;
       }
-      return WebGPU.getJsObject(id >>> 0) || null;
+      var obj = WebGPU.getJsObject(id >>> 0);
+      if (!obj) {
+        if (!Module.t1GetNull) { Module.t1GetNull = 1;
+          console.error('t1get: getJsObject(' + (id >>> 0) + ') returned nothing'); }
+        return 0;
+      }
+      /* Hand the object to the page through a table it can read. */
+      Module.t1JsTexture = obj;
+      return 1;
     } catch (e) {
       if (!Module.t1GetThrew) { Module.t1GetThrew = 1; console.error('t1get: ' + e.message); }
-      return null;
+      return 0;
     }
   },
   t1_get_js_texture__proxy: 'sync',

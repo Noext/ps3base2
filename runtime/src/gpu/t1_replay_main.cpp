@@ -108,6 +108,9 @@ uint32_t t1_replay_adopt(uint32_t width, uint32_t height) {
  * canvas itself -- no import, no internal allocator, no second object table. */
 uint32_t t1_texture_id(void) { return gpu::wgpu::texture_id(); }
 
+/* Resolve the exported texture to its JS object (left in Module.t1JsTexture). */
+uint32_t t1_resolve_texture(void) { return gpu::wgpu::resolve_texture_for_page(); }
+
 /* Frames the C++ has finished and submitted. The page presents only when this
  * advances, so it never copies a half-written texture. */
 uint32_t t1_frames_done(void) { return uint32_t(gpu::wgpu::frames_done()); }
