@@ -4,5 +4,6 @@
   "branch": "explore/q1",
   "worktree": "/root/Dev/wt-Q1",
   "task": "lift gap at rdr+0xad5618",
-  "updated": "2026-11-13T12:26:00Z"
+  "progress": "M1-M5 static analysis done: jump table at 0x013e5c8c, 17 entries, 0xae5818 is index 13; both detectors return None (jump_table wants a bound compare; table_dispatch_bctr picks the wrong setter)",
+  "updated": "2026-11-13T12:41:49.844Z"
 }
