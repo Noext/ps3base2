@@ -11,3 +11,69 @@ ulimit -s unlimited, build via tools/build_slot.sh cmake --build <dir> -j 8.
 ## Log
 
 (pending: setup)
+### M0 (12:27Z) -- BASELINE: drive_rdr.py at main HEAD d2269e5 already passes WARNING, by accident
+
+Command (verbatim):
+
+    cd /root/Dev/wt-Q3 && ulimit -s unlimited
+    GOWA_FLASH_DIR=/root/Dev/devflash-out/dev_flash PS3BASE_RUN_ROOT=/root/Dev/ps3base2 \
+      python3 tools/drive_rdr.py /root/Dev/ps3base2/build-rdr/ps3base :146 \
+        /root/Dev/p4work/vfs-clean /tmp/q3-base 200
+
+Display :146 = Xvfb 1280x720x24 -ac +extension GLX +render -noreset (started for this task).
+Binary: /root/Dev/ps3base2/build-rdr/ps3base, 978616328 bytes, mtime 12:21, and
+`cmake --build build-rdr --target ps3base` says "ninja: no work to do" -- it is the
+main-HEAD source. (The full `build-rdr` target list fails on `spu_bench` with
+`fatal error: 'aux_gen.h' file not found`; that is pre-existing and not the RDR binary.)
+
+Driver journal, verbatim from validation.json:
+
+    0.00   OTHER
+    43.64  TITLE     Press START
+    43.64  -> start
+    46.41  OTHER
+    49.98  MENU      Online Multiplayer Downloadable Content 2 Single Player
+    49.98  -> right,right,cross (Single Player)
+    63.11  OTHER
+    70.80  ALERT     A Red Dead Redemption single player save could not be found. What would you like to do?
+    70.80  -> square (alert action 1 of 2)
+    72.26  -> cross (alert action 2 of 2)
+    75.83  WARNING   Autosave has been disabled. You may enable autosave in the options menu.
+    75.83  WARNING: WARNING
+    80.94  LOADING   0 S6) Loading...
+    89.55  OTHER     ... EXODUS IN AMERICA
+    exit -6 elapsed 112.0
+    states {"OTHER": 54, "TITLE": 2, "MENU": 6, "ALERT": 4, "WARNING": 4, "LOADING": 4}
+
+Guest log, verbatim:
+
+    I 109.997797 rsx: flip 1741 (buffer 0) worst 87.5 ms, >50ms 4, >100ms 0
+    I 111.086103 cellFiber: HLE CreateFiber #586 entry=0x01385418 ...
+    I 111.095626 cellFiber: HLE RunFibers(0x0165d580) ran 3459 fibre switch(es) -> CELL_OK
+    F 111.368153 ppu: unknown indirect target 0x00ae5818 -- rdr+0xad5618 (no lifted code)
+      (lr=0x00adc030, thread 0x1000000) r3=0x1 r4=0xae5818 r9=0x73a81338 r31=0x73923fe4 ctr=0xae5818
+
+So the run DOES get past the WARNING, and the screen after it is not a menu: it is the
+RDR key-art LOADING screen, then the chapter card **EXODUS IN AMERICA** at 89.55 s, and
+the known 0x00ae5818 fault at 111.37 s. Captures: /tmp/q3-base/caps/WARNING-0058.png,
+LOADING-0062.png, OTHER-0066.png (EXODUS IN AMERICA).
+
+BUT the pass is accidental and it is the bug the task is about. The driver's plan is
+[\"square\", \"cross\"] and it consumes one plan entry per ALERT sample. The ALERT was
+sampled TWICE (n=54 and n=55, 1.46 s apart), so BOTH plan entries were spent ON THE
+ALERT: square at 70.80 and cross at 72.26, while the ALERT was still up. The WARNING
+then appeared at 75.83 with the plan already empty, and the driver has no WARNING action
+at all (its `act()` WARNING branch only prints). The WARNING was dismissed by the
+*second* press, which was meant for the ALERT.
+
+That means:
+  - the second branch (Cross = Create A New Save Game) was never actually driven --
+    the cross went to the ALERT's row 2 only because the ALERT was sampled twice;
+  - whether WARNING is dismissed at all depends on the ALERT happening to be sampled
+    twice, which is a timing accident, not a control loop;
+  - a run in which the ALERT is sampled once leaves the driver stuck on the WARNING
+    with an empty plan.
+
+The fix is therefore in the driver, not the runtime: the plan must be indexed by the
+STATE being acted on, and WARNING must have its own action.
+
