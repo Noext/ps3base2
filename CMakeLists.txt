@@ -219,6 +219,12 @@ ${PS3BASE_EXPORT_GATE_OUT}
 "
             "from the image table. Do not silence the gate.")
     endif()
+    # Re-run the gate when the table or the gate itself changes, not only on a
+    # fresh configure: a re-lift writes table.cpp in place, and a gate that only
+    # runs once is a gate that is stale exactly when it matters.
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+                 "${PS3BASE_GENERATED_DIR}/table.cpp"
+                 "${CMAKE_SOURCE_DIR}/tools/check_export_coverage.py")
     message(STATUS "Export coverage gate: PASS")
 endif()
 

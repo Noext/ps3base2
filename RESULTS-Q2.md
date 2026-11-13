@@ -200,3 +200,88 @@ e.opd = 0x3600e930 -> code = 0x360033dc -> `lookup(0x360033dc)` = f_360033dc.
 The lifted Yield runs. The docs' own crash backtrace says the same: RESULTS-P1.md
 frame #2 is `f_360033dc_body+0x1bc (= cellFiberPpuYield, 0x3600345c)`.
 
+
+## Measurement 4 -- what `tools/check_lle_exports.py` actually checked, and why 47/47 was false
+
+### It checked the wrong denominator
+
+libfiber's own libent chain declares 50 function exports (47 named + 3 unnamed
+PRX-entry stubs), and its .opd names 87 code addresses. The tool reported
+`cellFiber 47 exports`. It counted the named function exports only:
+
+```
+function exports: 50 total = 47 named + 3 unnamed
+  unnamed: ['BC9A0086->0x36005c78', 'AB779874->0x36005c80', '3AB9A95E->0x36005c80']
+  of those, lifted: 50 of 50
+
+OPD-named code addresses: 87
+  of which are function exports: 49
+  of which are NOT exports (internal, .opd-only): 38
+  of the internal ones, lifted: 38 of 38
+```
+
+So 47/47 was true and useless: it was 47 of the 87 functions the module's own
+descriptor table names, and it never looked at the other 40. (All 87 are in fact
+lifted -- see Measurement 3 -- but the tool could not have told you that.)
+
+### The four holes, each measured with an A/B on a corrupted input
+
+`tools/check_lle_exports.py` vs `tools/check_export_coverage.py`, same machine,
+same minute, each case a single deliberate corruption:
+
+| case | corruption | old tool | new gate |
+|---|---|---|---|
+| D | the unnamed PRX-entry export row removed from `exports[]` | **PASS** | FAIL |
+| G | the Yield descriptor's code word set to 0x00010001 (outside every image text) | **PASS** | FAIL |
+| A | `{0x360033dc, f_360033dc}` removed from `functions[]` | FAIL | FAIL |
+| B | Yield's table opd replaced by 0 | FAIL | FAIL |
+| C | Yield's table opd moved to another .opd slot | FAIL | FAIL |
+| E | Yield's table opd pointed at a data address | FAIL | FAIL |
+
+Case G is the decisive one, and it is the exact shape of the RDR failure. The
+old tool's rule was:
+
+```python
+in_text = any(lo <= code < hi for lo, hi in ranges)
+if in_text and code not in funcs:   # <- a code word OUTSIDE text is never checked
+```
+
+so a descriptor whose first word is `0x00010001` -- a data value, or zero, or
+anything not inside an image's text -- was classified 'this export is data' and
+counted as `ok`. The runtime does not classify:
+
+```
+runtime/src/ppu_runtime.cpp:845-847
+  const image::ExportEntry& e = image::exports[st];
+  uint32_t code = ld32(base, e.opd);
+  ...
+  call_indirect(ctx, base, code);
+```
+
+It calls `ld32(e.opd)` unconditionally. A descriptor pointing at 0x00010001 is a
+call to 0x00010001. Measured:
+
+```
+G: the Yield descriptor code word set to 0x00010001 (outside every image text)
+  OLD check_lle_exports.py exit 0
+     cellFiber       47 exports: 47 ok, 0 missing, 0 zero-opd, 0 mismatched, 0 no-code
+     PASS
+  NEW check_export_coverage.py exit 1
+     libfiber       CODE-NOT-IN-TEXT   nid=0C44F441   module=cellFiber      opd=0x3600e930 code=0x00010001
+```
+
+Case D is the second hole: the tool's regex was
+`\{"([^"]+)", ...` -- one-or-more characters for the module name -- so it never
+parsed an unnamed export row at all, and then skipped the rows it could not have
+parsed with `if not m["module"]: continue`. Deleting the PRX entry export from
+the table was invisible to it.
+
+### And the 954 figure
+
+RESULTS.md:689 records `total functions 77026 imports 494 exports 954` for the
+12-module recipe. The 12 module lines the checker printed sum to 1196, not 954,
+because the checker's line counts every entry of each module it was given
+(including the 22+63+137+... named ones) while 954 was the table's total export
+row count for a different tree. The two numbers were never the same quantity and
+nothing compared them.
+
