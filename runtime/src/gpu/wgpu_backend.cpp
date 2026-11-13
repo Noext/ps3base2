@@ -34,6 +34,10 @@
 #endif
 
 #include "runtime/log.h"
+
+#if defined(__EMSCRIPTEN__)
+#include <emscripten/threading.h>
+#endif
 #include "ring.h"   /* gpu::frame_serial(): the per-frame counter the canvas re-import keys on */
 
 #include <algorithm>
@@ -437,6 +441,16 @@ void begin_pass() {
     da.depthStoreOp = WGPUStoreOp_Store;
     da.stencilLoadOp = WGPULoadOp_Load;
     da.stencilStoreOp = WGPUStoreOp_Store;
+    /* WebGPU validates depthClearValue EVEN WHEN depthLoadOp is Load, and
+     * WGPU_RENDER_PASS_DEPTH_STENCIL_ATTACHMENT_INIT leaves it zero-initialised --
+     * which is a valid 0.0f, but the struct is then copied through the port's
+     * descriptor reader and a field never written can arrive non-finite. Measured:
+     * "Failed to read the 'depthClearValue' property ... The provided float value is
+     * non-finite", and the whole command buffer was dropped: no frame was ever
+     * submitted, so the canvas stayed black with draws_ready climbing. Set it
+     * explicitly on every path. */
+    da.depthClearValue = 1.0f;
+    da.stencilClearValue = 0;
     WGPURenderPassDescriptor rp = WGPU_RENDER_PASS_DESCRIPTOR_INIT;
     rp.colorAttachmentCount = 1;
     rp.colorAttachments = &ca;
@@ -1327,6 +1341,73 @@ void report_at_exit() {
 }
 }  // namespace
 
+/* T1 -- THE THREAD GUARD, in the backend itself.
+ *
+ * The rule this build is built on: NO WebGPU call from a pthread. Measured on this
+ * tree, with the renderer issuing wgpu::draw from the RSX pthread, the FIFO froze
+ * at n_method=378 (busy 99.8%, methods 0.1%); with those calls silenced the same
+ * build reached 42 379 draws and 503 327 methods (93.4%, 119k/s). Every entry of
+ * the emdawnwebgpu port is __proxy:'sync', so each call from a pthread is a
+ * blocking round trip to the realm that owns the device.
+ *
+ * The guard lives HERE rather than at each call site in rsx_renderer.cpp for two
+ * reasons: there is exactly one place to audit, and a call site added later cannot
+ * forget it. The owner thread is recorded by the page when it adopts the device;
+ * every entry point that would touch the device checks it first and REFUSES, with
+ * a counter, when it arrives on any other thread.
+ */
+std::atomic<uint32_t> g_owner_thread{0};
+std::atomic<uint64_t> g_off_thread_refused{0};
+
+/* T1: the deferred capture buffer. Filled at the frame boundary (end_frame), read
+ * by the page through capture_rgba(). Declared here because end_frame writes it. */
+std::vector<uint8_t> g_capture_rgba;
+std::atomic<uint32_t> g_capture_want{0};
+std::atomic<uint32_t> g_capture_w{0};
+std::atomic<uint32_t> g_capture_h{0};
+WGPUTexture g_capture_tex = nullptr;
+uint32_t g_capture_tex_w = 0;
+uint32_t g_capture_tex_h = 0;
+std::atomic<uint32_t> g_capture_ready{0};
+
+uint32_t backend_thread_id() {
+#if defined(__EMSCRIPTEN__)
+    return static_cast<uint32_t>(emscripten_main_browser_thread_id());
+#else
+    return 0;
+#endif
+}
+
+/* Called by the replay on the page's thread, once, when it adopts the device. */
+void set_owner_thread(uint32_t tid) { g_owner_thread.store(tid, std::memory_order_release); }
+
+uint64_t off_thread_refusals() { return g_off_thread_refused.load(std::memory_order_relaxed); }
+
+/* True when this call may touch the device. On a native build there is no browser
+ * thread to compare against, so the guard is inert. */
+bool on_owner_thread(const char* who) {
+#if defined(__EMSCRIPTEN__)
+    const uint32_t owner = g_owner_thread.load(std::memory_order_acquire);
+    if (!owner) {
+        /* No owner recorded yet: the renderer's own init runs before the page
+         * adopts. Nothing may touch the device in that window either. */
+        return false;
+    }
+    if (backend_thread_id() != owner) {
+        const uint64_t n = g_off_thread_refused.fetch_add(1, std::memory_order_relaxed);
+        if (n < 5) {
+            LOG_ERROR("wgpu", "%s REFUSED: called from tid %u, device is owned by tid %u -- "
+                      "WebGPU must never be called from a pthread", who, backend_thread_id(), owner);
+        }
+        return false;
+    }
+    return true;
+#else
+    (void)who;
+    return true;
+#endif
+}
+
 bool enabled() {
 #if defined(__EMSCRIPTEN__)
     /* On by DEFAULT in the browser: there is no Vulkan there at all, so the
@@ -1358,6 +1439,73 @@ bool enabled() {
  * The colour target is the CANVAS itself (make_targets below), so a drawn frame
  * reaches the visible canvas rather than a private mirror.
  */
+/* The bind group and pipeline layouts, built ONCE for whichever init path runs.
+ *
+ * These used to be built only in the NATIVE init(), and the wasm init() returned
+ * before reaching them. Measured: every draw failed with "createBindGroup: Failed
+ * to read the 'layout' property ... Required member is undefined", because
+ * g.bind_layout was never created on the web path. Extracting the block is what
+ * makes the two paths share one definition instead of one of them silently
+ * missing it. */
+bool build_bind_layouts() {
+    if (g.bind_layout) return true;
+    /* Bindings mirror the Vulkan layout so the same SPIR-V is valid in both:
+     * 0..3 uniform buffers, 16..19 vertex samplers, 32..47 fragment samplers.
+     * Texture and sampler are SEPARATE bindings, the sampler 64 above its
+     * texture, because a combined sampler compiles to OpTypeSampledImage and
+     * naga rejects that ("invalid id"). */
+    std::vector<WGPUBindGroupLayoutEntry> entries;
+    for (uint32_t i = 0; i < 4; i++) {
+        WGPUBindGroupLayoutEntry e = WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT;
+        e.binding = i;
+        e.visibility = i < 2 ? WGPUShaderStage_Vertex : WGPUShaderStage_Fragment;
+        e.buffer.type = WGPUBufferBindingType_Uniform;
+        entries.push_back(e);
+    }
+    for (uint32_t i = 0; i < 4; i++) {
+        WGPUBindGroupLayoutEntry t = WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT;
+        t.binding = 16 + i;
+        t.visibility = WGPUShaderStage_Vertex;
+        t.texture.sampleType = WGPUTextureSampleType_Float;
+        t.texture.viewDimension = WGPUTextureViewDimension_2D;
+        entries.push_back(t);
+        WGPUBindGroupLayoutEntry sm = WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT;
+        sm.binding = 16 + i + 64;
+        sm.visibility = WGPUShaderStage_Vertex;
+        sm.sampler.type = WGPUSamplerBindingType_Filtering;
+        entries.push_back(sm);
+    }
+    for (uint32_t i = 0; i < 16; i++) {
+        WGPUBindGroupLayoutEntry t = WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT;
+        t.binding = 32 + i;
+        t.visibility = WGPUShaderStage_Fragment;
+        t.texture.sampleType = WGPUTextureSampleType_Float;
+        /* The dimension is per unit and follows the RSX sampler: unit 7 is the
+         * 1D one the menu binds, and declaring D2 for it made every pipeline
+         * using tex7 fail with "View dimension D1 does not match ... D2". */
+        t.texture.viewDimension = i == 7 ? WGPUTextureViewDimension_1D : WGPUTextureViewDimension_2D;
+        entries.push_back(t);
+        WGPUBindGroupLayoutEntry sm = WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT;
+        sm.binding = 32 + i + 64;
+        sm.visibility = WGPUShaderStage_Fragment;
+        sm.sampler.type = WGPUSamplerBindingType_Filtering;
+        entries.push_back(sm);
+    }
+    WGPUBindGroupLayoutDescriptor bl = WGPU_BIND_GROUP_LAYOUT_DESCRIPTOR_INIT;
+    bl.entryCount = entries.size();
+    bl.entries = entries.data();
+    g.bind_layout = wgpuDeviceCreateBindGroupLayout(g.device, &bl);
+    if (!g.bind_layout) {
+        std::fprintf(stderr, "wgpu: bind group layout failed\n");
+        return false;
+    }
+    WGPUPipelineLayoutDescriptor pl = WGPU_PIPELINE_LAYOUT_DESCRIPTOR_INIT;
+    pl.bindGroupLayoutCount = 1;
+    pl.bindGroupLayouts = &g.bind_layout;
+    g.pipe_layout = wgpuDeviceCreatePipelineLayout(g.device, &pl);
+    return g.pipe_layout != nullptr;
+}
+
 bool init(uint32_t width_hint, uint32_t height_hint) {
     if (g.ready) return true;
     g.device = s1_adopt_device();
@@ -1384,6 +1532,10 @@ bool init(uint32_t width_hint, uint32_t height_hint) {
      * Measured before this call existed: "s1: canvas configured" never printed,
      * the page's readback was a single colour, and the backend's summary read
      * "0 draws replayed, 0 pipelines, 0 textures". */
+    if (!build_bind_layouts()) {
+        std::fprintf(stderr, "wgpu: web: bind layouts failed\n");
+        return false;
+    }
     make_targets(width_hint, height_hint);
     std::fprintf(stderr, "wgpu: web: adopted device %p queue %p colourFormat %d target %ux%u view %p\n",
                  (void*)g.device, (void*)g.queue, int(g.color_format),
@@ -1463,60 +1615,7 @@ bool init(uint32_t width, uint32_t height) {
     g.device = dr.device;
     g.queue = wgpuDeviceGetQueue(g.device);
 
-    /* Bindings mirror the Vulkan layout so the same SPIR-V is valid in both:
-     * 0..3 uniform buffers, 16..19 vertex samplers, 32..47 fragment samplers.
-     * Texture and sampler are SEPARATE bindings, the sampler 64 above its
-     * texture, because a combined sampler compiles to OpTypeSampledImage and
-     * naga rejects that ("invalid id"). */
-    std::vector<WGPUBindGroupLayoutEntry> entries;
-    for (uint32_t i = 0; i < 4; i++) {
-        WGPUBindGroupLayoutEntry e = WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT;
-        e.binding = i;
-        e.visibility = i < 2 ? WGPUShaderStage_Vertex : WGPUShaderStage_Fragment;
-        e.buffer.type = WGPUBufferBindingType_Uniform;
-        entries.push_back(e);
-    }
-    for (uint32_t i = 0; i < 4; i++) {
-        WGPUBindGroupLayoutEntry t = WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT;
-        t.binding = 16 + i;
-        t.visibility = WGPUShaderStage_Vertex;
-        t.texture.sampleType = WGPUTextureSampleType_Float;
-        t.texture.viewDimension = WGPUTextureViewDimension_2D;
-        entries.push_back(t);
-        WGPUBindGroupLayoutEntry sm = WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT;
-        sm.binding = 16 + i + 64;
-        sm.visibility = WGPUShaderStage_Vertex;
-        sm.sampler.type = WGPUSamplerBindingType_Filtering;
-        entries.push_back(sm);
-    }
-    for (uint32_t i = 0; i < 16; i++) {
-        WGPUBindGroupLayoutEntry t = WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT;
-        t.binding = 32 + i;
-        t.visibility = WGPUShaderStage_Fragment;
-        t.texture.sampleType = WGPUTextureSampleType_Float;
-        /* The dimension is per unit and follows the RSX sampler: unit 7 is the
-         * 1D one the menu binds, and declaring D2 for it made every pipeline
-         * using tex7 fail with "View dimension D1 does not match ... D2". */
-        t.texture.viewDimension = i == 7 ? WGPUTextureViewDimension_1D : WGPUTextureViewDimension_2D;
-        entries.push_back(t);
-        WGPUBindGroupLayoutEntry sm = WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT;
-        sm.binding = 32 + i + 64;
-        sm.visibility = WGPUShaderStage_Fragment;
-        sm.sampler.type = WGPUSamplerBindingType_Filtering;
-        entries.push_back(sm);
-    }
-    WGPUBindGroupLayoutDescriptor bl = WGPU_BIND_GROUP_LAYOUT_DESCRIPTOR_INIT;
-    bl.entryCount = entries.size();
-    bl.entries = entries.data();
-    g.bind_layout = wgpuDeviceCreateBindGroupLayout(g.device, &bl);
-    if (!g.bind_layout) {
-        std::fprintf(stderr, "wgpu: bind group layout failed\n");
-        return false;
-    }
-    WGPUPipelineLayoutDescriptor pl = WGPU_PIPELINE_LAYOUT_DESCRIPTOR_INIT;
-    pl.bindGroupLayoutCount = 1;
-    pl.bindGroupLayouts = &g.bind_layout;
-    g.pipe_layout = wgpuDeviceCreatePipelineLayout(g.device, &pl);
+    if (!build_bind_layouts()) return false;
 
     make_targets(width, height);
     g.ready = true;
@@ -1531,6 +1630,7 @@ namespace {
  * this file own code and no RSX state, so a failure points at the backend and a
  * success points at the inputs the renderer supplies. */
 bool readback(std::vector<uint8_t>& out, uint32_t& width, uint32_t& height);
+uint32_t capture_rgba(uint32_t* out_width, uint32_t* out_height);
 
 /* The known-good pipeline: a full-screen triangle, no bindings, no depth. Shared
  * by the start-up self test and by PS3BASE_WGPU_PROBE_MAIN, which draws it
@@ -1956,6 +2056,7 @@ void self_test() {
 
 }  // namespace
 void draw(const DrawInputs& in) {
+    if (!on_owner_thread("draw")) return;
     /* T1 BISECT: the renderer counted 30 204 draws and the backend reported none.
      * These three counters say WHICH early return ate them, so "the draw never
      * arrived" is distinguishable from "it arrived and the pipeline was refused". */
@@ -2124,6 +2225,7 @@ void draw(const DrawInputs& in) {
 }
 
 void clear(uint32_t mask, const float color[4], float depth, uint32_t) {
+    if (!on_owner_thread("clear")) return;
     static uint64_t nclears = 0;
     nclears++;
     if (nclears <= 4) std::fprintf(stderr, "wgpu: clear %llu mask 0x%x color %.2f %.2f %.2f %.2f depth %.2f (draws %llu)\n",
@@ -2151,7 +2253,12 @@ void clear(uint32_t mask, const float color[4], float depth, uint32_t) {
     da.stencilLoadOp = (mask & 0x2) ? WGPULoadOp_Clear : WGPULoadOp_Load;
     da.stencilStoreOp = WGPUStoreOp_Store;
     da.stencilClearValue = 0;
-    da.depthClearValue = depth;
+    /* WebGPU REJECTS a non-finite depthClearValue and drops the whole command
+     * buffer -- measured: "Failed to read the 'depthClearValue' property ... The
+     * provided float value is non-finite", after which no frame was ever submitted.
+     * A register the guest left in an unexpected state must degrade to a valid
+     * clear, not destroy the frame. */
+    da.depthClearValue = (depth >= 0.0f && depth <= 1.0f) ? depth : 1.0f;
     WGPURenderPassDescriptor rp = WGPU_RENDER_PASS_DESCRIPTOR_INIT;
     rp.colorAttachmentCount = 1;
     rp.colorAttachments = &ca;
@@ -2254,6 +2361,7 @@ bool readback(std::vector<uint8_t>& out, uint32_t& width, uint32_t& height) {
  * Nothing is read back: a readback would stall the renderer on the GPU once per
  * frame, and the capture harness reads the canvas through its own hook instead. */
 void end_frame() {
+    if (!on_owner_thread("end_frame")) return;
     if (!g.ready) return;
     end_pass();
     if (!g.encoder) {
@@ -2261,6 +2369,59 @@ void end_frame() {
          * Submitting an empty frame would still cost a command buffer and would
          * re-clear the canvas to black, so it is skipped. */
         return;
+    }
+    /* A capture requested by the page is taken HERE: this is the last moment the
+     * canvas texture this frame drew into is still valid. Doing it from the page
+     * after the submit returned 0 every time (measured), because the encoder was
+     * already finished and the view released. */
+    /* A capture requested by the page is SERVED HERE: this is the last moment the
+     * canvas texture this frame drew into is still valid, so the pixels are copied
+     * into a PERSISTENT texture. The page then copies and maps THAT, outside the
+     * frame, where an async map can actually complete.
+     *
+     * Why not map here: measured, the map never completed inside the frame callback
+     * ("capture requested, encoder 1 color 0xb39f07d8" then "capture still empty"),
+     * because wgpuBufferMapAsync needs the event loop to run and this is the render
+     * callback. A copy is synchronous; the map is not. */
+    if (g_capture_want.exchange(0, std::memory_order_acq_rel)) {
+        const uint32_t w = g.width, h = g.height;
+        if (!g_capture_tex || g_capture_tex_w != w || g_capture_tex_h != h) {
+            if (g_capture_tex) wgpuTextureRelease(g_capture_tex);
+            WGPUTextureDescriptor td = WGPU_TEXTURE_DESCRIPTOR_INIT;
+            td.usage = WGPUTextureUsage_CopyDst | WGPUTextureUsage_CopySrc;
+            td.dimension = WGPUTextureDimension_2D;
+            td.size = {w, h, 1};
+            td.format = g.color_format;
+            td.mipLevelCount = 1;
+            td.sampleCount = 1;
+            g_capture_tex = wgpuDeviceCreateTexture(g.device, &td);
+            g_capture_tex_w = w;
+            g_capture_tex_h = h;
+        }
+        if (g_capture_tex && g.color) {
+            WGPUCommandEncoder ce = wgpuDeviceCreateCommandEncoder(g.device, nullptr);
+            if (ce) {
+                WGPUTexelCopyTextureInfo src = WGPU_TEXEL_COPY_TEXTURE_INFO_INIT;
+                src.texture = g.color;
+                src.mipLevel = 0;
+                src.aspect = WGPUTextureAspect_All;
+                WGPUTexelCopyTextureInfo dst = WGPU_TEXEL_COPY_TEXTURE_INFO_INIT;
+                dst.texture = g_capture_tex;
+                dst.mipLevel = 0;
+                dst.aspect = WGPUTextureAspect_All;
+                WGPUExtent3D sz = {w, h, 1};
+                wgpuCommandEncoderCopyTextureToTexture(ce, &src, &dst, &sz);
+                WGPUCommandBuffer ccb = wgpuCommandEncoderFinish(ce, nullptr);
+                if (ccb) { wgpuQueueSubmit(g.queue, 1, &ccb); wgpuCommandBufferRelease(ccb); }
+                wgpuCommandEncoderRelease(ce);
+                g_capture_w.store(w, std::memory_order_release);
+                g_capture_h.store(h, std::memory_order_release);
+                g_capture_ready.store(1, std::memory_order_release);
+                static uint32_t nrep = 0;
+                if (nrep++ < 3) std::fprintf(stderr, "wgpu: capture copied to persistent texture %ux%u\n", w, h);
+
+            }
+        }
     }
     WGPUCommandBuffer cb = wgpuCommandEncoderFinish(g.encoder, nullptr);
     wgpuCommandEncoderRelease(g.encoder);
@@ -2286,19 +2447,161 @@ void end_frame() {
      * presentation, so importing immediately after the submit is also the earliest
      * legal moment for the next frame's target. */
     if (g.web) {
-        /* BISECT 2: keep the view across frames. Releasing it here and importing a
-         * new one was measured to stall the FIFO (n_method frozen at 378), so the
-         * cost is in the re-import, not in the release. If the canvas still paints
-         * with the view held, the import is unnecessary; if it does not, the import
-         * has to move somewhere that does not block the FIFO thread. */
-        static const bool hold = true;
-        if (!hold) {
-            if (g.color_view) { wgpuTextureViewRelease(g.color_view); }
-            g.color_view = nullptr;
-            g.color = nullptr;
-            make_targets(g.width, g.height);
-        }
+        /* HOLDING THE VIEW WAS WRONG, and it is why the canvas stayed black.
+         *
+         * A canvas texture is invalidated at presentation: the browser hands out a
+         * NEW texture at the next getCurrentTexture(), and the one this frame drew
+         * into is gone. Holding the view across frames therefore made every frame
+         * draw into a stale texture that was never presented -- measured: 1514 draws
+         * replayed, 0 GPU errors, and a readback of exactly one colour.
+         *
+         * So the view is released and a fresh one imported HERE, in the same task,
+         * right after the submit that presents the frame. Doing it at the frame
+         * boundary (not inside draw()) is what keeps it off the FIFO's hot path:
+         * getCurrentTexture() is a proxied sync call, and calling it from the middle
+         * of a draw stalled the FIFO at n_method=378. */
+        if (g.color_view) { wgpuTextureViewRelease(g.color_view); }
+        g.color_view = nullptr;
+        g.color = nullptr;
+        make_targets(g.width, g.height);
     }
+}
+
+/* T1 -- capture the CURRENT TARGET into a buffer the PAGE can read.
+ *
+ * capture_ppm() writes through std::fopen into MEMFS, which the page cannot fetch.
+ * This leaves the RGBA bytes in a static buffer and returns its heap address.
+ *
+ * THE COPY IS DEFERRED TO THE FRAME BOUNDARY, and that is load-bearing. Measured:
+ * calling it from the page returned 0 every time, because end_frame() had already
+ * finished the encoder and released the canvas view -- there was nothing left to
+ * copy. The request is therefore recorded here and performed by end_frame(), which
+ * is the last moment the target texture is still valid. */
+/* Ask for a capture at the next frame boundary. Returns 1 when a previous request
+ * has produced pixels. */
+/* Take the capture NOW, synchronously, from the persistent texture. Called by the
+ * replay immediately after end_frame(), on the main thread, outside the render
+ * callback -- which is where an async map can actually complete. */
+uint32_t capture_now() {
+    /* Guard on g_capture_ready, NOT on the width: end_frame() sets ready only after
+     * the copy into the persistent texture succeeded, and the width is written in the
+     * same block. Guarding on the width first meant the check ran before the copy and
+     * always saw 0 -- measured: the page reported "capture still empty" on every
+     * attempt while end_frame was in fact copying. */
+    {
+        static uint32_t nq = 0;
+        if (nq++ < 4)
+            std::fprintf(stderr, "wgpu: capture_now: ready %u tex %p w %u h %u\n",
+                         g_capture_ready.load(), (void*)g_capture_tex,
+                         g_capture_w.load(), g_capture_h.load());
+    }
+    if (!g_capture_ready.load(std::memory_order_acquire) || !g_capture_tex) return 0;
+    /* ONE-SHOT: the ready flag is cleared once the pixels are in the buffer, so a
+     * page that calls this repeatedly does not pay a blocking map every time --
+     * measured: the FIFO fell from 103k to 49k methods/s while the capture was
+     * re-taken on every readback attempt. */
+    const uint32_t w = g_capture_w.load(std::memory_order_acquire);
+    const uint32_t h = g_capture_h.load(std::memory_order_acquire);
+    if (!w || !h) return 0;
+    const uint64_t pitch = ((uint64_t(w) * 4) + 255) & ~255ull;
+    WGPUBufferDescriptor bd = WGPU_BUFFER_DESCRIPTOR_INIT;
+    bd.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_MapRead;
+    bd.size = pitch * h;
+    WGPUBuffer rb = wgpuDeviceCreateBuffer(g.device, &bd);
+    if (!rb) return 0;
+    WGPUCommandEncoder ce = wgpuDeviceCreateCommandEncoder(g.device, nullptr);
+    WGPUTexelCopyTextureInfo src = WGPU_TEXEL_COPY_TEXTURE_INFO_INIT;
+    src.texture = g_capture_tex;
+    src.mipLevel = 0;
+    src.aspect = WGPUTextureAspect_All;
+    WGPUTexelCopyBufferInfo dst = WGPU_TEXEL_COPY_BUFFER_INFO_INIT;
+    dst.buffer = rb;
+    dst.layout.bytesPerRow = uint32_t(pitch);
+    dst.layout.rowsPerImage = h;
+    WGPUExtent3D sz = {w, h, 1};
+    wgpuCommandEncoderCopyTextureToBuffer(ce, &src, &dst, &sz);
+    WGPUCommandBuffer ccb = wgpuCommandEncoderFinish(ce, nullptr);
+    if (ccb) { wgpuQueueSubmit(g.queue, 1, &ccb); wgpuCommandBufferRelease(ccb); }
+    wgpuCommandEncoderRelease(ce);
+    bool mapped_ok = false;
+    WGPUBufferMapCallbackInfo mci = WGPU_BUFFER_MAP_CALLBACK_INFO_INIT;
+    mci.mode = WGPUCallbackMode_AllowProcessEvents;
+    mci.callback = [](WGPUMapAsyncStatus status, WGPUStringView, void* u1, void*) {
+        *static_cast<bool*>(u1) = status == WGPUMapAsyncStatus_Success;
+    };
+    mci.userdata1 = &mapped_ok;
+    wgpuBufferMapAsync(rb, WGPUMapMode_Read, 0, bd.size, mci);
+    poll_until(mapped_ok);
+    if (!mapped_ok) { wgpuBufferRelease(rb); return 0; }
+    const uint8_t* mapped = static_cast<const uint8_t*>(wgpuBufferGetConstMappedRange(rb, 0, bd.size));
+    if (!mapped) { wgpuBufferUnmap(rb); wgpuBufferRelease(rb); return 0; }
+    g_capture_rgba.assign(size_t(w) * h * 4, 0);
+    for (uint32_t y = 0; y < h; y++)
+        std::memcpy(g_capture_rgba.data() + size_t(y) * w * 4, mapped + size_t(y) * pitch, size_t(w) * 4);
+    wgpuBufferUnmap(rb);
+    wgpuBufferRelease(rb);
+    g_capture_ready.store(0, std::memory_order_release);   /* one-shot */
+    return 1;
+}
+
+uint32_t capture_request() {
+    g_capture_want.store(1, std::memory_order_release);
+    return g_capture_rgba.empty() ? 0u : 1u;
+}
+
+uint32_t capture_rgba(uint32_t* out_width, uint32_t* out_height) {
+    /* Guard on the BUFFER, not on g_capture_ready: capture_now() clears that flag
+     * when it consumes the pixels (one-shot), so a page that calls capture_now() and
+     * then capture_rgba() -- the intended order -- found the flag already 0 and got
+     * nothing. Measured: "capture_now: ready 0" immediately after a successful copy. */
+    if (g_capture_rgba.empty()) return 0;
+    const uint32_t w = g_capture_w.load(std::memory_order_acquire);
+    const uint32_t h = g_capture_h.load(std::memory_order_acquire);
+    if (!w || !h) return 0;
+    /* Copy and map OUTSIDE the frame callback: the copy is synchronous, the map is
+     * not, and a map started inside the render callback never completed (measured:
+     * "capture requested, encoder 1" then "capture still empty"). */
+    const uint64_t pitch = ((uint64_t(w) * 4) + 255) & ~255ull;
+    WGPUBufferDescriptor bd = WGPU_BUFFER_DESCRIPTOR_INIT;
+    bd.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_MapRead;
+    bd.size = pitch * h;
+    WGPUBuffer rb = wgpuDeviceCreateBuffer(g.device, &bd);
+    if (!rb) return 0;
+    WGPUCommandEncoder ce = wgpuDeviceCreateCommandEncoder(g.device, nullptr);
+    WGPUTexelCopyTextureInfo src = WGPU_TEXEL_COPY_TEXTURE_INFO_INIT;
+    src.texture = g_capture_tex;
+    src.mipLevel = 0;
+    src.aspect = WGPUTextureAspect_All;
+    WGPUTexelCopyBufferInfo dst = WGPU_TEXEL_COPY_BUFFER_INFO_INIT;
+    dst.buffer = rb;
+    dst.layout.offset = 0;
+    dst.layout.bytesPerRow = uint32_t(pitch);
+    dst.layout.rowsPerImage = h;
+    WGPUExtent3D sz = {w, h, 1};
+    wgpuCommandEncoderCopyTextureToBuffer(ce, &src, &dst, &sz);
+    WGPUCommandBuffer ccb = wgpuCommandEncoderFinish(ce, nullptr);
+    if (ccb) { wgpuQueueSubmit(g.queue, 1, &ccb); wgpuCommandBufferRelease(ccb); }
+    wgpuCommandEncoderRelease(ce);
+    bool mapped_ok = false;
+    WGPUBufferMapCallbackInfo mci = WGPU_BUFFER_MAP_CALLBACK_INFO_INIT;
+    mci.mode = WGPUCallbackMode_AllowProcessEvents;
+    mci.callback = [](WGPUMapAsyncStatus status, WGPUStringView, void* u1, void*) {
+        *static_cast<bool*>(u1) = status == WGPUMapAsyncStatus_Success;
+    };
+    mci.userdata1 = &mapped_ok;
+    wgpuBufferMapAsync(rb, WGPUMapMode_Read, 0, bd.size, mci);
+    poll_until(mapped_ok);
+    if (!mapped_ok) { wgpuBufferRelease(rb); return 0; }
+    const uint8_t* mapped = static_cast<const uint8_t*>(wgpuBufferGetConstMappedRange(rb, 0, bd.size));
+    if (!mapped) { wgpuBufferUnmap(rb); wgpuBufferRelease(rb); return 0; }
+    g_capture_rgba.assign(size_t(w) * h * 4, 0);
+    for (uint32_t y = 0; y < h; y++)
+        std::memcpy(g_capture_rgba.data() + size_t(y) * w * 4, mapped + size_t(y) * pitch, size_t(w) * 4);
+    wgpuBufferUnmap(rb);
+    wgpuBufferRelease(rb);
+    if (out_width) *out_width = w;
+    if (out_height) *out_height = h;
+    return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_capture_rgba.data()));
 }
 
 bool capture_ppm(const std::string& path, uint32_t, uint32_t) {

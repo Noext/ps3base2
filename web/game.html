@@ -158,6 +158,151 @@ async function main() {
     log('pad seam 0x' + (padAddr >>> 0).toString(16));
   } catch (e) { log('pad seam unavailable: ' + e.message); }
 
+  /* ==================================================================
+   * THE REPLAY LOOP, ON THE PAGE'S THREAD.
+   *
+   * This is the whole point of the architecture. The game's main() runs in a
+   * pthread (-sPROXY_TO_PTHREAD), and a pthread has an empty WebGPU object table:
+   * every port entry is __proxy:'sync', so a call from there is a blocking round
+   * trip that starves the FIFO (measured: n_method frozen at 378, busy 99.8%).
+   *
+   * So the RSX thread only RECORDS into the ring, and this callback -- the
+   * browser's own main-thread animation callback -- drains it and issues the
+   * WebGPU calls. requestAnimationFrame, not emscripten_set_main_loop: a main loop
+   * registered from the pthread would run on the pthread.
+   *
+   * The device is adopted HERE, once, before the first frame. t1_replay_adopt
+   * records this thread as the owner, and the backend refuses any later device
+   * call from another thread.
+   */
+  let replayAdopted = false;
+  let replayTicks = 0;
+  let replayPopped = 0;
+  let replayLastLog = 0;
+  const statsAddr = (() => { try { return mod._t1_replay_stats ? mod._t1_replay_stats() >>> 0 : 0; } catch (e) { return 0; } })();
+  const off = (() => {
+    const o = {};
+    try {
+      for (let i = 0; i <= 18; i++) o[i] = mod._t1_replay_stat_offset(i) >>> 0;
+    } catch (e) {}
+    return o;
+  })();
+  function stat(i) {
+    if (!statsAddr || off[i] === undefined || off[i] === 0xFFFFFFFF) return 0;
+    /* mod.HEAPU32 is re-read EVERY call: -sALLOW_MEMORY_GROWTH replaces the view
+     * when the heap grows, and a captured view then reads a detached buffer --
+     * measured as counters frozen at their first value while the backend replayed
+     * 1491 draws. */
+    const heap = mod.HEAPU32;
+    if (!heap) return 0;
+    const p = (statsAddr + off[i]) >>> 2;
+    const lo = heap[p] >>> 0;
+    const hi = heap[p + 1] >>> 0;
+    return hi * 4294967296 + lo;
+  }
+
+  function replayTick() {
+    try {
+      if (!replayAdopted) {
+        /* The device comes from the PORT, in C++: s1_adopt_device() is a JS library
+         * entry the wasm imports, so it is not visible as mod._s1_adopt_device from
+         * here. Measured: that property is undefined, the page passed 0, and the
+         * replay logged "adopt_device: null device" and never started. */
+        const ok = mod._t1_replay_adopt(canvas.width, canvas.height);
+        replayAdopted = true;
+        console.log('T1REPLAY adopt ok=' + ok + ' (device handle is taken in C++)');
+        if (!ok) { requestAnimationFrame(replayTick); return; }
+      }
+      const n = mod._t1_replay_frame();
+      replayTicks++;
+      replayPopped += n;
+      const now = performance.now();
+      if (now - replayLastLog > 2000) {
+        replayLastLog = now;
+        console.log('T1REPLAY ticks=' + replayTicks + ' popped=' + stat(0) +
+                    ' draws_seen=' + stat(3) + ' draws_ready=' + stat(4) +
+                    ' no_shader=' + stat(5) + ' no_vertex=' + stat(6) +
+                    ' clears=' + stat(7) + ' flips=' + stat(8) +
+                    ' bufs=' + stat(10) + ' texs=' + stat(11) + ' shaders=' + stat(12) +
+                    ' peak=' + stat(13) + '/' + stat(14) +
+                    ' offthread=' + stat(16));
+      }
+    } catch (e) {
+      if (!window.__S1.replayError) {
+        window.__S1.replayError = String(e && e.message || e);
+        console.log('T1REPLAY ERROR ' + window.__S1.replayError);
+      }
+    }
+    requestAnimationFrame(replayTick);
+  }
+  window.__S1.replay = { adopted: () => replayAdopted, ticks: () => replayTicks, popped: () => replayPopped };
+  /* NOT started here: this block runs before `mod` is assigned (the module is awaited
+   * further down), so the first tick would see mod undefined and adopt a null device.
+   * Measured: "T1REPLAY adopt dev=0x0 ok=0" at t=0.004 s, then a TypeError reading
+   * the stats address. The loop is started after the module boots, below. */
+  /* The module exists by now (this block is inside main(), after the await), so the
+   * stats address and the device handle are real. Starting the loop earlier measured
+   * "adopt dev=0x0" and a TypeError on the stats address. */
+  requestAnimationFrame(replayTick);
+
+  /* ==================================================================
+   * CANVAS READBACK, OWNED BY THE PAGE.
+   *
+   * tools/x-capture.mjs reads the canvas through window.__x6Readback, which its
+   * --auto-hook installs. That hook bails on this page: it is injected before any
+   * page script runs, and at that moment GPUCanvasContext is still undefined, so
+   * its guard returns and no readback function is ever installed (measured: no
+   * __x6Readback in the page, "readback capture skipped").
+   *
+   * The page has the device and the context, so it can do the copy itself: render
+   * the canvas into an offscreen texture with COPY_SRC, then map it back. The
+   * canvas is configured with COPY_SRC in s1-bridge.js for exactly this.
+   */
+  window.__x6Readback = async function () {
+    try {
+      /* TWO-PHASE CAPTURE, because the copy must happen at the frame boundary.
+       *
+       * Reading the canvas from here does not work: getCurrentTexture() invalidates
+       * the texture the replay drew into, and after the submit the encoder is already
+       * finished (measured: 1008 draws replayed, 0 GPU errors, capture refused every
+       * time). So the page REQUESTS a capture, the backend takes it inside end_frame
+       * where the target is still valid, and the page reads the bytes back next frame. */
+      const wPtr = window.__t1CapW || (window.__t1CapW = mod._malloc ? mod._malloc(8) : 0);
+      if (!wPtr) { console.log('T1READBACK no malloc'); return null; }
+      mod._t1_replay_capture_request();
+      /* WAIT UNTIL THE COPY HAS ACTUALLY BEEN TAKEN.
+       *
+       * A fixed two-frame wait was not enough: the replay's end_frame() runs on its
+       * own animation tick, and capture_now() was being called before it -- measured:
+       * "capture_now: ready 0 tex 0 w 0 h 0" four times while "capture copied to
+       * persistent texture 1280x720" appeared later. So poll the request until the
+       * backend reports a capture ready, with a bounded number of frames. */
+      let addr = 0;
+      for (let attempt = 0; attempt < 30; attempt++) {
+        await new Promise((r) => requestAnimationFrame(r));
+        mod._t1_replay_capture_now();
+        addr = mod._t1_replay_capture(wPtr, wPtr + 4);
+        if (addr) break;
+      }
+      const heap = mod.HEAPU32;
+      const w = heap[wPtr >> 2] >>> 0;
+      const h = heap[(wPtr + 4) >> 2] >>> 0;
+      if (!addr || !w || !h) { console.log('T1READBACK capture still empty'); return null; }
+      const src = new Uint8Array(mod.HEAPU8.buffer, addr, w * h * 4);
+      const rgba = new Uint8Array(w * h * 4);
+      rgba.set(src);
+      let bin = '';
+      for (let j = 0; j < rgba.length; j += 0x8000) bin += String.fromCharCode.apply(null, rgba.subarray(j, j + 0x8000));
+      console.log('T1READBACK captured ' + w + 'x' + h + ' from the backend target');
+      return { w: w, h: h, format: 'rgba8unorm', b64: btoa(bin),
+               meta: { source: 'backend', addr: addr } };
+    } catch (e) {
+      console.log('T1READBACK ERROR ' + (e && e.message || e));
+      return null;
+    }
+  };
+  console.log('T1READBACK installed (two-phase backend capture)');
+
   window.__S1.ready = true;
   /* The renderer's OWN counters, not a narrative. g_stats.draws is the number of
    * draws that reached a pipeline; g_skip_lines says, by source line, how many

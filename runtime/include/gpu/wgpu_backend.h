@@ -43,6 +43,19 @@ namespace wgpu {
  * before. */
 bool enabled();
 
+/* T1 -- the owner-thread guard.
+ *
+ * The device belongs to ONE thread: the page's. set_owner_thread() records it when
+ * the replay adopts the device, and every backend entry that would touch the device
+ * refuses (and counts) a call from any other thread. This is the enforcement of the
+ * rule the whole architecture rests on -- no WebGPU call from a pthread -- and it
+ * lives in the backend so a new call site cannot forget it.
+ *
+ * On a native build both are inert: there is no browser thread to compare against.
+ */
+void set_owner_thread(uint32_t tid);
+uint64_t off_thread_refusals();
+
 /* Bring the device up. Returns false and logs why on failure; a failure is not
  * fatal to the Vulkan path. */
 bool init(uint32_t width, uint32_t height);
@@ -210,6 +223,25 @@ void clear(uint32_t mask, const float color[4], float depth, uint32_t stencil);
 /* Read the current colour target back as RGBA8 and write it as a PPM. Returns
  * false on failure. This is what the comparison is computed from. */
 bool capture_ppm(const std::string& path, uint32_t width, uint32_t height);
+
+/* T1 -- capture the CURRENT TARGET into a buffer the PAGE can read.
+ *
+ * capture_ppm() writes through std::fopen into Emscripten's MEMFS, which the page
+ * cannot fetch over HTTP. This variant leaves the RGBA bytes in a static buffer and
+ * returns its heap address, so the page reads them with HEAPU8. The copy is from
+ * the texture the draws actually went to, not from getCurrentTexture(), which would
+ * invalidate it. Returns 0 on failure. */
+uint32_t capture_rgba(uint32_t* out_width, uint32_t* out_height);
+
+/* Ask for a capture at the NEXT frame boundary, where the canvas texture is still
+ * valid. The pixels are then read with capture_rgba(). Two phases because the copy
+ * cannot be taken from the page: measured, it returned 0 every time after the
+ * submit had already finished the encoder. */
+uint32_t capture_request();
+
+/* Take the capture NOW from the persistent copy, synchronously. Called by the
+ * replay right after end_frame(), where an async map can complete. */
+uint32_t capture_now();
 
 void shutdown();
 

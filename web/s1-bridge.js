@@ -23,6 +23,18 @@
  */
 addToLibrary({
   /* Configure the canvas for the adopted device, once per size change. */
+  /* T1: the device handle the module adopted, for the replay to claim ownership of.
+   * The port stores it in WebGPU.preinitializedDeviceId when it imports the device
+   * the page created; the replay needs the same handle so its wgpu::init adopts the
+   * SAME device rather than making a second one. */
+  t1_device_ptr: () => {
+    try {
+      var id = WebGPU && WebGPU.preinitializedDeviceId;
+      return (id === undefined || id === null) ? 0 : (id >>> 0);
+    } catch (e) { console.error('t1_device_ptr: ' + e.message); return 0; }
+  },
+  t1_device_ptr__proxy: 'sync',
+
   s1_canvas_configure: (w, h) => {
     /* T1: prove the call arrives at all. If this line never prints, the C++ call
      * site is not reaching the bridge and no amount of bridge debugging matters. */

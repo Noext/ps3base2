@@ -1638,13 +1638,11 @@ void clear(uint32_t mask) {
         }
     }
     if (atts.empty()) return;
-    if (wgpu::enabled()) {
-        const uint32_t v = R(COLOR_CLEAR_VALUE);
-        const float cc[4] = {((v >> 16) & 0xFF) / 255.0f, ((v >> 8) & 0xFF) / 255.0f, (v & 0xFF) / 255.0f, ((v >> 24) & 0xFF) / 255.0f};
-        const uint32_t z = R(ZSTENCIL_CLEAR_VALUE);
-        const float dz = (depth && depth->format == VK_FORMAT_D16_UNORM) ? (z & 0xFFFF) / 65535.0f : (z >> 8) / 16777215.0f;
-        wgpu::clear(mask, cc, dz, z & 0xFF);
-    }
+    /* T1: the WebGPU clear is NOT issued here. This function runs on the RSX
+     * pthread and the device belongs to the page's thread. The clear reaches the
+     * canvas through the ring instead: the producer records a kClear and the replay
+     * (runtime/src/gpu/rsx_replay.cpp) issues it from the main thread. Measured:
+     * issuing it from here froze the FIFO at n_method=378, busy 99.8%. */
     begin_pass(colors, depth, w, h);
     VkClearRect rect{};
     float ps = colors.empty() ? depth->scale : colors[0]->scale;
@@ -1733,7 +1731,9 @@ bool init_objects() {
     /* Bring the WebGPU mirror up now, beside the Vulkan device. A failure is
      * logged and does NOT fail the init: the Vulkan path is the reference and
      * has to keep running when the second device cannot be created. */
-    if (wgpu::enabled() && !wgpu::init(1280, 720)) LOG_WARN("wgpu", "backend init failed; Vulkan-only run");
+    /* T1: the WebGPU backend is NOT initialised here. init() creates the device and
+     * configures the canvas, which only the page's thread may do; the page adopts
+     * the device itself and the replay calls wgpu::init from there. */
     return true;
 }
 
@@ -3999,203 +3999,16 @@ bool draw() {
      * list already biased to vmin, and the uniform blocks are the structs
      * uploaded above. Re-decoding any of it here would make a pixel
      * difference unattributable, so nothing is re-derived. */
-    if (wgpu::enabled()) {
-        wgpu::DrawInputs win;
-        /* The declared mask and the data are separate: a declared slot can have no
-         * host data (the edge-compute path keeps its stream on the GPU), and the
-         * mirror still has to bind something for it. */
-        win.vertex_inputs = vp->inputs | 1u;
-        for (uint32_t bi = 0; bi < 16; bi++) if ((vp->inputs & (1u << bi)) && vdata[bi]) win.vertex[bi] = vdata[bi];
-        win.vertex_count = vcount;
-        win.indices = reinterpret_cast<const uint32_t*>(ib.ptr);
-        win.index_count = index_count;
-        win.base_vertex = -static_cast<int32_t>(vmin);
-        win.uniform[0] = g_vp_constants;
-        win.uniform_size[0] = sizeof g_vp_constants;
-        win.uniform[1] = &vs;
-        win.uniform_size[1] = sizeof vs;
-        win.uniform[2] = lits.data();
-        win.uniform_size[2] = uint32_t(lits.size() * 4);
-        win.uniform[3] = &fs;
-        win.uniform_size[3] = sizeof fs;
-        for (uint32_t tu = 0; tu < 16; tu++) win.texture_scale[tu] = tex_scales[tu];
-        /* The decoded images, taken from the Texture objects the Vulkan path
-         * just bound, so both APIs sample the same bytes. */
-        for (uint32_t tu = 0; tu < 16; tu++) {
-            if (!(fp->textures & (1u << tu))) continue;
-            Texture* ht = texture_units[tu];
-            if (!ht || ht->host_pixels.empty()) {
-                static uint64_t sn = 0;
-                if (sn++ < 6) LOG_INFO("wgpu", "mirror tex unit %u SKIPPED (texture %s, host pixels %zu)", tu,
-                                       ht ? "present" : "null", ht ? ht->host_pixels.size() : size_t(0));
-                continue;
-            }
-            win.texture[tu].pixels = ht->host_pixels.data();
-            {
-                static uint64_t tn = 0;
-                if (tn++ < 4) LOG_INFO("wgpu", "mirror tex unit %u: %zu bytes %ux%u", tu,
-                                       ht->host_pixels.size(), ht->host_width, ht->host_height);
-            }
-            win.texture[tu].width = ht->host_width;
-            win.texture[tu].height = ht->host_height;
-            /* The bytes are the DECODER output, whose width is the format's,
-             * not always four: reading width*height*4 from a 1-byte R8 atlas is
-             * a read past the end and it segfaulted the process. */
-            win.texture[tu].bytes_per_texel = ht->host_bytes_per_texel;
-            win.texture[tu].vk_format = ht->host_vk_format;
-            /* The view mapping this draw applies. Vulkan applies it in the
-             * image view; wgpu-native has no such feature, so the mirror folds
-             * it into the converted texels. Ignoring it cost 17.4% of pixels
-             * and turned the logo red into a saturated (255,89,96). */
-            const VkComponentMapping& m = texture_mappings[tu];
-            win.texture[tu].mapping[0] = int(m.r);
-            win.texture[tu].mapping[1] = int(m.g);
-            win.texture[tu].mapping[2] = int(m.b);
-            win.texture[tu].mapping[3] = int(m.a);
-            /* The unit's sampler REGISTERS, the same four the Vulkan path feeds
-             * to sampler_slow(). They travel as registers rather than as a
-             * VkSampler or as converted WebGPU enums: the RSX -> WebGPU table is
-             * the backend's job, and passing a converted value would be reading
-             * a Vulkan enum again -- the trap that produced the wrong blend
-             * factors. The mip count clamps the LOD range exactly as the Vulkan
-             * sampler does. */
-            {
-                const TextureRegs tr = texture_regs(tu);
-                win.texture[tu].sampler.address = tr.address;
-                win.texture[tu].sampler.control0 = tr.control0;
-                win.texture[tu].sampler.filter = tr.filter;
-                win.texture[tu].sampler.levels = ht->layout.levels;
-                /* The same shadow rule fp_key() uses: a depth format with a
-                 * non-trivial compare class. It is not on FpEntry, so it is
-                 * evaluated here from the registers the sampler is built from. */
-                {
-                    const uint32_t tcode = ((tr.format >> 8) & 0xFF) & ~0x60u;
-                    const uint32_t tzf = (tr.address >> 28) & 7;
-                    win.texture[tu].sampler.shadow = tcode >= 0x90 && tcode <= 0x93 && tzf != 0 && tzf != 7;
-                }
-            }
-            /* The decoded MIP CHAIN, level by level with the byte offset and the
-             * dimensions the decoder wrote. Level 0 is region 0 (layer 0); the
-             * Vulkan path copies each region separately, so the offsets are the
-             * decoder's own and not something re-derived here. Without this the
-             * mirror could only offer level 0 while the RSX sampler asked for
-             * up to level 10. */
-            {
-                win.texture[tu].mip_count = 0;
-                for (const TextureRegion& rg : ht->layout.regions) {
-                    if (rg.layer != 0) continue;   /* the mirror binds 2D/1D only */
-                    if (win.texture[tu].mip_count >= 16) break;
-                    auto& mr = win.texture[tu].mips[win.texture[tu].mip_count++];
-                    mr.level = rg.level;
-                    mr.offset = rg.offset;
-                    mr.width = rg.width;
-                    mr.height = rg.height;
-                }
-                static uint64_t mn = 0;
-                if (mn++ < 8) {
-                    std::string chain;
-                    for (uint32_t k = 0; k < win.texture[tu].mip_count; k++) {
-                        char b[48];
-                        std::snprintf(b, sizeof b, " %ux%u@%llu", win.texture[tu].mips[k].width, win.texture[tu].mips[k].height,
-                                      (unsigned long long)win.texture[tu].mips[k].offset);
-                        chain += b;
-                    }
-                    LOG_INFO("wgpu", "mirror tex unit %u mip chain (%u levels, %zu decoded bytes):%s", tu, win.texture[tu].mip_count, ht->host_pixels.size(), chain.c_str());
-                }
-            }
-            win.texture_mask |= (1u << tu);
-        }
-        win.color_format = uint32_t(wgpu::format_for(colors.empty() ? VK_FORMAT_UNDEFINED : colors[0]->format));
-        win.depth_format = depth ? uint32_t(wgpu::format_for(depth->format)) : 0;
-        win.topology = k.topology_class;
-        win.depth_test = dtest;
-        win.depth_write = dtest && R(DEPTH_MASK);
-        win.depth_compare = uint32_t(wgpu::compare_for(depth_op));
-        win.blend_enable = k.blend_mask & 1;
-        /* Convert through the renderer own table first: k.* holds RSX codes, and
-         * WebGPU factors/ops are numbered like the Vulkan ones, not like RSX. */
-#if defined(__EMSCRIPTEN__)
-        /* The browser has no SPIR-V front end; the WGSL emitted at each
-         * program's call site is the only shader source it can take. */
-        win.vs_wgsl = vp->wgsl;
-        win.fs_wgsl = fp->wgsl;
-#endif
-        win.sfactor = uint32_t(wgpu::blend_for(int(blend_factor(k.sfactor & 0xFFFF))));
-        win.dfactor = uint32_t(wgpu::blend_for(int(blend_factor(k.dfactor & 0xFFFF))));
-        win.sfactor_alpha = uint32_t(wgpu::blend_for(int(blend_factor(k.sfactor >> 16))));
-        win.dfactor_alpha = uint32_t(wgpu::blend_for(int(blend_factor(k.dfactor >> 16))));
-        win.equation = uint32_t(wgpu::equation_for(int(blend_op(k.equation & 0xFFFF))));
-        win.equation_alpha = uint32_t(wgpu::equation_for(int(blend_op(k.equation >> 16))));
-        /* The blend constant, in the same order the Vulkan path passes it to
-         * vkCmdSetBlendConstants. Without it the mirror had no constant to
-         * blend against. */
-        {
-            const uint32_t bc = R(BLEND_COLOR);
-            win.blend_constant[0] = ((bc >> 16) & 0xFF) / 255.0f;
-            win.blend_constant[1] = ((bc >> 8) & 0xFF) / 255.0f;
-            win.blend_constant[2] = (bc & 0xFF) / 255.0f;
-            win.blend_constant[3] = ((bc >> 24) & 0xFF) / 255.0f;
-        }
-        win.write_mask = k.write_masks & 0xF;
-        win.cull = uint32_t(wgpu::cull_for(cull));
-        win.front_face_cw = cw;
-        /* The target is the whole surface; viewport and scissor are state
-         * WITHIN it, exactly as in the Vulkan pass above, where the viewport
-         * is (0, 0, w*ps, h*ps) and the scissor is the sub-rectangle. */
-        win.target_width = up(w, ps);
-        win.target_height = up(h, ps);
-        /* The vertex shader's NDC Y is flipped for WebGPU in the decompiler, so
-         * the viewport stays positive-Y-down exactly as the Vulkan one. */
-        win.viewport[0] = 0.0f; win.viewport[1] = 0.0f;
-        win.viewport[2] = float(win.target_width);
-        win.viewport[3] = float(win.target_height);
-        win.scissor[0] = scissor.offset.x; win.scissor[1] = scissor.offset.y;
-        win.scissor[2] = int32_t(scissor.extent.width); win.scissor[3] = int32_t(scissor.extent.height);
-        win.vp_hash = vp->hash;
-        win.fp_hash = fp->hash;
-        /* The SPIR-V compiled for wgpu-native, not the Vulkan one: SPIR-V 1.5 with
-         * split samplers. If either is missing the mirror skips this draw rather
-         * than substituting the 1.6 module, which naga would reject anyway -- a
-         * silent substitution would turn "the shader did not translate" into
-         * "the image differs", which is the one confusion this must not make. */
-        win.vs_spirv = vp->spirv_wgpu.empty() ? nullptr : vp->spirv_wgpu.data();
-        win.vs_words = vp->spirv_wgpu.size();
-        win.fs_spirv = fp->spirv_wgpu.empty() ? nullptr : fp->spirv_wgpu.data();
-        win.fs_words = fp->spirv_wgpu.size();
-        /* T1: THE WEB PATH HAS NO SPIR-V, AND THAT IS NOT A REASON TO SKIP.
-         *
-         * This gate demanded spirv_wgpu on both stages. On the web path there is no
-         * glslang, so compile_glsl always fails and spirv_wgpu is always empty; the
-         * program the renderer actually holds is the WGSL emitted by wgsl_emit.cpp
-         * (VpEntry::wgsl / FpEntry::wgsl, already copied into win.vs_wgsl and
-         * win.fs_wgsl just above). wgpu_backend.cpp's shader_module() ignores SPIR-V
-         * under __EMSCRIPTEN__ and calls module_from_wgsl(in.vs_wgsl) -- so the gate
-         * was refusing exactly the draws the backend was ready to accept.
-         *
-         * Measured before this fix: 30 080 skips at this line, draws=0, and the
-         * backend's own summary read "0 draws replayed, 0 pipelines".
-         *
-         * The requirement is therefore "the backend has a module for this stage",
-         * which on web means WGSL and on native means SPIR-V. Neither substitutes
-         * for the other: a stage with no source of its own still skips, so "the
-         * shader did not translate" stays distinguishable from "the image differs". */
-#if defined(__EMSCRIPTEN__)
-        const bool vs_ready = !win.vs_wgsl.empty();
-        const bool fs_ready = !win.fs_wgsl.empty();
-#else
-        const bool vs_ready = win.vs_spirv != nullptr;
-        const bool fs_ready = win.fs_spirv != nullptr;
-#endif
-        if (!vs_ready || !fs_ready) {
-            static std::atomic<uint32_t> no_shader{0};
-            if (no_shader.fetch_add(1) < 10)
-                LOG_WARN("wgpu", "no wgpu module for vp %016llx fp %016llx (vs_wgsl %zu fs_wgsl %zu vs_spirv %zu fs_spirv %zu); draw not mirrored",
-                         (unsigned long long)vp->hash, (unsigned long long)fp->hash,
-                         win.vs_wgsl.size(), win.fs_wgsl.size(), win.vs_words, win.fs_words);
-            return skip(__LINE__);
-        }
-        wgpu::draw(win);
-    }
+    /* T1: the WebGPU mirror draw is NOT issued here. This is the pthread and the
+     * device belongs to the page's thread; every port entry is __proxy:'sync', so a
+     * call from here is a blocking round trip that starves the FIFO (measured:
+     * n_method frozen at 378, busy 99.8%, methods 0.1%; with this silenced the same
+     * build reached 42 379 draws and 503 327 methods at 119k/s).
+     *
+     * The draw reaches the canvas through the ring: the producer records a kDraw
+     * carrying the fingerprints of the vertex arrays, index block and shaders, and
+     * runtime/src/gpu/rsx_replay.cpp assembles the same DrawInputs on the main
+     * thread and calls wgpu::draw there. */
     if (query) {
         vkCmdEndQuery(cmd, g_qpool, qidx);
         g_counter_queries.push_back(qidx);
@@ -5146,31 +4959,10 @@ bool present(uint32_t buffer_id) {
      * and reading back per present is what makes the two images the SAME
      * moment of the SAME run rather than two runs that happen to look alike.
      * The capture path is what writes the comparison image. */
-    if (wgpu::enabled()) {
-        static const long every_w = std::getenv("PS3BASE_WGPU_DUMP")
-                                          ? std::atol(std::getenv("PS3BASE_WGPU_DUMP"))
-                                          : 0;
-        static std::atomic<uint64_t> seq_w{0};
-        const uint64_t kw = seq_w.fetch_add(1, std::memory_order_relaxed);
-        if (every_w > 0 && (kw % static_cast<uint64_t>(every_w)) == 0) {
-            const char* dir = std::getenv("PS3BASE_WGPU_DIR");
-            const std::string base = dir ? dir : "frames";
-            std::error_code ec;
-            std::filesystem::create_directories(base, ec);
-            char nm[512];
-            std::snprintf(nm, sizeof nm, "%s/wgpu_%06llu.ppm", base.c_str(),
-                          static_cast<unsigned long long>(kw));
-            if (wgpu::capture_ppm(nm, 0, 0)) LOG_INFO("wgpu", "captured %s", nm);
-            else LOG_WARN("wgpu", "capture failed at present %llu", static_cast<unsigned long long>(kw));
-        }
-#if defined(__EMSCRIPTEN__)
-        /* The web target is the CANVAS, so the frame has to be submitted here or
-         * nothing reaches the screen. Measured before this call existed: the
-         * renderer flipped 1381 times and the canvas stayed black, because every
-         * frame's encoder was closed only by the capture path. */
-        wgpu::end_frame();
-#endif
-    }
+    /* T1: the WebGPU mirror frame boundary is NOT here. Submitting the frame and
+     * reading it back are device calls, and this is the RSX pthread. The producer
+     * records a kFlip and runtime/src/gpu/rsx_replay.cpp submits from the main
+     * thread, which is the only thread that may touch the device. */
     end_pass();
     {
         static const long every = std::getenv("PS3BASE_DUMP_FRAMES")
@@ -5416,3 +5208,45 @@ bool present(uint32_t buffer_id) {
 }
 
 }
+
+/* T1 -- THE DECODE SEAM.
+ *
+ * The replay (runtime/src/gpu/rsx_replay.cpp) runs on the page's MAIN thread and
+ * must turn ring records back into the inputs a WebGPU draw needs: float4 vertices
+ * from raw attribute bytes, and a texture's decoded RGBA from its source bytes.
+ *
+ * It must NOT retype those tables. decode_attribute/decode_vertices and
+ * decode_texture are the authority the native renderer and the pixel-exact oracle
+ * already use; a second copy would drift from them exactly the way the project's
+ * "never transcribe a structure from memory" rule warns about, and the drift would
+ * show up as a colour difference rather than an error.
+ *
+ * These functions are therefore the ONLY thing the replay calls to decode: a narrow
+ * seam, in the same translation unit as the tables, so there is one definition of
+ * each conversion.
+ */
+namespace gpu::rsx {
+
+/* Decode `count` vertices of one attribute into float4-per-vertex. `src` points at
+ * the first vertex's bytes; `stride` is the per-vertex byte stride (0 = constant).
+ * Returns false when the inputs cannot be decoded. */
+bool t1_decode_vertices(uint32_t type, uint32_t size, const uint8_t* src, uint32_t stride,
+                        uint32_t count, float* out) {
+    if (!src || !out || !count) return false;
+    decode_vertices(type, size, src, stride, count, out);
+    return true;
+}
+
+/* Bytes one vertex of this attribute occupies in the guest's stream. */
+uint32_t t1_attribute_bytes(uint32_t type, uint32_t size) { return attribute_bytes(type, size); }
+
+/* Decode a whole texture from its source bytes into RGBA8, using the SAME decoder
+ * the Vulkan path uploads from. Returns the number of bytes written, 0 on refusal. */
+uint64_t t1_decode_texture(const uint8_t* src, const gpu::TextureRegs& regs,
+                           const gpu::TextureLayout& layout, uint8_t* dst) {
+    if (!src || !dst || !layout.decoded_size) return 0;
+    gpu::decode_texture(src, regs, layout, dst);
+    return layout.decoded_size;
+}
+
+}  // namespace gpu::rsx
