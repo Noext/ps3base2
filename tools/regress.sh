@@ -244,7 +244,7 @@ clear_strays() {
 # exactly the kind this script exists to prevent. The prefixes are the fix and the
 # negative control is the test that catches it.
 run_game() {
-    rg_tag=$1; rg_bin=$2; rg_disc=$3; rg_record=$4; rg_runroot=$5
+    rg_tag=$1; rg_bin=$2; rg_disc=$3; rg_record=$4; rg_runroot=$5; rg_game=$6
     rg_log="/tmp/regress-$rg_tag.log"
     rg_rec="/tmp/regress-$rg_tag.mkv"
     rm -f "$rg_log" "$rg_rec"
@@ -282,8 +282,26 @@ run_game() {
     # tools/regress_one.sh makes regress.sh a session leader so a caller's group
     # kill reaches the whole tree.
     rg_title_pid=""
+    # Some titles need the pad driven to reach the screen being judged: RDR's
+    # "Press START" is a menu, and regress.sh sending no input left it there
+    # forever (measured: "miss: 0 OCR'd" on every attempt). The baseline row
+    # names the driver with input=<name>; when it does, the title is launched
+    # THROUGH tools/drive_rdr.py, which presses the pad and journals each state.
+    # The TAG is "$1" (rdr-ref1), not the game name, so the baseline key has to
+    # come from the caller. It is passed in as rg_game to avoid parsing the tag
+    # back into a name -- a tag is "<game>-<side><attempt>".
+    rg_input=$(baseline_get "$rg_game" input)
     (
         cd "$rg_runroot" || exit 2
+        if [ -n "$rg_input" ] && [ -x "$ROOT/tools/drive_rdr.py" ]; then
+            exec env GOWA_FLASH_DIR="${GOWA_FLASH_DIR:-/root/Dev/devflash-out/dev_flash}" \
+                PS3BASE_DISC_DIR="$rg_disc" PS3BASE_LOG=info DISPLAY="$DISPLAY_NUM" \
+                XDG_RUNTIME_DIR="/run/user/$(id -u)" \
+                timeout --foreground "$SECONDS_PER_GAME" \
+                python3 "$ROOT/tools/drive_rdr.py" "$rg_bin" "$DISPLAY_NUM" \
+                    "$(dirname "$rg_disc")" "/tmp/regress-$rg_tag.drive" "$SECONDS_PER_GAME" \
+                    --branch cross --cwd "$rg_runroot"
+        fi
         exec env GOWA_FLASH_DIR="${GOWA_FLASH_DIR:-/root/Dev/devflash-out/dev_flash}" \
             PS3BASE_DISC_DIR="$rg_disc" PS3BASE_LOG=info DISPLAY="$DISPLAY_NUM" \
             XDG_RUNTIME_DIR="/run/user/$(id -u)" \
@@ -407,7 +425,7 @@ run_one() {
     ro_a=1
     while [ "$ro_a" -le "$ro_attempts" ]; do
         if [ "$ro_have_ref" = 1 ]; then
-            run_game "$ro_name-ref$ro_a" "$ro_ref" "$ro_disc" "$ro_want_screen" "$ro_runroot"
+            run_game "$ro_name-ref$ro_a" "$ro_ref" "$ro_disc" "$ro_want_screen" "$ro_runroot" "$ro_name"
             if [ "$ro_want_screen" = 1 ] && screen_check "$ro_name-ref$ro_a" "$ro_marker"; then
                 ro_rhit=$((ro_rhit + 1))
             fi
@@ -415,7 +433,7 @@ run_one() {
             [ "$ro_rf" -gt "$ro_rbest" ] && ro_rbest=$ro_rf
         fi
 
-        run_game "$ro_name-cand$ro_a" "$ro_bin" "$ro_disc" "$ro_want_screen" "$ro_runroot"
+        run_game "$ro_name-cand$ro_a" "$ro_bin" "$ro_disc" "$ro_want_screen" "$ro_runroot" "$ro_name"
         if [ "$ro_want_screen" = 1 ] && screen_check "$ro_name-cand$ro_a" "$ro_marker"; then
             ro_chit=$((ro_chit + 1))
         fi

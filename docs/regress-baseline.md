@@ -33,7 +33,7 @@ The numbers below are read by `tools/regress.sh`, one line per game, as
                 # Measured 2026-11-12 at a 120 s budget: reference 5401,
                 # candidate 5821, back to back, both alive, 0 crashes.
 
-    rdr         flips=1000 screen=ALERT screen_attempts=6 metric=screen
+    rdr         flips=1000 screen=AFTERLOADING screen_attempts=6 metric=screen input=drive_rdr
                 # The TITLE SCREEN: RED DEAD REDEMPTION with "Press START" on
                 # black, drawn from the title's own assets. Measured 2026-11-12:
                 # 601 flips, title at ~22 s, SPURS abort at ~23.4 s.
@@ -67,6 +67,27 @@ The numbers below are read by `tools/regress.sh`, one line per game, as
                 # abort in 3 runs of 8 on this loaded machine (measured); the
                 # script stops at the first hit, and each attempt is still a
                 # same-minute reference/candidate pair.
+                # 2026-11-13 (later): the criterion is the screen AFTER the
+                # loading, not the loading screen itself. "EXODUS IN AMERICA"
+                # is a LOADING card: three 900 s runs reached it and then sat on
+                # a green screen at 1-2 fps forever, so a bar that stops at the
+                # card reports a success that is not one. See
+                # docs/findings/f-rdr-loading-screen.md.
+                #
+                # The marker is AFTERLOADING, which no screen in the current
+                # build produces: the loading never completes. That is the
+                # point -- the row now FAILS, honestly, instead of passing on
+                # the card. When the loading completes, the marker becomes the
+                # first frame of the opening cinematic.
+                #
+                # input=drive_rdr.py: regress.sh sends no input, so the title
+                # never leaves "Press START" and NO screen past the title is
+                # reachable. Measured: rdr-ref1 alive flips=2461 with
+                # "miss: 0 OCR'd" on every attempt. The row therefore cannot be
+                # judged by a bare regress.sh run until regress.sh drives the
+                # pad; tools/rdr_ab.sh does, and that is the harness to use for
+                # this title meanwhile.
+
 
 ## What changed and why
 
