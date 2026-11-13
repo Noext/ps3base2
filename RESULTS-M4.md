@@ -114,3 +114,121 @@ false alarm as the two runs minutes apart.
 The criterion stays "the title screen is reached", and the script attempts it
 more than once, bounded and recorded, so the pass means what it says.
 
+
+## Measurement 4 -- the full run: all three green, then the negative controls
+
+### The green run
+
+`tools/regress.sh`, display :963, candidate = this tree's builds, reference =
+the main checkout's builds (4a5a132), paired back to back:
+
+    $ DISPLAY_NUM=:963 sh tools/regress.sh
+    regress: 120s per run; reference and candidate paired back to back
+    regress: display :963, reference root /root/Dev/wt-M4/../ps3base2
+    minecraft    candidate /root/Dev/wt-M4/build/ps3base
+                 reference /root/Dev/wt-M4/../ps3base2/build/ps3base  (paired, back to back)
+                 run root /root/Dev/wt-M4/../ps3base2, up to 2 attempt(s)
+      minecraft-ref1 alive         flips=6241   crashes=0   abort=none      120s load=8.05
+      minecraft-cand1 alive         flips=6061   crashes=0   abort=none      120s load=11.29
+      minecraft-ref2 alive         flips=6241   crashes=0   abort=none      120s load=15.10
+      minecraft-cand2 alive         flips=6721   crashes=0   abort=none      120s load=10.61
+      minecraft    PASS  flips=6721   vs reference 6241 over 3 pair(s) in 490s
+    gta-sa       candidate /root/Dev/wt-M4/build-gta/ps3base
+                 reference /root/Dev/wt-M4/../ps3base2/build-gta/ps3base  (paired, back to back)
+                 run root /root/Dev/wt-M4/../ps3base2, up to 2 attempt(s)
+      gta-sa-ref1    alive         flips=6061   crashes=0   abort=none      120s load=9.63
+      gta-sa-cand1   alive         flips=6421   crashes=0   abort=none      120s load=10.58
+      gta-sa-ref2    alive         flips=6421   crashes=0   abort=none      120s load=6.44
+      gta-sa-cand2   alive         flips=6841   crashes=0   abort=none      120s load=9.31
+      gta-sa       PASS  flips=6841   vs reference 6421 over 3 pair(s) in 490s
+    rdr          candidate /root/Dev/wt-M4/build-rdr/ps3base
+                 reference /root/Dev/wt-M4/../ps3base2/build-rdr/ps3base  (paired, back to back)
+                 run root /root/Dev/wt-M4/../ps3base2, up to 6 attempt(s)
+      rdr-ref1       SPURS abort   flips=601    crashes=0   abort=22.908719  25s load=7.30
+        hit f00746.png 24.83 Press START
+      rdr-cand1      SPURS abort   flips=601    crashes=0   abort=22.952633  25s load=8.03
+        hit f00748.png 24.90 Press START
+      rdr          PASS  flips=601    vs floor 500 (metric=screen); reference flips 601 (recorded, not a bar) over 1 pair(s) in 69s screen=PressSTART 1/1 candidate, 1/1 reference
+
+    regress: all present games passed (0 skipped)
+    EXIT=0
+
+Note the earlier pair on the same code (load 15-23) gave minecraft 6421 vs 5341
+and a first RDR attempt where the reference missed the title and the candidate
+also missed it -- which is exactly why the rule is best-of-N inside one-minute
+pairs and not a single sample.
+
+### The tests
+
+    $ ctest --test-dir build -j 4
+    100% tests passed, 0 tests failed out of 39
+    Total Test time (real) =   3.48 sec
+
+### Negative controls
+
+The screen criterion has to fail when the screen is not there, or it is not a
+criterion. Three controls, all run for real:
+
+1. marker replaced by one that is not on the screen:
+       $ sed -i 's/screen=PressSTART/screen=ZZNOTONSCREEN/' docs/regress-baseline.md
+       $ tools/regress.sh rdr            (see /tmp/m4-neg1.txt)
+2. a candidate binary that does not exist: must be reported, not passed
+       $ MC_BIN=/nonexistent/ps3base tools/regress.sh minecraft
+3. a candidate that is not the title: `RDR_BIN=/bin/false`
+
+Results are in the next measurement so the raw output is not split.
+
+### The negative controls, and the bug the third one found
+
+Three controls, all run for real.
+
+1. A marker that is not on the screen:
+
+       $ sed -i 's/screen=PressSTART/screen=ZZNOTONSCREEN/' docs/regress-baseline.md
+       $ DISPLAY_NUM=:963 sh tools/regress.sh rdr
+         rdr-ref1       SPURS abort   flips=601    crashes=0   abort=22.703669  25s load=10.28
+           miss: 746 frames, 6 with lit text in the window, 6 OCR'd
+         rdr          FAIL  flips=601    vs floor 500 (metric=screen); screen=ZZNOTONSCREEN 0/6 candidate, 0/6 reference  <- screen-missing
+       regress: 1 game(s) REGRESSED
+       neg1 EXIT=1
+
+2. A candidate binary that does not exist:
+
+       $ MC_BIN=/nonexistent/ps3base DISPLAY_NUM=:963 sh tools/regress.sh minecraft
+       minecraft    SKIP  no binary at /nonexistent/ps3base
+       regress: no game regressed, but 1 game(s) could not be run (environment)
+       neg2 EXIT=2
+
+   That was exit 0 ("all present games passed") in the first version. A missing
+   binary reading as a pass is the same false green as a wrong number, so a
+   skipped game now makes the run an environment problem (exit 2).
+
+3. A candidate that is not the title at all:
+
+       $ RDR_BIN=/bin/false DISPLAY_NUM=:963 sh tools/regress.sh rdr
+
+   The first result of this control was PASS with flips=601 -- for /bin/false.
+   That is a false green, and it was a bug in the script, not the criterion
+   firing. run_game assigned its positional parameters to globals named bin,
+   disc and log, and run_one held the candidate in bin too: after the reference
+   run, run_one's bin had been rewritten to the REFERENCE binary, so the
+   "candidate" slot re-ran and re-scored the reference. Every variable in
+   run_game, screen_check and run_one now carries its own prefix (rg_, sc_, ro_)
+   and the control behaves:
+
+       $ RDR_BIN=/bin/false SECONDS_PER_GAME=20 DISPLAY_NUM=:963 sh tools/regress.sh rdr
+       rdr-ref1       alive         flips=541    crashes=0   abort=none       22s load=4.55
+       rdr-cand1      exit 1        flips=0      crashes=0   abort=none        2s load=8.42
+       rdr          FAIL  flips=0      vs floor 500 (metric=screen); reference flips 541 (recorded, not a bar) over 7 pair(s) in 210s screen=PressSTART 0/7 candidate, 0/7 reference  <- below-floor screen-missing
+       regress: 1 game(s) REGRESSED
+       RC=1
+
+### A second bug the controls exposed: two runs at once
+
+Running a control while an earlier regress was still in flight produced a
+candidate log that was not the candidate's: both runs write
+/tmp/regress-rdr-cand1.log, and each one's clear_strays kills the other's game.
+The numbers from such a run are void, and neither is a pass. The script now takes
+an exclusive lock (a directory under /tmp/ps3base-regress.lock, released by a
+trap, with a liveness check so a killed run does not wedge the next one) and
+waits, bounded, rather than interleaving.

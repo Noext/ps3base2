@@ -6,34 +6,34 @@
 # word. A handled page fault prints a dozen stack lines; counting them once
 # looked like sixteen crashes while the game was running fine.
 #
-# HOW A RUN IS JUDGED -- and why the reference is a second binary and not only a
-# number in a file:
+# THE COMPARISON RULE -- every comparison is an A/B on the same machine within
+# the same minute.
 #
-#   Every comparison is an A/B on the same machine within the same minute.
-#   Each game is run twice, back to back, on the same display: once with the
-#   reference binary (the pristine main checkout's build) and once with this
-#   tree's binary. The candidate must not fall behind the reference by more than
-#   the measured spread of two runs of the same code. Comparing against a number
-#   measured days ago is not a comparison: this machine is shared, and the same
-#   binary has been seen at 5401 and 5821 flips in two adjacent minutes purely
-#   from other agents' load. Two runs minutes apart are not comparable, and a
-#   false "regression" was reported exactly that way once.
+#   Each game is run in pairs, back to back on the same display: the reference
+#   binary (the pristine main checkout's build) and then this tree's binary. The
+#   candidate is judged against the reference measured in that same pair, not
+#   against a number recorded days ago. This machine is shared: the SAME minecraft
+#   binary gave 6601 and 6661 flips in one pair and 6421 vs 5341 in another, and
+#   gta-sa gave 5881 vs 6301. A bar that does not know about that spread reports
+#   regressions that are not there, and one did.
 #
-#   The numbers in docs/regress-baseline.md are the reference binary's own
-#   measured result, read as a floor for the case where no reference binary is
-#   available (a partial tree, a bisect) and as the record of what was measured.
+#   Attempts repeat, and the best attempt of each side is compared. The best of a
+#   few runs is the title's own capability; one run is the machine's mood. The
+#   count per game is in the baseline file.
+#
+# THE NUMBERS live in docs/regress-baseline.md, one line per game, and are the
+# floor used only when no reference binary is available (a partial tree, a
+# bisect). The history table beside them records what was measured and why.
 #
 # Reference points, per game:
 #
 #   minecraft   a generated world (docs/PLAY.md), alive at a 120 s budget
 #   gta-sa      in game at Grove Street (docs/recon/gta-sa.md), alive
-#   rdr         the TITLE SCREEN: RED DEAD REDEMPTION with "Press START" on
-#               black, drawn from the title's own assets. The screen is read
-#               back from a recording of the run, not from a poll -- the title
-#               is up for about a quarter of a second before the SPURS abort at
-#               ~23 s, so a sampler that grabs the display twice a second steps
-#               over it (66 grabs, no hit) while a 30 fps recording catches
-#               eight frames of it. tools/frame_marker.py does the read.
+#   rdr         the TITLE SCREEN: RED DEAD REDEMPTION with "Press START" on black,
+#               drawn from the title's own assets at ~22 s. Read back from a 30 fps
+#               recording of the run by tools/frame_marker.py -- a poll steps over
+#               it (66 window grabs over 23 s, no hit; the recording catches eight
+#               frames of it).
 #
 # Usage:
 #   tools/regress.sh                 # all three
@@ -41,25 +41,64 @@
 #   tools/regress.sh --list
 #
 # Environment:
-#   SECONDS_PER_GAME=120   budget per run (so 2x per game)
+#   SECONDS_PER_GAME=120   budget per run
 #   DISPLAY_NUM=:0         display to run on and to record
-#   REF_REQUIRED=1         treat a missing reference binary as a failure
-#   MC_BIN GTA_BIN RDR_BIN the candidate binaries (default: this tree's builds)
-#   MC_REF_BIN ... REF_BIN  the reference binaries (default: the main checkout's)
+#   REF_ROOT               main checkout holding the generated images and the
+#                          reference binaries (default: ../ps3base2)
+#   REF_REQUIRED=1         a missing reference binary is a failure, not a fallback
+#   MC_BIN GTA_BIN RDR_BIN candidate binaries (default: this tree's builds)
+#   MC_REF_BIN GTA_REF_BIN RDR_REF_BIN reference binaries
 #
-# Exit: 0 all present games passed, 1 something regressed, 2 environment problem.
+# Exit: 0 all present games passed, 1 something regressed, 2 environment problem
+# (a requested game could not be run, or another run holds the lock).
 set -u
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 SECONDS_PER_GAME=${SECONDS_PER_GAME:-120}
 DISPLAY_NUM=${DISPLAY_NUM:-:0}
 REF_ROOT=${REF_ROOT:-$ROOT/../ps3base2}
-# How far behind the reference a candidate may be and still pass. Measured
-# spread of two runs of the SAME code, back to back: minecraft 5881 vs 5641
-# (4.1%), gta-sa 5401 vs 5821 (7.2%). 10% covers that and still moves when a
-# change costs a real number of frames.
-JITTER_PCT=10
 REF_REQUIRED=${REF_REQUIRED:-0}
+
+# How far behind the reference a candidate may be and still pass. This is the
+# measured spread of runs of the SAME code on this machine, and it is large:
+#
+#   minecraft, same commit, adjacent pairs: 6601 vs 6661 (0.9%), 6421 vs 5341
+#                                          (17.0%), 6241 vs 6061 (2.9%)
+#   gta-sa,    same commit, adjacent pairs: 5881 vs 6301 (7.1%), 5761 vs 5941 (3.1%)
+#
+# So the noise floor of a single pair is about 17%, and a bar tighter than that
+# reports regressions that are not there. 20% is the jitter floor; what the bar
+# therefore catches is a COLLAPSE -- the failures this port has actually had were
+# 7081 flips to 0 (the net calls) and 5401 to 0, not a tenth of a frame rate. A
+# change that costs less than a fifth of the frames cannot be told apart from this
+# machine's mood on one pair, and the script says so instead of pretending.
+JITTER_PCT=20
+
+# One regress run at a time. Two runs on the same display share /tmp paths and
+# each one's clear_strays kills the other's game, so the numbers are void before
+# any correction helps. The lock is a directory (atomic) and is removed by the
+# trap. Owner liveness is checked so a killed run does not block the next one.
+REGRESS_LOCK=${REGRESS_LOCK:-/tmp/ps3base-regress.lock}
+acquire_lock() {
+    served=0
+    while ! mkdir "$REGRESS_LOCK" 2>/dev/null; do
+        lock_pid=$(cat "$REGRESS_LOCK/pid" 2>/dev/null || echo "")
+        if [ -n "$lock_pid" ] && ! kill -0 "$lock_pid" 2>/dev/null; then
+            rm -rf "$REGRESS_LOCK"
+            continue
+        fi
+        served=$((served + 1))
+        if [ "$served" -gt 900 ]; then
+            echo "regress: $REGRESS_LOCK has been held for 30 minutes; remove it by hand" >&2
+            exit 2
+        fi
+        [ "$served" = 1 ] && echo "regress: waiting for the run holding $REGRESS_LOCK" >&2
+        sleep 2
+    done
+    echo $$ > "$REGRESS_LOCK/pid"
+}
+release_lock() { rm -rf "$REGRESS_LOCK"; }
+trap 'release_lock' EXIT INT TERM
 
 game_binary() {
     case "$1" in
@@ -75,10 +114,17 @@ game_ref_binary() {
         rdr)       echo "${RDR_REF_BIN:-$REF_ROOT/build-rdr/ps3base}" ;;
     esac
 }
-# The image paths are compiled in as "out-rdr/gen/reloc/liblv2.elf" and resolved
-# against the process's working directory, so the run has to start in a tree
-# that holds the generated images. A worktree of this repository does not (they
-# are gitignored and derived from the user's disc), the main checkout does.
+game_disc() {
+    case "$1" in
+        minecraft) echo "${MC_DISC:-$HOME/Dev/mc-port/disc}" ;;
+        gta-sa)    echo "${GTA_DISC:-$HOME/Dev/gta-port/disc}" ;;
+        rdr)       echo "${RDR_DISC:-$HOME/Dev/rdr-port/vfs/dev_bdvd}" ;;
+    esac
+}
+# The image paths are compiled in as "out-rdr/gen/reloc/liblv2.elf" and are
+# resolved against the working directory, so a run starts in the tree that holds
+# the generated images. A worktree does not hold them (gitignored, derived from
+# the user's own disc); the main checkout does.
 game_run_root() {
     case "$1" in
         minecraft) d=out-mc ;;
@@ -91,20 +137,11 @@ game_run_root() {
     done
     echo "$ROOT"
 }
-game_disc() {
-    case "$1" in
-        minecraft) echo "${MC_DISC:-$HOME/Dev/mc-port/disc}" ;;
-        gta-sa)    echo "${GTA_DISC:-$HOME/Dev/gta-port/disc}" ;;
-        rdr)       echo "${RDR_DISC:-$HOME/Dev/rdr-port/vfs/dev_bdvd}" ;;
-    esac
-}
 
-# The numbers that decide a pass live in docs/regress-baseline.md, one line per
-# game: "rdr flips=500 screen=PressSTART ref_flips=601". Raising a bar is one
-# edit in one place and the history table beside it says why. The marker is
-# written without its space because the file is parsed by whitespace; the
-# comparison drops whitespace on both sides, so "PressSTART" reads "Press START".
 baseline_file() { echo "$ROOT/docs/regress-baseline.md"; }
+# baseline_get <game> <key>: one whitespace-separated key=value field from the
+# game's line. The screen marker is written without its space (PressSTART) for
+# this reason; frame_marker.py compares with whitespace removed on both sides.
 baseline_get() {
     f=$(baseline_file)
     [ -f "$f" ] || return 0
@@ -114,16 +151,14 @@ baseline_flips() {
     n=$(baseline_get "$1" flips)
     echo "${n:-0}"
 }
-game_screen_marker() { baseline_get "$1" screen; }
 
 # The screen criterion needs a recorder, an OCR reader and a level stretch.
-# Without them the 'screen' criterion cannot be judged and the run is reported as
-# an environment problem rather than as a pass it did not earn.
+# Without them it cannot be judged, and the run is reported as an environment
+# problem rather than as a pass it did not earn.
 capture_ready() {
     command -v ffmpeg    >/dev/null 2>&1 &&
     command -v tesseract >/dev/null 2>&1 &&
     command -v convert   >/dev/null 2>&1 &&
-    command -v python3   >/dev/null 2>&1 &&
     python3 -c 'import PIL' >/dev/null 2>&1
 }
 
@@ -131,13 +166,13 @@ list_points() {
     cat <<'EOF'
 minecraft   a generated world      pass = alive at the budget, flips >= reference (same minute), 0 crashes
 gta-sa      in game, Grove Street  pass = alive at the budget, flips >= reference (same minute), 0 crashes
-rdr         the title screen       pass = "Press START" read from the recording, flips >= reference, 0 crashes
+rdr         the title screen       pass = "Press START" read from a recording, flips >= floor, 0 crashes
 EOF
 }
 
 # Nothing may run alongside the title: a stray ps3base from the previous game
 # burns every core and lowers the flips of the run being judged, and a leftover
-# Xvfb client would show up in the recording as a second window.
+# client would show up in the recording as a second window.
 clear_strays() {
     for p in /proc/[0-9]*; do
         c=$(tr "\0" " " < "$p/cmdline" 2>/dev/null) || continue
@@ -151,191 +186,238 @@ clear_strays() {
 }
 
 # run_game <tag> <bin> <disc> <record:0|1> <run-root>
-# Prints one line and leaves the numbers in /tmp/regress-<tag>.{flips,abort,code}
+# Leaves the numbers in /tmp/regress-<tag>.{flips,crashes,abort,code}, prints one
+# line. The tag carries the attempt number and the side, so nothing collides.
+#
+# EVERY variable in this function is prefixed rg_. These are shell globals, and a
+# helper that assigns the same names as its caller silently rewrites the caller's
+# state: an earlier version set "bin" to its own argument, so after the reference
+# run the candidate slot re-ran the REFERENCE binary -- and a negative control
+# with RDR_BIN=/bin/false came back PASS with 601 flips. That is a false green of
+# exactly the kind this script exists to prevent. The prefixes are the fix and the
+# negative control is the test that catches it.
 run_game() {
-    tag=$1; bin=$2; disc=$3; record=$4; runroot=$5
-    log="/tmp/regress-$tag.log"
-    rec="/tmp/regress-$tag.mkv"
-    rm -f "$log" "$rec"
+    rg_tag=$1; rg_bin=$2; rg_disc=$3; rg_record=$4; rg_runroot=$5
+    rg_log="/tmp/regress-$rg_tag.log"
+    rg_rec="/tmp/regress-$rg_tag.mkv"
+    rm -f "$rg_log" "$rg_rec"
 
     clear_strays
-    load=$(cut -d" " -f1 /proc/loadavg)
-    started=$(date +%s)
+    rg_load=$(cut -d" " -f1 /proc/loadavg)
+    rg_started=$(date +%s)
 
-    # The recorder runs BEFORE the title starts and is stopped when it exits. It
-    # costs CPU, so it is worth knowing that it does not move the numbers:
-    # rdr without a recording is 601 flips, abort 23.4 s; with a 30 fps
-    # recording of the same display it is 601 flips, abort 23.1 s.
-    if [ "$record" = 1 ]; then
+    # The recorder starts BEFORE the title does and is stopped after it exits. It
+    # costs CPU, so it is worth knowing it does not move what is judged: rdr
+    # without a recording is 601 flips, abort 23.4 s; with a 30 fps recording of
+    # the same display it is 601 flips, abort 23.1 s.
+    rg_ffmpeg=""
+    if [ "$rg_record" = 1 ]; then
         ffmpeg -hide_banner -loglevel error -f x11grab -framerate 30 \
                -video_size 1280x720 -i "$DISPLAY_NUM" \
-               -c:v libx264 -preset ultrafast -qp 0 -y "$rec" \
-               >/tmp/regress-$tag.ff.log 2>&1 &
-        ffmpeg_pid=$!
+               -c:v libx264 -preset ultrafast -qp 0 -y "$rg_rec" \
+               >"/tmp/regress-$rg_tag.ff.log" 2>&1 &
+        rg_ffmpeg=$!
         sleep 2
     fi
 
-    # The image paths are compiled in as "out-rdr/gen/reloc/liblv2.elf" and are
-    # resolved against the working directory, so the run starts in the tree that
-    # holds the generated images. A worktree does not hold them (they are
-    # gitignored and derived from the user's own disc); the main checkout does.
-    ( cd "$runroot" && PS3BASE_DISC_DIR="$disc" PS3BASE_LOG=info DISPLAY="$DISPLAY_NUM" \
+    ( cd "$rg_runroot" && PS3BASE_DISC_DIR="$rg_disc" PS3BASE_LOG=info DISPLAY="$DISPLAY_NUM" \
       XDG_RUNTIME_DIR="/run/user/$(id -u)" \
-          timeout "$SECONDS_PER_GAME" "$bin" --no-launcher ) >"$log" 2>&1
-    code=$?
+          timeout "$SECONDS_PER_GAME" "$rg_bin" --no-launcher ) >"$rg_log" 2>&1
+    rg_code=$?
 
-    if [ "$record" = 1 ]; then
-        kill -INT "$ffmpeg_pid" 2>/dev/null
-        wait "$ffmpeg_pid" 2>/dev/null
+    if [ -n "$rg_ffmpeg" ]; then
+        kill -INT "$rg_ffmpeg" 2>/dev/null
+        wait "$rg_ffmpeg" 2>/dev/null
     fi
-    elapsed=$(($(date +%s) - started))
+    rg_elapsed=$(($(date +%s) - rg_started))
 
-    flips=$(grep -a 'rsx: flip' "$log" 2>/dev/null | tail -1 | grep -oE 'flip [0-9]+' | grep -oE '[0-9]+')
-    flips=${flips:-0}
-    crashes=$(grep -ac 'crash: signal' "$log" 2>/dev/null)
-    crashes=${crashes:-0}
-    # A SPURS stop exits through _sys_process_exit, so the exit code is the
-    # title's own and not a signal; the time it happened is what a criterion can
-    # use, together with the screen it happened after.
-    abort_t=$(awk '/SPURS is aborted|_sys_process_exit\\(0x8001000c\\)|PS3 SDK INTERNAL ASSERTION FAILURE/ { print $2; exit }' "$log" 2>/dev/null)
-    case "$code" in
-        124) verdict="alive" ;;
-        3)   verdict="discovery stop" ;;
-        0)   verdict="exited cleanly" ;;
-        139) verdict="SEGFAULT" ;;
-        134) verdict="ABORT" ;;
-        *)   verdict="exit $code" ;;
+    rg_flips=$(grep -a 'rsx: flip' "$rg_log" 2>/dev/null | tail -1 | grep -oE 'flip [0-9]+' | grep -oE '[0-9]+')
+    rg_flips=${rg_flips:-0}
+    rg_crashes=$(grep -ac 'crash: signal' "$rg_log" 2>/dev/null)
+    rg_crashes=${rg_crashes:-0}
+    # A SPURS stop exits through _sys_process_exit, so the exit code is the title's
+    # own and not a signal. The time it happened is recorded because it is what
+    # tells a slow start from a changed one.
+    rg_abort=$(awk '/SPURS is aborted|_sys_process_exit\(0x8001000c\)|PS3 SDK INTERNAL ASSERTION FAILURE/ { print $2; exit }' "$rg_log" 2>/dev/null)
+    rg_verdict="exit $rg_code"
+    case "$rg_code" in
+        124) rg_verdict="alive" ;;
+        3)   rg_verdict="discovery stop" ;;
+        0)   rg_verdict="exited cleanly" ;;
+        139) rg_verdict="SEGFAULT" ;;
+        134) rg_verdict="ABORT" ;;
     esac
-    grep -aq 'The SPURS is aborted' "$log" 2>/dev/null && verdict="SPURS abort"
+    grep -aq 'The SPURS is aborted' "$rg_log" 2>/dev/null && rg_verdict="SPURS abort"
 
-    echo "$flips"   > "/tmp/regress-$tag.flips"
-    echo "$crashes" > "/tmp/regress-$tag.crashes"
-    echo "${abort_t:-}" > "/tmp/regress-$tag.abort"
-    echo "$code"    > "/tmp/regress-$tag.code"
-    printf '%-12s %-12s %-15s flips=%-6s crashes=%-3s abort=%-8s %ss load=%s\n' \
-        "$tag" "$(basename "$(dirname "$bin")")" "$verdict" "$flips" "$crashes" \
-        "${abort_t:-none}" "$elapsed" "$load"
+    echo "$rg_flips"          > "/tmp/regress-$rg_tag.flips"
+    echo "$rg_crashes"        > "/tmp/regress-$rg_tag.crashes"
+    echo "${rg_abort:-}"      > "/tmp/regress-$rg_tag.abort"
+    echo "$rg_code"           > "/tmp/regress-$rg_tag.code"
+    printf '  %-14s %-13s flips=%-6s crashes=%-3s abort=%-9s %3ss load=%s\n' \
+        "$rg_tag" "$rg_verdict" "$rg_flips" "$rg_crashes" "${rg_abort:-none}" "$rg_elapsed" "$rg_load"
 }
 
-# judge <name> <cand-tag> <ref-tag> <want-screen:0|1>
-# Returns 0 pass, 1 fail. The flips bar is the reference measured in the same
-# minute; the absolute floor from the baseline file only applies when there was
-# no reference binary to compare against.
-judge() {
-    name=$1; ctag=$2; rtag=$3; want_screen=$4
-    cflips=$(cat "/tmp/regress-$ctag.flips" 2>/dev/null || echo 0)
-    ccrash=$(cat "/tmp/regress-$ctag.crashes" 2>/dev/null || echo 0)
-    ccode=$(cat "/tmp/regress-$ctag.code" 2>/dev/null || echo 1)
-    cabort=$(cat "/tmp/regress-$ctag.abort" 2>/dev/null || echo "")
-    floor=$(baseline_flips "$name")
-    ok=1
-    why=""
-
-    if [ "$ccrash" -ne 0 ]; then ok=0; why="$why crashes"; fi
-
-    if [ "$rtag" != "" ]; then
-        rflips=$(cat "/tmp/regress-$rtag.flips" 2>/dev/null || echo 0)
-        if [ "$rflips" -le 0 ]; then
-            ok=0; why="$why reference-flips-0"
-        else
-            awk -v c="$cflips" -v r="$rflips" -v j="$JITTER_PCT" \
-                'BEGIN { exit !(c + 0 < r * (100 - j) / 100) }' && { ok=0; why="$why behind-reference"; }
-        fi
-        bar="$rflips (reference, same minute)"
-    else
-        bar="$floor (baseline floor)"
-        [ "$cflips" -ge "$floor" ] || { ok=0; why="$why below-floor"; }
+# screen_check <tag> <marker>: writes /tmp/regress-<tag>.screen 1|0, and prints
+# the one line frame_marker.py produced so the log says hit or miss and why.
+screen_check() {
+    sc_tag=$1; sc_marker=$2
+    sc_video="/tmp/regress-$sc_tag.mkv"
+    if [ ! -f "$sc_video" ]; then
+        echo 0 > "/tmp/regress-$sc_tag.screen"
+        echo "    no recording at $sc_video"
+        return 1
     fi
-
-    # The title's own screen, or a clean run to the budget. An abort after the
-    # screen is the next milestone's work, not a regression: what is judged is
-    # that the screen was reached and that the run did not go backwards.
-    if [ "$want_screen" = 1 ]; then
-        hit=$(cat "/tmp/regress-$ctag.screen" 2>/dev/null || echo 0)
-        [ "$hit" = 1 ] || { ok=0; why="$why screen-missing"; }
-    else
-        [ "$ccode" = 124 ] || [ "$ccode" = 3 ] || { ok=0; why="$why not-alive"; }
-    fi
-
-    if [ "$ok" = 1 ]; then
-        printf '  %-12s PASS  flips=%s vs %s%s\n' "$name" "$cflips" "$bar" \
-            "$([ "$want_screen" = 1 ] && printf ' screen=%s' "$(cat /tmp/regress-$ctag.screen 2>/dev/null)")"
+    if "$ROOT/tools/frame_marker.py" "$sc_video" "$sc_marker" > "/tmp/regress-$sc_tag.marker" 2>&1; then
+        echo 1 > "/tmp/regress-$sc_tag.screen"
+        sed -n '1p' "/tmp/regress-$sc_tag.marker" | sed 's/^/    /'
         return 0
     fi
-    printf '  %-12s FAIL  flips=%s vs %s  <-%s  (log /tmp/regress-%s.log)\n' \
-        "$name" "$cflips" "$bar" "$why" "$ctag"
-    return 1
-}
-
-screen_check() {  # tag, marker -> writes /tmp/regress-<tag>.screen 1|0
-    tag=$1; marker=$2
-    video="/tmp/regress-$tag.mkv"
-    if [ ! -f "$video" ]; then echo 0 > "/tmp/regress-$tag.screen"; return 1; fi
-    if "$ROOT/tools/frame_marker.py" "$video" "$marker" > "/tmp/regress-$tag.marker" 2>&1; then
-        echo 1 > "/tmp/regress-$tag.screen"
-        sed -n '1p' "/tmp/regress-$tag.marker" | sed 's/^/  /'
-        return 0
-    fi
-    echo 0 > "/tmp/regress-$tag.screen"
-    sed -n '1p' "/tmp/regress-$tag.marker" | sed 's/^/  /'
+    echo 0 > "/tmp/regress-$sc_tag.screen"
+    sed -n '1p' "/tmp/regress-$sc_tag.marker" | sed 's/^/    /'
     return 1
 }
 
 run_one() {
-    name=$1
-    bin=$(game_binary "$name")
-    ref=$(game_ref_binary "$name")
-    disc=$(eval echo "$(game_disc "$name")")
+    ro_name=$1
+    ro_bin=$(game_binary "$ro_name")
+    ro_ref=$(game_ref_binary "$ro_name")
+    ro_disc=$(eval echo "$(game_disc "$ro_name")")
 
-    if [ ! -x "$bin" ]; then
-        printf '%-12s SKIP  no binary at %s\n' "$name" "$bin"
+    if [ ! -x "$ro_bin" ]; then
+        printf '%-12s SKIP  no binary at %s\n' "$ro_name" "$ro_bin"
         return 2
     fi
-    if [ ! -d "$disc" ]; then
-        printf '%-12s SKIP  no disc at %s\n' "$name" "$disc"
-        return 2
-    fi
-    marker=$(game_screen_marker "$name")
-    want_screen=0
-    [ -n "$marker" ] && want_screen=1
-    if [ "$want_screen" = 1 ] && ! capture_ready; then
-        printf '%-12s SKIP  the screen check needs ffmpeg, tesseract, convert and python3+PIL\n' "$name"
-        return 2
-    fi
-    have_ref=0
-    if [ -x "$ref" ] && [ "$ref" != "$bin" ]; then have_ref=1; fi
-    if [ "$have_ref" = 0 ] && [ "$REF_REQUIRED" = 1 ]; then
-        printf '%-12s SKIP  no reference binary at %s (REF_REQUIRED=1)\n' "$name" "$ref"
+    if [ ! -d "$ro_disc" ]; then
+        printf '%-12s SKIP  no disc at %s\n' "$ro_name" "$ro_disc"
         return 2
     fi
 
-    runroot=$(game_run_root "$name")
-    printf '%-12s candidate %s  (run from %s)\n' "$name" "$bin" "$runroot"
-    if [ "$have_ref" = 1 ]; then
-        printf '%-12s reference %s  (same minute, back to back)\n' "" "$ref"
-
-        # Reference first, then candidate, both inside the same clock minute as
-        # far as the machine's load is concerned. This is the rule, not a
-        # convention: the numbers below are only comparable to each other.
-        run_game "$name-ref" "$ref" "$disc" "$want_screen" "$runroot"
-        [ "$want_screen" = 1 ] && screen_check "$name-ref" "$marker"
-        run_game "$name-cand" "$bin" "$disc" "$want_screen" "$runroot"
-        [ "$want_screen" = 1 ] && screen_check "$name-cand" "$marker"
-        judge "$name" "$name-cand" "$name-ref" "$want_screen"
-        return $?
+    ro_marker=$(baseline_get "$ro_name" screen)
+    ro_want_screen=0
+    [ -n "$ro_marker" ] && ro_want_screen=1
+    if [ "$ro_want_screen" = 1 ] && ! capture_ready; then
+        printf '%-12s SKIP  the screen check needs ffmpeg, tesseract, convert and python3+PIL\n' "$ro_name"
+        return 2
     fi
 
-    printf '%-12s no reference binary: judging against the baseline floor only\n' "$name"
-    run_game "$name-cand" "$bin" "$disc" "$want_screen" "$runroot"
-    [ "$want_screen" = 1 ] && screen_check "$name-cand" "$marker"
-    judge "$name" "$name-cand" "" "$want_screen"
-    return $?
+    ro_have_ref=0
+    if [ -x "$ro_ref" ] && [ "$ro_ref" != "$ro_bin" ]; then ro_have_ref=1; fi
+    if [ "$ro_have_ref" = 0 ] && [ "$REF_REQUIRED" = 1 ]; then
+        printf '%-12s SKIP  no reference binary at %s (REF_REQUIRED=1)\n' "$ro_name" "$ro_ref"
+        return 2
+    fi
+
+    # One pair is one sample and one sample is noisy (17% between adjacent pairs
+    # of the same code). Best-of-N is the title's own capability.
+    ro_attempts=$(baseline_get "$ro_name" attempts)
+    ro_attempts=${ro_attempts:-2}
+    if [ "$ro_want_screen" = 1 ]; then
+        ro_attempts=$(baseline_get "$ro_name" screen_attempts)
+        ro_attempts=${ro_attempts:-6}
+    fi
+    ro_runroot=$(game_run_root "$ro_name")
+    ro_floor=$(baseline_flips "$ro_name")
+    ro_metric=$(baseline_get "$ro_name" metric)
+    ro_metric=${ro_metric:-flips}
+
+    printf '%-12s candidate %s\n' "$ro_name" "$ro_bin"
+    if [ "$ro_have_ref" = 1 ]; then
+        printf '%-12s reference %s  (paired back to back)\n' "" "$ro_ref"
+    else
+        printf '%-12s no reference binary: judging against the baseline floor %s\n' "" "$ro_floor"
+    fi
+    printf '%-12s run root %s, up to %s attempt(s)\n' "" "$ro_runroot" "$ro_attempts"
+
+    ro_start=$(date +%s)
+    ro_cbest=0; ro_rbest=0; ro_ccrash=0; ro_ccode=3; ro_chit=0; ro_rhit=0
+    ro_a=1
+    while [ "$ro_a" -le "$ro_attempts" ]; do
+        if [ "$ro_have_ref" = 1 ]; then
+            run_game "$ro_name-ref$ro_a" "$ro_ref" "$ro_disc" "$ro_want_screen" "$ro_runroot"
+            if [ "$ro_want_screen" = 1 ] && screen_check "$ro_name-ref$ro_a" "$ro_marker"; then
+                ro_rhit=$((ro_rhit + 1))
+            fi
+            ro_rf=$(cat "/tmp/regress-$ro_name-ref$ro_a.flips" 2>/dev/null || echo 0)
+            [ "$ro_rf" -gt "$ro_rbest" ] && ro_rbest=$ro_rf
+        fi
+
+        run_game "$ro_name-cand$ro_a" "$ro_bin" "$ro_disc" "$ro_want_screen" "$ro_runroot"
+        if [ "$ro_want_screen" = 1 ] && screen_check "$ro_name-cand$ro_a" "$ro_marker"; then
+            ro_chit=$((ro_chit + 1))
+        fi
+        ro_cf=$(cat "/tmp/regress-$ro_name-cand$ro_a.flips" 2>/dev/null || echo 0)
+        [ "$ro_cf" -gt "$ro_cbest" ] && ro_cbest=$ro_cf
+        ro_ccrash=$((ro_ccrash + $(cat "/tmp/regress-$ro_name-cand$ro_a.crashes" 2>/dev/null || echo 0)))
+        ro_ccode=$(cat "/tmp/regress-$ro_name-cand$ro_a.code" 2>/dev/null || echo 3)
+
+        # A hit on the screen ends the attempts: the criterion is "reached", not
+        # "reached every time", and every further pair costs half a minute.
+        if [ "$ro_want_screen" = 1 ] && [ "$ro_chit" -gt 0 ]; then break; fi
+        ro_a=$((ro_a + 1))
+    done
+    ro_window=$(($(date +%s) - ro_start))
+
+    ro_ok=1
+    ro_why=""
+    if [ "$ro_ccrash" -ne 0 ]; then ro_ok=0; ro_why="$ro_why crashes=$ro_ccrash"; fi
+
+    # metric=flips (the default): the flip count is the measure, compared against
+    # the reference measured in the same pair.
+    #
+    # metric=screen: for this title the flip count is NOT the measure and the A/B
+    # is the screen. Justification, measured: the SAME reference binary, three
+    # consecutive pairs, gave 601, 601 and 721 flips with aborts at 22.8 s, 23.3 s
+    # and 35.2 s. The abort time -- not the code -- sets the flips, so a flips bar
+    # would fail unchanged code. The screen is the far point, and whether it is
+    # reached is comparable. The flips still have to clear an absolute floor, so a
+    # title that stops drawing cannot pass by presenting a black screen.
+    if [ "$ro_metric" = screen ]; then
+        ro_bar="floor $ro_floor (metric=screen)"
+        [ "$ro_cbest" -ge "$ro_floor" ] || { ro_ok=0; ro_why="$ro_why below-floor"; }
+        if [ "$ro_have_ref" = 1 ]; then
+            ro_bar="$ro_bar; reference flips $ro_rbest (recorded, not a bar)"
+        fi
+    elif [ "$ro_have_ref" = 1 ]; then
+        ro_bar="reference $ro_rbest"
+        if [ "$ro_rbest" -le 0 ]; then
+            ro_ok=0; ro_why="$ro_why reference-flips=0"
+        else
+            awk -v c="$ro_cbest" -v r="$ro_rbest" -v j="$JITTER_PCT" \
+                'BEGIN { exit !(c + 0 < r * (100 - j) / 100) }' && { ro_ok=0; ro_why="$ro_why behind-reference"; }
+        fi
+    else
+        ro_bar="floor $ro_floor"
+        [ "$ro_cbest" -ge "$ro_floor" ] || { ro_ok=0; ro_why="$ro_why below-floor"; }
+    fi
+
+    ro_screen_note=""
+    if [ "$ro_want_screen" = 1 ]; then
+        [ "$ro_chit" -gt 0 ] || { ro_ok=0; ro_why="$ro_why screen-missing"; }
+        ro_screen_note=" screen=$ro_marker $ro_chit/$ro_a candidate, $ro_rhit/$ro_a reference"
+    else
+        case "$ro_ccode" in
+            124|3) ;;
+            *) ro_ok=0; ro_why="$ro_why not-alive(exit $ro_ccode)" ;;
+        esac
+    fi
+
+    if [ "$ro_ok" = 1 ]; then
+        printf '  %-12s PASS  flips=%-6s vs %-14s over %s pair(s) in %ss%s\n' \
+            "$ro_name" "$ro_cbest" "$ro_bar" "$ro_a" "$ro_window" "$ro_screen_note"
+        return 0
+    fi
+    printf '  %-12s FAIL  flips=%-6s vs %-14s over %s pair(s) in %ss%s  <-%s\n' \
+        "$ro_name" "$ro_cbest" "$ro_bar" "$ro_a" "$ro_window" "$ro_screen_note" "$ro_why"
+    printf '  %-12s       logs /tmp/regress-%s-{ref,cand}1.log\n' "" "$ro_name"
+    return 1
 }
 
 if [ "${1:-}" = "--list" ]; then list_points; exit 0; fi
 
 games="${*:-minecraft gta-sa rdr}"
-echo "regress: ${SECONDS_PER_GAME}s per run, reference and candidate back to back, display $DISPLAY_NUM"
+acquire_lock
+echo "regress: ${SECONDS_PER_GAME}s per run; reference and candidate paired back to back"
+echo "regress: display $DISPLAY_NUM, reference root $REF_ROOT"
 failed=0
 skipped=0
 for g in $games; do
@@ -351,5 +433,11 @@ if [ "$failed" -gt 0 ]; then
     echo "regress: $failed game(s) REGRESSED"
     exit 1
 fi
-echo "regress: all present games passed ($skipped skipped)"
+# A run where a requested game could not be started is not a green run: a typo in
+# a binary path or a missing disc would otherwise read as "all passed".
+if [ "$skipped" -gt 0 ]; then
+    echo "regress: no game regressed, but $skipped game(s) could not be run (environment)"
+    exit 2
+fi
+echo "regress: all present games passed"
 exit 0
