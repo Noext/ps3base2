@@ -34,7 +34,15 @@ DEFAULT_CROP = "1000x160+140+550"
 DEFAULT_WINDOW = "300x48+490+612"
 DEFAULT_FPS = 30
 DEFAULT_MIN_LIT = 20        # lit pixels in the window before OCR is worth it
-LIT_LEVEL = 60              # 0..255, above the black background and the HUD
+# 0..255. This was 60 and that was wrong: the same title screen is captured at
+# two brightnesses depending on how the frame was presented -- one run peaks at
+# 200+ in the prompt's glyphs, another at 41 -- and a threshold of 60 discarded
+# every frame of the dim kind before OCR ever saw it. Measured on two recordings
+# of the same binary: glyph peak 41 in one, black background peak 2 in the same
+# band of a frame without the prompt. 24 sits between them with room either side,
+# and auto-level before OCR means the absolute brightness does not matter once
+# the frame is let through.
+LIT_LEVEL = 24
 
 
 def norm(s):
