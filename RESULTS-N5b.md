@@ -386,3 +386,80 @@ the port 0 stores is the truncated 15-character host thread name
 `"SPU " + slot + " " + name`), which is why the numeric id above is the evidence
 and the string is only corroboration.
 
+
+## Measurement 7 -- A/B on the same machine, same minute, no regression
+
+    === A (main 202e9ef build) 08:00:01        load 19.20
+    A exit=12    flips 11
+    I  22.748619 audio stats: 1876 blocks, 2 late wakeups, 0 stale, 0 underruns, period 3751,
+                port0 0/8 filled, index 7 port1 16/16 filled, index 7
+    I  23.838814 tty: [0] The SPURS is stopped due to the SPU exception.
+    === B (explore/N5b) 08:00:25
+    B exit=12    flips 11
+    I  22.336293 audio stats: 1876 blocks, 3 late wakeups, 0 stale, 0 underruns, period 3751,
+                port0 0/8 filled, index 7 port1 16/16 filled, index 11
+    I  22.788566 tty: [0] The SPURS is stopped due to the SPU exception.
+    load 17.90
+
+Identical flips (11), identical period (3751), identical fill (0/8 and 16/16), same
+SPURS abort. The instrumentation is inert unless its env var is set, verified in
+the post-rebase run above: `grep -c 'N5b probe'` = 0 and `grep -c 'queuecount'` = 0
+on a plain invocation.
+
+## Post-rebase state
+
+    $ git fetch /root/Dev/ps3base2 main:refs/remotes/origin/main -f && git rebase origin/main
+    Current branch explore/N5b is up to date.        # origin/main = 202e9ef, 0 commits behind
+    $ tools/check_no_dup_symbols.sh
+    gowa_stubs: no known duplicate definitions
+    $ git diff --diff-filter=D --name-only origin/main..HEAD
+                                                      # empty: no file deleted
+    $ cmake --build build-rdr -j 8 --target ps3base cellAudio && cd build-rdr && ctest -j 4
+    100% tests passed, 0 tests failed out of 40
+
+Diff shape: 7 files, 513 insertions, 0 deletions -- RESULTS-N5b.md, the claim,
+the status json, and the two instrumented surfaces (lv2/event.*, thread.cpp for
+the process-exit report, hle/cellAudio.cpp for the probe).
+
+## The answer
+
+**Events per port.** RDR registers no cellAudio notify queue at all, so the
+per-port event count for this title is 0 and that is a property of the title's
+seven-function libaudio surface, not of the queue. Measured on a queue that IS
+registered (live mixer, real lv2 queue, real consumer): exactly one
+CELL_AUDIO_EVENT_MIX per period -- 937 delivered / 937 received at period 937,
+1875/1875 at 1875, 2813/2813 at 2813, 0 failures.
+
+**Read-index advance.** Yes. 937 index writes per 937 periods, published as a
+big-endian u64 at the port's readIndexAddr; the guest's two words (high at
++0x10, low at +0x14) are read 235 and 633 times by [RAGE Audio] Multistream
+over 24 s, with the low word taking the values 0..7 in sequence.
+
+**Does the PPU thread wake.** Yes, by two measured mechanisms, not one: it
+alternates between sys_timer_usleep(0x320 = 800 us) at lr 0x60a724 in its poll
+loop and sys_event_queue_receive on 0x8d029500 at lr 0x920ef8, and its own
+queue's counter reads delivered=1949 received=1949 pending=0. It consumes 84.4
+events/s and polls the index 27.9 times/s -- it is not woken once per 5.33 ms
+block, and that is the title's design rather than a delivery shortfall, because
+every event posted was received.
+
+**Port 0 vs port 1.** Not a queue question and not a mixer question -- a producer
+question, and the producers are different threads with different results:
+
+| | port 0 (0x12190000, 8ch x 8 blocks) | port 1 (0x121a0000, 2ch x 16 blocks) |
+|---|---|---|
+| writer | SPU thread 0x200 'SecondaryCellSpursKernel0' (tid 1326033), the ONLY writer, 0 reads | PPU 'Bink Audio Thread' (lr 0x00fef920) |
+| values written | 1698/1698 stores are 0x00000000 | 1000 nonzero IEEE-754 floats (0x00723593, 0xbc109842) |
+| blocks touched | block 6 only, 1698 times; the other 7 never written | block 6 (0x121a3000) |
+| fill counter | 0/8 is correct -- the buffer is zeroes | 16/16 |
+| index readers | Multistream only (442 reads) | Bink Audio Thread (26) + [RDR2] Render Thread (15) |
+
+The two ports differ because port 0 is fed by the SPU mix job and port 1 by a PPU
+Bink decode thread. Port 0's SPU job is the thread whose DMA GET is refused at
+pc 0x06428: its 0x90-byte object at LS 0x36200 holds the correct port address at
++0x58 (0x12190000) and 0 at +0x60; `lqr r53,0x36260` reads that 0, `rotqbyi`
+leaves r4=0, and `wrch ch18,r4` publishes EA 0, which is refused as unmapped.
+The same instruction at pc 0x68e8 writes 0x70c95400 (valid), so a branch chooses
+the zero. One run, one thread id (1326033) proves the port-0 writer and the
+refused thread are the same thread.
+
