@@ -293,3 +293,55 @@ checkout binary, now in the reference slot, hit 2/7. So the miss follows the
 slot, not the code -- and the slot is only distinguished by where in the pair it
 runs. That is what sent the investigation to the detector rather than to the
 pair ordering, and the detector was the cause.
+### Measurement 7 -- all three green, with the fixed detector
+
+    $ cd /root/Dev/wt-M4 && DISPLAY_NUM=:963 sh tools/regress.sh
+    regress: 120s per run; reference and candidate paired back to back
+    regress: display :963, reference root /root/Dev/wt-M4/../ps3base2
+    minecraft    candidate /root/Dev/wt-M4/build/ps3base
+                 reference /root/Dev/wt-M4/../ps3base2/build/ps3base  (paired back to back)
+                 run root /root/Dev/wt-M4/../ps3base2, up to 2 attempt(s)
+      minecraft-ref1 alive         flips=6721   crashes=0   abort=none      120s load=6.32
+      minecraft-cand1 alive         flips=6781   crashes=0   abort=none      120s load=9.25
+      minecraft-ref2 alive         flips=6721   crashes=0   abort=none      120s load=10.37
+      minecraft-cand2 alive         flips=6721   crashes=0   abort=none      120s load=12.03
+      minecraft    PASS  flips=6781   vs reference 6721 over 3 pair(s) in 491s
+    gta-sa       candidate /root/Dev/wt-M4/build-gta/ps3base
+                 reference /root/Dev/wt-M4/../ps3base2/build-gta/ps3base  (paired back to back)
+                 run root /root/Dev/wt-M4/../ps3base2, up to 2 attempt(s)
+      gta-sa-ref1    alive         flips=6421   crashes=0   abort=none      121s load=10.24
+      gta-sa-cand1   alive         flips=6421   crashes=0   abort=none      120s load=4.59
+      gta-sa-ref2    alive         flips=6361   crashes=0   abort=none      120s load=5.09
+      gta-sa-cand2   alive         flips=6421   crashes=0   abort=none      120s load=6.98
+      gta-sa       PASS  flips=6421   vs reference 6421 over 3 pair(s) in 491s
+    rdr          candidate /root/Dev/wt-M4/build-rdr/ps3base
+                 reference /root/Dev/wt-M4/../ps3base2/build-rdr/ps3base  (paired back to back)
+                 run root /root/Dev/wt-M4/../ps3base2, up to 6 attempt(s)
+      rdr-ref1       SPURS abort   flips=601    crashes=0   abort=22.756415  25s load=6.13
+        miss: 747 frames, 19 with lit text in the window, 19 OCR'd
+      rdr-cand1      SPURS abort   flips=601    crashes=0   abort=22.744564  25s load=7.71
+        hit f00742.png 24.70 Press START
+      rdr          PASS  flips=601    vs floor 500 (metric=screen); reference flips 601 (recorded, not a bar) over 1 pair(s) in 73s screen=PressSTART 1/1 candidate, 0/1 reference
+
+    regress: all present games passed
+    EXIT=0
+
+### What the deliverable is
+
+  tools/regress.sh          rewritten. Paired same-minute A/B against the
+                            reference binary, attempts per game, the screen read
+                            from a recording, an exclusive lock, prefixed
+                            variables, and exit 2 for an environment problem.
+  tools/frame_marker.py     new. Finds a text marker in a recording: decodes,
+                            prefilters on the marker window's brightness,
+                            auto-levels, OCRs, drops whitespace and compares.
+  docs/regress-baseline.md  rewritten. RDR's bar is the title screen, read by
+                            OCR, metric=screen with a justified flips floor;
+                            screen=socialclub and abort_after=60 removed with the
+                            measurements that retired them; the history table
+                            keeps every previous number.
+
+Negative controls: a wrong marker, a missing binary and a non-title binary all
+report a failure (measurement 4). Both false greens that the controls found --
+globals clobbered across functions, and two concurrent runs sharing /tmp paths --
+are fixed and are the reason those controls exist.
