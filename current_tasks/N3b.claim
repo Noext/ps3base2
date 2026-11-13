@@ -1,0 +1,6 @@
+agent: N3b
+branch: explore/n3b
+worktree: /root/Dev/wt-N3b
+task: SPU channel audit -- all rdch/wrch of the MultiStream program vs RPCS3 SPUThread.cpp
+started: 2026-11-13T07:20Z
+status: running
