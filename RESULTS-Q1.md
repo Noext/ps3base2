@@ -266,3 +266,43 @@ The generated code, from the fresh lift (`out-q1/ppu/rdr_110.cpp:28679`):
 dispatchers in the function (every case body ends by dispatching again).
 
 
+
+### M8 -- the change is exactly the 17 tables, and nothing else in the image
+
+The full table inventory of the RDR image, main vs branch, same ELF, same minute:
+
+    \$ python3 /tmp/q1_tables.py /tmp/q1-ab/main > /tmp/q1-tab-main.txt
+    \$ python3 /tmp/q1_tables.py /tmp/q1-ab/new  > /tmp/q1-tab-new.txt
+    \$ diff <(sort /tmp/q1-tab-main.txt) <(sort /tmp/q1-tab-new.txt)
+
+    0a1,17
+    > 0x00ae5178 in f_00ae50f0 base 0x013e5c8c count 17
+    > 0x00ae51ec in f_00ae50f0 base 0x013e5c8c count 17
+    > 0x00ae5280 in f_00ae50f0 base 0x013e5c8c count 17
+    > 0x00ae5324 in f_00ae50f0 base 0x013e5c8c count 17
+    > 0x00ae53d0 in f_00ae50f0 base 0x013e5c8c count 17
+    > 0x00ae5420 in f_00ae50f0 base 0x013e5c8c count 17
+    > 0x00ae5480 in f_00ae50f0 base 0x013e5c8c count 17
+    > 0x00ae5524 in f_00ae50f0 base 0x013e5c8c count 17
+    > 0x00ae557c in f_00ae50f0 base 0x013e5c8c count 17
+    > 0x00ae55cc in f_00ae50f0 base 0x013e5c8c count 17
+    > 0x00ae562c in f_00ae50f0 base 0x013e5c8c count 17
+    > 0x00ae56a4 in f_00ae50f0 base 0x013e5c8c count 17
+    > 0x00ae571c in f_00ae50f0 base 0x013e5c8c count 17
+    > 0x00ae57d4 in f_00ae50f0 base 0x013e5c8c count 17
+    > 0x00ae5814 in f_00ae50f0 base 0x013e5c8c count 17
+    > 0x00ae5854 in f_00ae50f0 base 0x013e5c8c count 17
+    > 0x00ae58b4 in f_00ae50f0 base 0x013e5c8c count 17
+    177,178c194,195
+    < indirect_jumps [('0xae50f0', '0xae5178')]
+    < total tables 176
+    ---
+    > indirect_jumps []
+    > total tables 193
+
+The diff is 17 added lines and one removed line, and the removed line is the
+single unresolved bctr on the whole image, at exactly the address the run
+reported. **No other table anywhere in the image changed**, so the rule is
+narrow: it fires on this shape and on nothing else present in RDR.
+
+
