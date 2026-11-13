@@ -246,3 +246,52 @@ never subscribes. And the port **is** written -- 3814 PUTs of 0x2000 bytes each,
 correct addresses, correct cadence -- **all with an all-zero payload**
 (measurement 2). The defect is upstream of the channel layer, in whatever
 produces the zero buffer the kernel ships.
+## Measurement 4 -- the three-title regression judge after the decrementer fix
+
+`tools/regress.sh` is the project's mechanical judge: it runs the reference
+binary (main checkout's build) and the candidate back to back on the same
+display, within the same minute, and requires alive + flips >= reference + 0
+crashes. `SECONDS_PER_GAME=45 DISPLAY_NUM=:941`, candidates given as ABSOLUTE
+paths (a relative candidate path makes the script exit 127 from the reference
+root -- that was a harness mistake, not a regression, reported here so the next
+person does not read it as one).
+
+    regress: 45s per run; reference and candidate paired back to back
+    minecraft    candidate /root/Dev/wt-N3b/build-mc/ps3base
+                 reference /root/Dev/ps3base2/build/ps3base  (paired back to back)
+      minecraft-ref1 alive  flips=2161  crashes=0  abort=none  45s load=7.58
+      minecraft-cand1 alive flips=1921  crashes=0  abort=none  45s load=11.71
+      minecraft-ref2 alive  flips=1981  crashes=0  abort=none  45s load=13.20
+      minecraft-cand2 alive flips=2041  crashes=0  abort=none  45s load=15.95
+      minecraft    PASS  flips=2041   vs reference 2161 over 3 pair(s) in 191s
+    gta-sa       candidate /root/Dev/wt-N3b/build-gta2/ps3base
+                 reference /root/Dev/ps3base2/build-gta/ps3base  (paired back to back)
+      gta-sa-ref1    alive flips=2041  crashes=0  abort=none  45s load=13.66
+      gta-sa-cand1   alive flips=2041  crashes=0  abort=none  45s load=12.89
+      gta-sa-ref2    alive flips=2101  crashes=0  abort=none  46s load=10.63
+      gta-sa-cand2   alive flips=2041  crashes=0  abort=none  46s load=8.73
+      gta-sa       PASS  flips=2041   vs reference 2101 over 3 pair(s) in 192s
+
+    regress: all present games passed
+
+GTA is deterministic at 1561 flips in a separate 2x2 A/B (1561/1561, 1561/1561),
+which is the cleanest control here: the decrementer change moves nothing on it.
+Minecraft's spread (1441-2161 for the SAME binary across pairs) is the machine,
+which is why the project rule is 'compare within the same minute' and not
+'compare to a recorded number'.
+
+RDR, same-minute A/B, 40 s budget:
+
+    main    exit 12, flip 601, 'The SPURS is aborted.' at 22.96 s
+    branch  exit 12, flip 601, 'The SPURS is aborted.' at 23.41 s
+
+601/601 and the same abort: the title screen and the abort are unchanged.
+
+### ctest
+
+    $ ctest --test-dir build-rdr -j 8
+    100% tests passed, 0 tests failed out of 40
+    $ ./build-rdr/spu_channel_conformance
+    spu_channel_conformance: 104 checks, 0 failures
+
+(the channel test grew from 95 to 104 checks with the decrementer arithmetic.)
