@@ -74,3 +74,49 @@ known null+0x10 SIGSEGV inside f_0053338c.
 
 Captures: /tmp/p4drive/caps/s0066.png (menu), s0068.png (transition),
 s0070.png, s0072.png (loading).
+### M3 -- the ALERT dialogue is reached by closed-loop driving, and is STABLE (no crash)
+
+The blocker was the SAVE DATA, not the input or the loader. Same binary, same
+display, two arms whose only difference is the VFS:
+
+  arm A: PS3BASE_VFS_DIR unset -> the default vfs/ (3 saves present)
+  arm B: PS3BASE_VFS_DIR=/root/Dev/p4work/vfs-clean (savedata/ empty)
+
+    arm A  savedata: ListAutoLoad: 3 savedata match prefix 'BLES00680' ... listing 3
+    arm B  savedata: ListAutoLoad: 0 savedata match prefix 'BLES00680' ... listing 0
+
+With saves present RDR loads them instead of prompting; with none it draws its
+own ALERT. This is why the previous run's evidence had no reproducible path.
+
+{
+ "arm": "B, clean savedata, closed-loop OCR driver",
+ "driver": "/root/Dev/p4work/loop.py: grab root -> OCR bottom band + centre band -> classify -> press",
+ "journal": [
+  {"t":32.30,"st":"TITLE","text":"Press START","action":"start 200 100"},
+  {"t":34.75,"st":"SCANNING","text":"Scanning for installed downloadable content... please wait."},
+  {"t":37.50,"st":"MENU","text":"Online Multiplayer Downloadable Content 2 Single Player","action":"right,right,cross"},
+  {"t":49.19,"st":"ALERT","text":"A Red Dead Redemption single player save could not be found. What would you like to do?"},
+  {"t":94.20,"st":"ALERT","text":"same, unchanged for 45 s (36 consecutive samples 49.19..94.20)"}
+ ]
+}
+
+The ALERT screen, verbatim from OCR of the centre band:
+
+    ALERT
+    A Red Dead Redemption single player save could not be found. What would you like to do?
+
+with the three rows, read from the pixel rows at the bottom right:
+
+    Continue Without Saving        (Cross)
+    Create A New Save Game         (Square)
+    Retry                          (Circle)
+
+NO CRASH: exit -9 because MY driver killed it at the 150 s budget, not the guest.
+That is a different failure from the one in the task statement, and it is the
+VFS that makes the difference: the SIGSEGV at guest 0x10 happens only when the
+title loads an EXISTING save and then has to run the game world; with no save it
+waits at the prompt for as long as it is left alone.
+
+Captures: /tmp/p4drive_loopA/caps/0048-MENU.png (misclassified ALERT --
+the classifier matched "Single Player" in the same band) up to 0075-MENU.png.
+Evidence copied to docs/evidence/rdr-p4-alert-live.png.
