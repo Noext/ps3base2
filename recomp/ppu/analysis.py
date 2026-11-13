@@ -247,8 +247,16 @@ def jump_table(img, bctr):
     positional = False
 
     # 2. Base: lis/addi/addic, or a TOC load.
+    #
+    # base_from_toc records WHICH of the two it was, because the two carry
+    # different evidence. An absolute lis/addi pair states the table's address in
+    # the instruction stream, so the table's extent can be read from memory. A
+    # TOC load names a slot the module fills at run time, so the value at lift
+    # time is only a guess about what the guest will put there, and the bound
+    # compare is the only thing that says how long the table is.
     base = None
     base_reg = None
+    base_from_toc = False
     lis_reg = lis_val = None
     for a, w in window:
         op = w >> 26
@@ -257,14 +265,17 @@ def jump_table(img, bctr):
         elif op in (12, 14) and lis_reg is not None and ((w >> 21) & 0x1F) == lis_reg:
             base = (lis_val + (w & 0xFFFF)) & 0xFFFFFFFF
             base_reg = lis_reg
+            base_from_toc = False
         elif op == 24 and lis_reg is not None and ((w >> 21) & 0x1F) == lis_reg:
             base = (lis_val | (w & 0xFFFF)) & 0xFFFFFFFF
             base_reg = lis_reg
+            base_from_toc = False
         elif op == 32 and ((w >> 16) & 0x1F) == 2:
             # lwz rX, disp(r2): a TOC slot holding the table POINTER.
             v = img.toc_word(sext(w & 0xFFFF, 16))
             if v:
                 base, base_reg = v, (w >> 21) & 0x1F
+                base_from_toc = True
     if base is None:
         return None
 
@@ -295,12 +306,45 @@ def jump_table(img, bctr):
     # case and 0x88226c was reported as an unknown target. A table whose base is
     # NOT bctr + 4 still requires both the bound and the default branch.
     positional = base == bctr + 4
+    run_extent = False
     if positional:
         if default_off is None and bound is None:
             pass                          # position is the whole claim
         bound = 4096                      # the contiguous run decides the extent
-    elif default_off is None:
-        return None
+    elif default_off is None and bound is None:
+        # A table with NEITHER a bound compare NOR a default branch, whose base
+        # is an absolute address built in this window. Measured on Red Dead
+        # Redemption's f_00ae50f0:
+        #
+        #     00ae5120  3f00013e  addis r24, r0, 0x013e
+        #     00ae5138  33185c8c  addic r24, r24, 0x5c8c   ; base 0x013e5c8c
+        #     00ae5160  889e0000  lbz   r4, 0(r30)          ; the opcode byte
+        #     00ae5168  5484103a  rlwinm r4, r4, 2, 0, 29
+        #     00ae516c  7c98202e  lwzx  r4, r24, r4
+        #     00ae5174  7c8903a6  mtspr ctr, r4
+        #     00ae5178  4e800420  bcctr
+        #
+        # The table at 0x013e5c8c is 17 code addresses and then a zero word.
+        # There is no cmpwi/bgt because the CALLER validates the byte first
+        # (f_00adbf60 compares the handler's result and falls back to 0xff), so
+        # a bound check here would be dead code the compiler removed. Demanding
+        # one rejected the table, the lift emitted a switch with no cases, and
+        # the run stopped on 0x00ae5818 -- entry 13 of those 17.
+        #
+        # The claim being made instead is the one 2cf1fe0 made for the positional
+        # shape, generalised: the extent of a dispatch table is the contiguous
+        # run of in-code entries, and a run of three or more is itself the
+        # evidence. The bound is not required when the table states its own end
+        # by ceasing to be code. The two conditions kept here are what stops
+        # this from swallowing an ordinary indirect branch:
+        #   - the base is an ABSOLUTE address materialised in this window
+        #     (lis/addi, lis/ori, lis/addic). A TOC load is a pointer to
+        #     something the module fills at run time and must keep its bound.
+        #   - the run must be at least three entries (checked below).
+        if base_from_toc:
+            return None
+        bound = 4096
+        run_extent = True
     if bound is None:
         bound = 4096
 
@@ -348,6 +392,26 @@ def jump_table(img, bctr):
             break
     if not targets:
         return None
+    if run_extent:
+        # A run-extent table makes a weaker claim than a bounded one, so it has
+        # to clear a higher bar. Three entries is the minimum that distinguishes
+        # a dispatch table from two adjacent code words in ordinary data, and it
+        # is the same threshold tools/static_seeds.py:code_tables() uses for the
+        # same reason.
+        if len(targets) < 3:
+            return None
+        # The entries must be ONE contiguous region of code, because a switch's
+        # case labels are the basic blocks of the function that contains the
+        # dispatch. Measured on f_00ae50f0: 17 entries covering 0xae517c..
+        # 0xae58b8 with no gap, 463 instructions, all of them this function's
+        # body. A table of FUNCTION POINTERS fails this: its entries are
+        # function entries scattered across the image, and lifting them as cases
+        # of the caller is what turned 3,460 static table seeds into a renderer
+        # segfault. The span is bounded by the same 0x4000 window the dispatcher
+        # detector already uses for a function's extent.
+        lo_t, hi_t = min(targets), max(targets)
+        if hi_t - lo_t > 0x4000:
+            return None
 
     # 7. Every target must be inside the function that contains the bctr. A
     #    target outside it is a tail call or a shared helper, not a switch case.
@@ -481,14 +545,33 @@ def table_dispatch_bctr(img, bctr, lo_fn, hi_fn):
     if base_reg == 0:
         return None
     # The base register is set once, at function entry, and never rewritten.
+    #
+    # "Never rewritten" is what _register_is_table_base established: walking back
+    # from the bctr to the entry, the first write to base_reg is a lis/addi. The
+    # definition that matters is therefore the NEAREST ONE BEFORE THE bctr, not
+    # the last one in the function.
+    #
+    # Measured, and it cost this detector the one table it was written for. Red
+    # Dead's f_00ae50f0 builds its table base in r24 at 0xae5138 and dispatches
+    # at 0xae5178. Scanning the whole body [entry, entry+0x4000) for the last
+    # writer found 0xae79f4 -- an unrelated block 0x2800 bytes below, in the
+    # same function -- and rebuilt the base from the last lis/addi pair before
+    # THAT, giving 0x01440958, which is not in text. The entry scan then found
+    # zero targets and the detector returned None, so the dispatch stayed an
+    # indirect jump and the run stopped on 0x00ae5818.
+    #
+    # The same bug also hides every SECONDARY dispatch: a case body that ends by
+    # dispatching again through the same base register has its definition far
+    # above the 40-instruction window, and only this path can reach it.
     setter = None
-    for a in range(lo_fn, hi_fn, 4):
+    for a in range(bctr - 4, lo_fn - 4, -4):
         w = img.word(a)
         op = w >> 26
         if ((w >> 21) & 0x1F) != base_reg:
             continue
         if op in (12, 14, 15, 24):
             setter = a
+            break
     if setter is None:
         return None
     # Rebuild the base the same way jump_table does.
