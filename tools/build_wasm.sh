@@ -38,7 +38,7 @@ find "$ROOT/runtime/src" -name '*.cpp' \
      -not -path '*/launcher/*' -not -name 'main.cpp' \
      -not -name 'host_input.cpp' -not -name 'host.cpp.orig' \
      -not -path '*/jobsys/*' -not -path '*/gpu/edge*' -not -name 'vk_context.cpp' \
-     -not -name 'presenter.cpp' -not -name 'motion_vectors.cpp' \
+     -not -name 'rsx_renderer.cpp' -not -name 'presenter.cpp' -not -name 'motion_vectors.cpp' \
      -not -name 'shader_compiler.cpp' -not -name '*_adapters.cpp' -not -name 'renjob_whole.cpp' \
      -not -path '*/spu/anim/*' \
      -not -path '*/spu/cloth/*' \
@@ -53,7 +53,7 @@ find "$ROOT/runtime/src" -name '*.cpp' \
      -not -path '*/spu/shadows/*' \
      -not -path '*/spu/tasks/*' | while read -r f; do
     o="$OUT/obj/$(echo "${f#$ROOT/}" | tr '/' '_' | sed 's/\.cpp$/.o/')"
-    "$EMCC" "${CXXFLAGS[@]}" -DPS3BASE_BOOT_PROBE=1 -DPS3BASE_INPUT_BUILTIN=1 -DPS3BASE_CALL_TARGET_CHECK=1 -DPS3BASE_RSXB_PROBE=1 -DPS3BASE_RSXB_PROBE=1 -DPS3BASE_BLOCK_TRACE=1 -DPS3BASE_LD_TRAP=1 -c "$f" -o "$o"
+    "$EMCC" "${CXXFLAGS[@]}" -DPS3BASE_BOOT_PROBE=1 -DPS3BASE_INPUT_BUILTIN=1 -DPS3BASE_NO_RENDERER=1 -DPS3BASE_CALL_TARGET_CHECK=1 -DPS3BASE_RSXB_PROBE=1 -DPS3BASE_RSXB_PROBE=1 -DPS3BASE_BLOCK_TRACE=1 -DPS3BASE_LD_TRAP=1 -c "$f" -o "$o"
 done
 
 # stb_image: the HLE image decoders (cellPngDec/cellJpgDec) call it. The runtime
@@ -78,7 +78,7 @@ for f in "$ROOT"/out/ppu/*.cpp; do
     o="$OUT/obj/ppu_$(basename "$f" .cpp).o"
     # The lifted code needs the same defines as the runtime: bc_cond is inline in
     # ops.h, so the block trace only exists if THIS translation unit sees the flag.
-    "$EMCC" "${CXXFLAGS[@]}" -DPS3BASE_CALL_TARGET_CHECK=1 -DPS3BASE_BLOCK_TRACE=1 -c "$f" -o "$o"
+    "$EMCC" "${CXXFLAGS[@]}" -DPS3BASE_NO_RENDERER=1 -DPS3BASE_PAD_PROBE=1 -DPS3BASE_CALL_TARGET_CHECK=1 -DPS3BASE_BLOCK_TRACE=1 -c "$f" -o "$o"
 done
 
 echo "== link"
