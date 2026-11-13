@@ -171,3 +171,32 @@ regression report once already.
 - Delete nothing outside your own scope. `/root/Dev/wasm-base`,
   `/root/Dev/t-T1`, `/root/Dev/t-T2`, `/root/Dev/t-V` and their branches are
   not ours.
+
+## The machine lock: /var/lock/ps3-machine.lock, shared with the t-T1 worktree
+
+Two projects run on this machine: this one and the worktree at `/root/Dev/t-T1`.
+They are separate checkouts of the same tree and each had its own lock, so
+neither knew what the other was doing. On 2026-11-13 a `regress.sh` that was
+believed dead kept spawning RDR runs while another measurement was in flight;
+the load reached 22 and the measurement was void.
+
+The rule is therefore machine-wide and single:
+
+1. **Take `/var/lock/ps3-machine.lock` for ANY game launch and ANY heavy
+   compilation**, from either project. Use `tools/machine_lock.sh run <reason> --
+   <command...>`; it takes the lock, runs, and releases on exit or signal.
+2. **Before any measurement: no game instance, no compilation in flight.** Check
+   `tools/machine_lock.sh status` and `pgrep -f 'ps3base --no-launcher'`. If
+   either is busy, wait -- do not measure.
+3. **A forced stop must be complete.** `regress.sh` runs each title as a plain
+   child in its own process group (`timeout --foreground`, NOT plain `timeout`,
+   which gives the child a new group) and kills it in its trap;
+   `tools/regress_one.sh` starts `regress.sh` under `setsid` so a caller can kill
+   the whole group even on SIGKILL, when no trap runs. Verified: after
+   `kill -9 -<wrapper-pgid>`, `ps` shows no `ps3base`, no `regress.sh`, no
+   `ffmpeg`.
+4. **`kill -TERM -- -$pgid` does not work under dash** (this tree's `/bin/sh`):
+   it parses the `-` after `--` as a signal number and returns
+   `Illegal number: -`, silently killing nothing. The working form is
+   `kill -TERM -$pgid`. This cost three failed tests before it was noticed.
+

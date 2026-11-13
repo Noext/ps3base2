@@ -98,7 +98,41 @@ acquire_lock() {
     echo $$ > "$REGRESS_LOCK/pid"
 }
 release_lock() { rm -rf "$REGRESS_LOCK"; }
-trap 'release_lock' EXIT INT TERM
+
+# Every game runs in its own process group, and every group this script started
+# is killed on exit, on INT and on TERM. Without this a killed regress.sh leaves
+# its titles running: measured 2026-11-13, an orphaned `timeout 120 ... --no-launcher`
+# kept spawning runs after the script was believed dead, and the load reached 22.
+RUN_TITLE_PIDS=""
+# Kill every title this script started, and every recorder, on exit or signal.
+#
+# Two measured facts shaped this:
+#  - "kill -TERM -- -$pgid" FAILS under dash (this script's /bin/sh): it parses
+#    the "-" after "--" as a signal number and returns "Illegal number: -",
+#    silently killing nothing. The working form is "kill -TERM -$pgid".
+#  - a title launched through setsid gets its own group and therefore escapes a
+#    caller's group kill of regress.sh. The title is a plain child here instead.
+kill_run_groups() {
+    for p in $RUN_TITLE_PIDS; do
+        [ -n "$p" ] || continue
+        kill -TERM "$p" 2>/dev/null
+        sleep 0.2
+        kill -KILL "$p" 2>/dev/null
+    done
+    RUN_TITLE_PIDS=""
+    # Belt and braces: any title left in our own process group, by any path.
+    for d in /proc/[0-9]*; do
+        c=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null) || continue
+        case "$c" in
+            *ps3base*--no-launcher*)
+                pg=$(awk '/^Pgid:/{print $2}' "$d/status" 2>/dev/null)
+                [ "$pg" = "$$" ] && kill -9 "${d#/proc/}" 2>/dev/null
+                ;;
+        esac
+    done 2>/dev/null
+}
+release_all() { kill_run_groups; release_lock; }
+trap 'release_all' EXIT INT TERM
 
 game_binary() {
     case "$1" in
@@ -233,11 +267,38 @@ run_game() {
         sleep 2
     fi
 
-    ( cd "$rg_runroot" && GOWA_FLASH_DIR="${GOWA_FLASH_DIR:-/root/Dev/devflash-out/dev_flash}" PS3BASE_DISC_DIR="$rg_disc" PS3BASE_LOG=info DISPLAY="$DISPLAY_NUM" \
-      XDG_RUNTIME_DIR="/run/user/$(id -u)" \
-          timeout "$SECONDS_PER_GAME" "$rg_bin" --no-launcher ) >"$rg_log" 2>&1
+    # The title stays in THIS script's process group, deliberately, and
+    # `timeout --foreground` is what keeps it there: GNU timeout otherwise puts
+    # its child in a NEW process group, so the title had its own pgid and escaped
+    # a group kill of regress.sh. Measured in the process listing: the title's
+    # pgid equalled its own pid instead of regress.sh's.
+    #
+    # Measured why: on 2026-11-13 a regress.sh believed dead kept spawning RDR
+    # runs; killing it by pid left them alive and the load reached 22, voiding a
+    # measurement. The first fix here launched the title with setsid, which gave
+    # it a group of its OWN -- and a caller that kills regress.sh's group then
+    # misses it entirely, which is the same failure with more steps. So the
+    # title is a plain child in our group, the trap kills it by pid, and
+    # tools/regress_one.sh makes regress.sh a session leader so a caller's group
+    # kill reaches the whole tree.
+    rg_title_pid=""
+    (
+        cd "$rg_runroot" || exit 2
+        exec env GOWA_FLASH_DIR="${GOWA_FLASH_DIR:-/root/Dev/devflash-out/dev_flash}" \
+            PS3BASE_DISC_DIR="$rg_disc" PS3BASE_LOG=info DISPLAY="$DISPLAY_NUM" \
+            XDG_RUNTIME_DIR="/run/user/$(id -u)" \
+            timeout --foreground "$SECONDS_PER_GAME" "$rg_bin" --no-launcher
+    ) >"$rg_log" 2>&1 &
+    rg_wait=$!
+    # The subshell execs, so its pid is the timeout's pid: killable directly.
+    RUN_TITLE_PIDS="$RUN_TITLE_PIDS $rg_wait"
+    wait "$rg_wait"
     rg_code=$?
 
+    # Nothing from this run may outlive it: kill the title and the recorder.
+    kill -TERM "$rg_wait" 2>/dev/null
+    sleep 0.2
+    kill -KILL "$rg_wait" 2>/dev/null
     if [ -n "$rg_ffmpeg" ]; then
         kill -INT "$rg_ffmpeg" 2>/dev/null
         wait "$rg_ffmpeg" 2>/dev/null
@@ -428,6 +489,24 @@ run_one() {
 if [ "${1:-}" = "--list" ]; then list_points; exit 0; fi
 
 games="${*:-minecraft gta-sa rdr}"
+# The machine-wide lock, shared with the t-T1 worktree: no game runs and no heavy
+# build while another project holds it. This is a second lock on purpose -- the
+# regress lock above serialises regress.sh against itself, this one serialises
+# EVERYTHING on the machine.
+MLOCK="$ROOT/tools/machine_lock.sh"
+if [ -x "$MLOCK" ]; then
+    # PS3_MACHINE_OWNER_PID is required here: machine_lock.sh is a CHILD process,
+    # so its own $$ is dead by the time the lock is checked. Without this the
+    # lock read as ABANDONED one second after it was taken -- measured.
+    if PS3_MACHINE_OWNER_PID=$$ PS3_MACHINE_WAIT="${PS3_MACHINE_WAIT:-7200}" \
+            "$MLOCK" acquire "regress.sh: $*"; then
+        trap 'kill_run_groups; PS3_MACHINE_OWNER_PID=$$ "$MLOCK" release 2>/dev/null; release_lock' EXIT INT TERM
+    else
+        echo "regress: the machine lock is held; not measuring" >&2
+        exit 2
+    fi
+fi
+
 acquire_lock
 echo "regress: ${SECONDS_PER_GAME}s per run; reference and candidate paired back to back"
 echo "regress: display $DISPLAY_NUM, reference root $REF_ROOT"
