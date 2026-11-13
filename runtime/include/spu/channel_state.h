@@ -236,6 +236,122 @@ inline bool dma_is_put(uint32_t cmd) {
     return cls == 0x20 || cls == 0x30 || cls == 0xA0;
 }
 
+/* ---- the decrementer ------------------------------------------------- */
+
+/* SPU_RdDec and the TD/TM event, written as RPCS3's arithmetic.
+ *
+ *   rpcs3/Emu/Cell/SPUThread.cpp:5398  std::pair<u32,u32> read_dec()
+ *       const u64 res = ch_dec_value - (is_dec_frozen ? 0
+ *                                       : (get_timebased_time() - ch_dec_start_timestamp));
+ *       return { u32(res), u32(res >> 32) };
+ *   rpcs3/Emu/Cell/SPUThread.cpp:5425  the TM arm of get_events()
+ *       if (mask_hint & SPU_EVENT_TM)
+ *           if (const u64 res = read_dec().second)
+ *           {
+ *               ch_dec_start_timestamp -= res << 32;
+ *               collect |= SPU_EVENT_TM;
+ *           }
+ *
+ * Two things follow, and BOTH were wrong in this runtime before this was
+ * written down:
+ *
+ *  1. The decrementer is a 32-BIT counter. The READ returns the low word, and
+ *     the EVENT fires on the underflow of that 32-bit counter, which is exactly
+ *     'the high word of the 64-bit difference is non-zero'. Comparing
+ *     'elapsed > dec_value' asks a different question: with dec_value = 0 (the
+ *     guest never wrote SPU_WrDec) it is true on every tick, so the event fired
+ *     on every single channel read. Measured in the RDR run: ch0 was read 5581
+ *     times and the event state word stayed 0x400 because the guest only masks
+ *     LR -- the storm was invisible there, which is why it survived.
+ *
+ *  2. After the underflow the counter is NOT re-armed to 'now'. RPCS3 advances
+ *     the start timestamp by (high << 32), i.e. by the whole 2^32 period the
+ *     counter ran past, so the next event is one full 32-bit period later.
+ *     Re-arming to 'now' makes a dec_value = 1000 countdown fire every 1000
+ *     ticks instead of every 2^32.
+ *
+ * Both rules are pure integer arithmetic, so the unit test drives them here and
+ * SpuThread calls them; there is no second copy of the specification. */
+
+/* read_dec(): the 64-bit difference, then the two words the guest and the event
+ * logic see. 'frozen' means the counter stopped (TM acknowledged while TM is
+ * unmasked, SPUThread.cpp:6603). */
+inline uint64_t dec_residual(uint32_t dec_value, uint64_t now, uint64_t start, bool frozen) {
+    return uint64_t(dec_value) - (frozen ? 0 : (now - start));
+}
+
+/* What SPU_RdDec (ch8) returns. */
+inline uint32_t dec_read(uint32_t dec_value, uint64_t now, uint64_t start, bool frozen) {
+    return static_cast<uint32_t>(dec_residual(dec_value, now, start, frozen));
+}
+
+/* Has the 32-bit counter underflowed since 'start'? This is the TD/TM event, and
+ * it is read_dec().second != 0 -- the high word, not a comparison of elapsed
+ * against the value. */
+inline bool dec_underflowed(uint32_t dec_value, uint64_t now, uint64_t start, bool frozen) {
+    return (dec_residual(dec_value, now, start, frozen) >> 32) != 0;
+}
+
+/* The start timestamp after an underflow was reported: advance it by the whole
+ * 2^32 periods that have elapsed (SPUThread.cpp:5430,
+ * 'ch_dec_start_timestamp -= res << 32'). */
+inline uint64_t dec_rearm(uint64_t start, uint32_t dec_value, uint64_t now) {
+    const uint64_t high = dec_residual(dec_value, now, start, false) >> 32;
+    return start - (high << 32);
+}
+
+/* ---- channel trace: the distinct-value set --------------------------- */
+
+/* The channel audit asks "what values did this channel carry", not "what was
+ * the first one". A SET is the only form of that answer which can be checked:
+ * a channel whose first and last value are both legal can still have carried a
+ * wrong one in between, and a mean or a range would hide it.
+ *
+ * Eight slots per direction is the cap because every real SPU pattern fits:
+ * 16 tag groups are expressed as a bitmask (one word, not 16), the event masks
+ * are 0x400/0x20/0x10, and the channel numbers are fixed. A counter channel
+ * such as RdDec takes a new value every read, so the excess is COUNTED rather
+ * than stored -- an unbounded set would be a memory leak driven by the guest.
+ *
+ * This is the pure part; SpuThread::ch_note feeds it. */
+struct ChVal {
+    uint32_t value = 0;
+    uint32_t n = 0;
+};
+
+struct ChHist {
+    ChVal v[8]{};
+    uint8_t n = 0;
+    uint32_t other = 0;
+};
+
+/* Add one observation. A repeat increments the existing slot (so the set stays
+ * small for the channels that matter), a new value takes the next free slot,
+ * and everything past the cap is counted as "other" with its value dropped. */
+inline void ch_hist_add(ChHist& h, uint32_t value) {
+    for (uint8_t i = 0; i < h.n; i++) {
+        if (h.v[i].value == value) {
+            h.v[i].n++;
+            return;
+        }
+    }
+    if (h.n < 8) {
+        h.v[h.n].value = value;
+        h.v[h.n].n = 1;
+        h.n++;
+        return;
+    }
+    h.other++;
+}
+
+/* Total observations the histogram holds, "other" included. Used by the test to
+ * assert nothing is lost or double-counted. */
+inline uint64_t ch_hist_total(const ChHist& h) {
+    uint64_t t = h.other;
+    for (uint8_t i = 0; i < h.n; i++) t += h.v[i].n;
+    return t;
+}
+
 /* ---- SPU thread-group exception event -------------------------------- */
 
 /* The event source a group's exception queue receives.

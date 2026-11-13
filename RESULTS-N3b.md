@@ -166,3 +166,83 @@ the kernel is reading**: the object at 0x0177cc00 whose +0x60 is 0 (RESULTS-M3
 measurement 6) is the same descriptor, and 0 in it is why the kernel's transfer
 length/address fields are empty. The channel layer is conformant on both the
 event-status and the decrementer paths.
+## Measurement 3 -- RPCS3 conformance table for the channels, and one real divergence
+
+This is the deliverable: every channel the guest touches, the RPCS3 rule, and
+the verdict. Channel numbers and names are taken verbatim from
+`rpcs3/Emu/Cell/SPUThread.h:40-81`, not from memory.
+
+| ch | name | party | RPCS3 rule (file:line) | runtime | verdict |
+|----|------|-------|------------------------|---------|---------|
+| 0 | RdEventStat | read | get_events(mask,false,true), return events&mask, clear count (SPUThread.cpp:5717) | same, via event_take | **match** |
+| 0 | RdEventStat (count) | rchcnt | get_events().count (SPUThread.cpp:5527) | collect_events(event_mask) then event_count | **match** |
+| 1 | WrEventMask | write | get_events(value\|mask) then mask=value, count raised if events&mask (SPUThread.cpp:6549) | same | **match** |
+| 2 | WrEventAck | write | get_events(value\|mask), events &= ~value, freeze dec per 6588 (SPUThread.cpp:6581) | same | **match** |
+| 3/4 | RdSigNotify1/2 | read | pop ch_snr, count (SPUThread.cpp:5629) | snr[]/snr_count, ORM respected | **match** |
+| 7 | WrDec | write | get_events(TM); start=now; value=value; unfreeze (SPUThread.cpp:6541) | same | **match** |
+| 8 | RdDec | read | u32(read_dec().first) (SPUThread.cpp:5700) | dec_read() = u32(residual) | **match** |
+| 9 | WrMSSyncReq | write | falls through to the unknown-channel throw: RPCS3 does NOT implement ch9 | runtime: returns, no-op | **divergence (harmless here)** |
+| 11 | RdEventMask | read | ch_events.mask (SPUThread.cpp:5661) | event_mask | **match** |
+| 12 | RdTagMask | read | ch_tag_mask (SPUThread.cpp:5661) | tag.tag_mask | **match** |
+| 13 | RdMachStat | read | interrupts_enabled \| isolated<<1 (SPUThread.cpp:6179) | interrupts_enabled only | **divergence: the isolated bit is never set** (no isolated threads in this title) |
+| 14/15 | WrSRR0/RdSRR0 | both | value & 0x3fffc (SPUThread.cpp:6197) | same mask | **match** |
+| 16-20 | LSA/EAH/EAL/Size/TagID | write | stored into ch_mfc_cmd, Size clamped 0xffff, TagID &0x1f (SPUThread.cpp:6478-6496) | same fields, same masks | **match** |
+| 21 | MFC_Cmd | write | ch_mfc_cmd.cmd = value&0xff, process_mfc_cmd (SPUThread.cpp:6504) | process_mfc(value&0xFF) | **match** |
+| 22 | WrTagMask | write | ch_tag_mask=value, re-evaluate a deferred update (SPUThread.cpp:6420) | TagState::write_mask | **match** |
+| 23 | WrTagUpdate | write | >ALL ignored; IMMEDIATE/ANY/ALL per 6446 | TagState::write_update | **match** |
+| 24 | RdTagStat | read | pop ch_tag_stat, clear count (SPUThread.cpp:5655) | TagState::take_stat | **match** |
+| 25 | RdListStallStat | read | pop ch_stall_stat (SPUThread.cpp:5686) | stall_stat | **match** |
+| 26 | WrListStallAck | write | clear tag's stall bit, re-run do_mfc on the SAME queue entry (SPUThread.cpp:5463) | ListStallTable::take + run_list | **match** |
+| 27 | RdAtomicStat | read | pop ch_atomic_stat (SPUThread.cpp:5674) | atomic_stat | **match** |
+| 28 | WrOutMbox | write | push ch_out_mbox, block when full (SPUThread.cpp:6386) | out_mbox/out_mbox_full | **match** |
+| 29 | RdInMbox | read | pop ch_in_mbox, threshold interrupt at 4 (SPUThread.cpp:5595) | in_mbox deque | **match in values**; the 4-entry threshold interrupt is not raised (no class-2 interrupt path in this runtime) |
+| 30 | WrOutIntrMbox | write | code<64 send_event, <128 throw_event, 128/192 event_flag_set_bit (SPUThread.cpp:6201-6400) | same three, same port/window arithmetic | **match** |
+| 69/70/71 | Bkmk/PM | write | return true, no state (SPUThread.cpp:6620) | same | **match** |
+| 21 | MFC_Cmd (count) | rchcnt | 16 - mfc_size (SPUThread.cpp:5529) | ListStallTable::count() = 16-queued | **match** |
+
+### The one divergence that is a real defect: the decrementer event
+
+The **values** on ch8 were already right -- `dec_now()` was `dec_value -
+(now - start)`, the same as RPCS3's low word. What was wrong is the **TM
+event**, and it was wrong twice:
+
+    rpcs3 read_dec():   res = ch_dec_value - (frozen ? 0 : now - start)
+    rpcs3 TM event:     fires iff (res >> 32) != 0          <-- 32-BIT UNDERFLOW
+    rpcs3 re-arm:       start -= (res >> 32) << 32          <-- one whole period
+
+    the runtime did:    fires iff (now - start) > dec_value  <-- different question
+                        start = now                          <-- zero period
+
+With the guest's `dec_value = 0` (RDR never writes SPU_WrDec -- **ch7 is absent
+from every one of the six threads' channel tables**), `elapsed > 0` is true on
+every single event poll. The reason this never showed up as a hang is measured:
+the guest only ever masks LR (ch1 = 0x400 in all 3758 writes), so the spurious TM
+never made it into `event_count`.
+
+Fixed in this branch: `spu::dec_read / dec_underflowed / dec_rearm` in
+`runtime/include/spu/channel_state.h`, called from `dec_now()`,
+`collect_events()`, `interrupt_pending()`, `check_interrupt()` and the park
+timeout. Also corrected with it: `collect_events()` now takes RPCS3's
+`mask_hint` (SPUThread.cpp:5404) instead of always using the guest's mask, so a
+WrDec polls TM even when the guest has not masked it, precisely as
+SPUThread.cpp:6542 does.
+
+The unit test pins the arithmetic that the old rule could not distinguish
+(tests/spu_channel_conformance.cpp): tick 1 underflows a zero counter, tick 2
+does NOT, because the re-arm is a full 2^32 period and not "now".
+
+### What this proves about the silence
+
+The silence is NOT a lost event. Measured, whole-run, from the distinct-value
+sets:
+
+    ch1 WrEventMask: values wr {0x00000400 x3758}     -- only EV_LR, ever
+    ch0 RdEventStat: values rd {0x00000400 x3721, 0x00000000 x1860}
+    ch7 WrDec:       ABSENT from all six threads       -- decrementer never armed
+
+A mixer that "never receives its block event" would show up as a mask that names
+the event and a status read that never returns it. Neither exists: the guest
+never subscribes. And the port **is** written -- 3814 PUTs of 0x2000 bytes each,
+correct addresses, correct cadence -- **all with an all-zero payload**
+(measurement 2). The defect is upstream of the channel layer, in whatever
+produces the zero buffer the kernel ships.

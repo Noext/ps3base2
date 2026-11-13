@@ -147,8 +147,8 @@ bool SpuThread::block(std::unique_lock<std::mutex>& lk, Pred pred) {
 }
 
 uint32_t SpuThread::dec_now() {
-    if (dec_frozen) return dec_value;
-    return static_cast<uint32_t>(dec_value - (timebase_now() - dec_start));
+    /* SPU_RdDec: the low word of read_dec(), SPUThread.cpp:5398. */
+    return dec_read(dec_value, timebase_now(), dec_start, dec_frozen);
 }
 
 void SpuThread::set_events(uint32_t bits) {
@@ -160,7 +160,9 @@ bool SpuThread::interrupt_pending() {
     uint32_t mask = std::atomic_ref<uint32_t>(event_mask).load(std::memory_order_relaxed);
     if (std::atomic_ref<bool>(event_count).load(std::memory_order_acquire) || ((mask & EV_LR) && raddr)) return true;
     if (!(mask & EV_TM) || dec_frozen) return false;
-    return timebase_now() - dec_start > dec_value;
+    /* The same 32-bit underflow rule the event itself uses; 'elapsed > value'
+     * is a different timer and would wake the SPU on the wrong tick. */
+    return dec_underflowed(dec_value, timebase_now(), dec_start, false);
 }
 
 void SpuThread::check_interrupt() {
@@ -187,10 +189,10 @@ void SpuThread::check_interrupt() {
     uint32_t mask = std::atomic_ref<uint32_t>(event_mask).load(std::memory_order_relaxed);
     if (!std::atomic_ref<bool>(event_count).load(std::memory_order_acquire) && !((mask & EV_LR) && raddr)) {
         if (!(mask & EV_TM) || dec_frozen) return;
-        if (timebase_now() - dec_start <= dec_value) return;
+        if (!dec_underflowed(dec_value, timebase_now(), dec_start, false)) return;
     }
     std::lock_guard lk(m);
-    collect_events();
+    collect_events(mask);
     if (!event_count) return;
     ctx.interrupts_enabled = false;
     irq_taken = true;
@@ -257,26 +259,34 @@ void rsv_lost_stats(uint64_t* checks, uint64_t* hits) {
     if (hits) *hits = g_lost_hits.load(std::memory_order_relaxed);
 }
 
-void SpuThread::collect_events() {
-    if (!dec_frozen) {
-        /* The decrementer is 32-bit and wraps, but dec_start must not simply be
-         * advanced by 2^32: if it ever exceeds timebase_now(), the unsigned
-         * subtraction goes negative and elapsed becomes ~1.8e19 (measured at
-         * t=32s, exactly when events first showed 0x20). Re-base on the current
-         * timebase when the elapsed value has wrapped instead. */
+void SpuThread::collect_events(uint32_t mask_hint) {
+    if (!dec_frozen && (mask_hint & EV_TM)) {
+        /* The TD/TM event, exactly as RPCS3 arms it (SPUThread.cpp:5425-5431):
+         * the event is the UNDERFLOW OF THE 32-BIT COUNTER, i.e. the high word
+         * of the 64-bit difference, and the start timestamp is then advanced by
+         * the whole period that elapsed -- not re-based to 'now'.
+         *
+         * The old code compared 'elapsed > dec_value' and re-based, which for the
+         * guest's dec_value = 0 fired on every single event read and re-armed the
+         * counter to zero on every call. Both are the wrong question: see
+         * spu::dec_underflowed / spu::dec_rearm for the arithmetic and the
+         * RPCS3 line numbers. The mask test is RPCS3's too (get_events only
+         * looks at TM when the caller asked about TM); without it every thread
+         * with TM unmasked would still arm the timer, which is work nobody reads. */
         const uint64_t now = timebase_now();
-        if (now < dec_start) {
-            /* The rebase overshot: resynchronise rather than compare nonsense. */
-            dec_start = now;
-        } else {
-            const uint64_t elapsed = now - dec_start;
-            if (elapsed > dec_value) {
-                set_events(EV_TM);
-                dec_start = now;
-            }
+        if (dec_underflowed(dec_value, now, dec_start, false)) {
+            set_events(EV_TM);
+            dec_start = dec_rearm(dec_start, dec_value, now);
         }
     }
-    if ((event_mask & EV_LR) && raddr && !(events & EV_LR)) {
+    /* RPCS3 tests only mask_hint here (SPUThread.cpp:5415) and clears raddr even
+     * when the guest does not mask LR, because a lost reservation is a fact
+     * regardless of whether anyone is waiting on it. This runtime additionally
+     * requires the guest to have masked LR, which is a divergence recorded in
+     * RESULTS-N3b.md rather than corrected here: the LR path also probes
+     * rsv::lost(), and changing when that probe runs is a reservation change,
+     * not a channel one. */
+    if ((mask_hint & EV_LR) && (event_mask & EV_LR) && raddr && !(events & EV_LR)) {
         const bool lost = rsv::lost(raddr, rtime, rdata);
         g_lost_checks.fetch_add(1, std::memory_order_relaxed);
         if (lost) {
@@ -380,39 +390,25 @@ static const bool g_ch_table = std::getenv("PS3BASE_SPU_CH_TABLE") != nullptr;
 
 /* Record one distinct value of one channel. The set is what turns "ch22 was
  * written 1.4M times" into "ch22 carried 0x80000000 and 0x0000ffff and nothing
- * else", which is a statement that can be checked against the guest. */
-void SpuThread::ch_hist_add(ChVal* v, uint8_t& n, uint32_t& other, uint32_t value) {
-    if (n < 8) {
-        for (uint8_t i = 0; i < n; i++) {
-            if (v[i].value == value) { v[i].n++; return; }
-        }
-        v[n].value = value;
-        v[n].n = 1;
-        n++;
-        return;
-    }
-    for (uint8_t i = 0; i < 8; i++) {
-        if (v[i].value == value) { v[i].n++; return; }
-    }
-    other++;
-}
-
+ * else", which is a statement that can be checked against the guest. The set
+ * itself is ch_hist_add in spu/channel_state.h, where the unit test drives it. */
 void SpuThread::ch_note(uint32_t ch, uint32_t value, uint32_t pc, int kind) {
     if (!g_ch_trace && !g_ch_table) return;
     if (ch < 128) {
         ChStat& s = ch_stat[ch];
+        ChDir& h = ch_hist[ch];
         if (kind == 1) {
             if (!s.wr++) s.wr_first = value;
             s.wr_last = value;
-            ch_hist_add(ch_hist[ch].wr, ch_hist[ch].wr_n, ch_hist[ch].wr_other, value);
+            ch_hist_add(h.wr, value);
         } else if (kind == 2) {
             if (!s.cnt++) s.cnt_last = value;
             s.cnt_last = value;
-            ch_hist_add(ch_hist[ch].rd, ch_hist[ch].rd_n, ch_hist[ch].rd_other, value);
+            ch_hist_add(h.cnt, value);
         } else {
             if (!s.rd++) s.rd_first = value;
             s.rd_last = value;
-            ch_hist_add(ch_hist[ch].rd, ch_hist[ch].rd_n, ch_hist[ch].rd_other, value);
+            ch_hist_add(h.rd, value);
         }
     }
     if (!g_ch_trace) return;
@@ -484,21 +480,19 @@ void SpuThread::dump_channel_table(const char* why) {
         /* The distinct-value set: a channel whose first and last values are both
          * legal can still have carried a wrong one in between, and only the set
          * shows that. */
-        const ChHist& h = ch_hist[ch];
-        std::string rd, wr;
-        for (uint8_t i = 0; i < h.rd_n; i++) {
-            char b[40];
-            std::snprintf(b, sizeof b, " 0x%08x x%u", h.rd[i].value, h.rd[i].n);
-            rd += b;
-        }
-        if (h.rd_other) rd += " (+" + std::to_string(h.rd_other) + " other)";
-        for (uint8_t i = 0; i < h.wr_n; i++) {
-            char b[40];
-            std::snprintf(b, sizeof b, " 0x%08x x%u", h.wr[i].value, h.wr[i].n);
-            wr += b;
-        }
-        if (h.wr_other) wr += " (+" + std::to_string(h.wr_other) + " other)";
-        LOG_ERROR("spu", "        values rd:{%s } wr:{%s }", rd.c_str(), wr.c_str());
+        const ChDir& h = ch_hist[ch];
+        auto fmt = [](const ChHist& v) {
+            std::string s;
+            for (uint8_t i = 0; i < v.n; i++) {
+                char b[40];
+                std::snprintf(b, sizeof b, " 0x%08x x%u", v.v[i].value, v.v[i].n);
+                s += b;
+            }
+            if (v.other) s += " (+" + std::to_string(v.other) + " other)";
+            return s;
+        };
+        LOG_ERROR("spu", "        values rd:{%s } wr:{%s } cnt:{%s }",
+                  fmt(h.rd).c_str(), fmt(h.wr).c_str(), fmt(h.cnt).c_str());
     }
     if (g_ch_trace && ch_ring_i) {
         const uint32_t n = ch_ring_i < 256 ? ch_ring_i : 256;
@@ -532,7 +526,9 @@ uint32_t SpuThread::read_channel_impl(uint32_t ch) {
     std::unique_lock lk(m);
     switch (ch) {
     case 0: {
-        collect_events();
+        /* get_events(mask1, false, true) -- mask_hint is the GUEST'S mask here,
+         * SPUThread.cpp:5721. */
+        collect_events(event_mask);
         if (job_stats) {
             g_ev_reads.fetch_add(1, std::memory_order_relaxed);
             if (!event_count) g_ev_waits.fetch_add(1, std::memory_order_relaxed);
@@ -569,16 +565,26 @@ uint32_t SpuThread::read_channel_impl(uint32_t ch) {
                     waiting.store(0, std::memory_order_relaxed);
                     lk.lock();
                     if (ran) {
-                        collect_events();
+                        collect_events(event_mask);
                         continue;
                     }
                 }
                 if (park_slot >= 0 && rsv::park_enabled()) {
                     uint32_t w0 = rsv::park_word(park_slot);
+                    /* The park timeout is the 32-bit underflow of the counter,
+                     * the same rule the event itself uses. The old code used
+                     * 'dec_value - elapsed', which with the guest's dec_value = 0
+                     * was negative on every call and parked with a 0 us timeout
+                     * -- a busy spin, not a park. */
                     int64_t limit = -1;
                     if ((event_mask & EV_TM) && !dec_frozen) {
-                        uint64_t elapsed = timebase_now() - dec_start;
-                        limit = elapsed >= dec_value ? 0 : static_cast<int64_t>((dec_value - elapsed) / 80);
+                        const uint64_t now = timebase_now();
+                        if (dec_underflowed(dec_value, now, dec_start, false)) {
+                            limit = 0;
+                        } else {
+                            const uint64_t remaining = uint64_t(dec_value) - (now - dec_start);
+                            limit = static_cast<int64_t>(remaining / 80);
+                        }
                     }
                     lk.unlock();
                     waiting.store(1, std::memory_order_relaxed);
@@ -603,7 +609,7 @@ uint32_t SpuThread::read_channel_impl(uint32_t ch) {
                 cv.wait_for(lk, std::chrono::microseconds(100));
                 waiting.store(0, std::memory_order_relaxed);
             }
-            collect_events();
+            collect_events(event_mask);
         }
         if (cp0) critpath::spu_waited(cp, cp0, critpath::SW_LR);
         if (job_stats && wait_start.time_since_epoch().count()) g_ev_wait_us.fetch_add(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - wait_start).count(), std::memory_order_relaxed);
@@ -690,7 +696,9 @@ void SpuThread::write_channel_impl(uint32_t ch, uint32_t value) {
     std::unique_lock lk(m);
     switch (ch) {
     case 1:
-        collect_events();
+        /* get_events(value | ch_events.mask), SPUThread.cpp:6551: the NEW mask
+         * and the old one, so an event already pending under either is seen. */
+        collect_events(value | event_mask);
         if (const uint32_t bad = event_unimplemented(value)) {
             static std::atomic<int> shown{0};
             if (shown.fetch_add(1) < 8)
@@ -701,7 +709,8 @@ void SpuThread::write_channel_impl(uint32_t ch, uint32_t value) {
         check_interrupt();
         return;
     case 2:
-        collect_events();
+        /* get_events(value | ch_events.mask), SPUThread.cpp:6584. */
+        collect_events(value | event_mask);
         /* Freeze BEFORE the ack drops the bit: RPCS3 captures read_dec() at the
          * moment of the ack (SPUThread.cpp:6592). */
         if (event_ack_freezes_decrementer(value, event_mask) && !dec_frozen) {
@@ -713,7 +722,10 @@ void SpuThread::write_channel_impl(uint32_t ch, uint32_t value) {
         check_interrupt();
         return;
     case 7:
-        collect_events();
+        /* get_events(SPU_EVENT_TM), SPUThread.cpp:6542: WrDec polls the timer
+         * even if the guest has not masked it, "don't discard possibly occurred
+         * old event". */
+        collect_events(EV_TM);
         dec_start = timebase_now();
         dec_value = value;
         dec_frozen = false;

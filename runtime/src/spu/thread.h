@@ -150,12 +150,10 @@ struct SpuThread : Host {
      * a handful of event masks); beyond that the excess is counted as "other"
      * so a counter that takes thousands of distinct values cannot blow up the
      * structure or the log. */
-    struct ChVal { uint32_t value = 0; uint32_t n = 0; };
-    struct ChHist {
-        ChVal rd[8]{}; uint8_t rd_n = 0; uint32_t rd_other = 0;
-        ChVal wr[8]{}; uint8_t wr_n = 0; uint32_t wr_other = 0;
+    struct ChDir {
+        ChHist rd, wr;
+        ChHist cnt;
     } ch_hist[128]{};
-    static void ch_hist_add(ChVal* v, uint8_t& n, uint32_t& other, uint32_t value);
     struct ChStat {
         uint64_t rd = 0, wr = 0, cnt = 0;
         uint32_t rd_first = 0, rd_last = 0, wr_first = 0, wr_last = 0, cnt_last = 0;
@@ -264,7 +262,12 @@ struct SpuThread : Host {
 private:
     void set_events(uint32_t bits);
     void check_interrupt();
-    void collect_events();
+    /* get_events(mask_hint) in RPCS3 (SPUThread.cpp:5404): mask_hint names the
+     * event SOURCES to poll, and it is not the same as the mask the guest
+     * subscribed to. A WrDec polls TM explicitly (SPUThread.cpp:6542), a ch0
+     * read polls the guest's mask, a WrEventMask/WrEventAck poll value|mask.
+     * Defaults to 'everything', which is RPCS3's umax default. */
+    void collect_events(uint32_t mask_hint = 0xFFFFFFFFu);
     uint32_t dec_now();
     void process_mfc(uint32_t cmd);
     void dma(uint32_t cmd, uint32_t lsa, uint32_t ea, uint32_t size, uint32_t list_element = 0xFFFFFFFFu,

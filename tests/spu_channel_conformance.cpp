@@ -209,6 +209,57 @@ int main() {
     }
 
     /* ======================================================================
+     * SPU_RdDec and the TD/TM event are 32-bit underflow arithmetic.
+     *   rpcs3/Emu/Cell/SPUThread.cpp:5398  read_dec()
+     *   rpcs3/Emu/Cell/SPUThread.cpp:5425  get_events() TM arm
+     *
+     * The deviation this pins down: the runtime compared 'elapsed > dec_value'
+     * and re-based the start timestamp to 'now'. With the guest's dec_value = 0
+     * (RDR never writes SPU_WrDec: ch7 is absent from every thread's channel
+     * table) that fires on EVERY event poll, and re-arms to zero every time.
+     * ==================================================================== */
+    {
+        /* The read itself is the low word of the 64-bit difference. */
+        check(spu::dec_read(1000, 100, 0, false) == 900,
+              "RdDec returns dec_value minus the ticks elapsed");
+        check(spu::dec_read(1000, 100, 0, true) == 1000,
+              "a frozen decrementer reports its saved value (SPUThread.cpp:5400)");
+
+        /* The event is the 32-bit UNDERFLOW, not 'elapsed > value'. With a
+         * value the counter has not reached yet, nothing fires. */
+        check(!spu::dec_underflowed(0x1000, 0x100, 0, false),
+              "a counter that has not reached zero has not underflowed");
+        /* Straight past the value is still not an underflow while the 32-bit
+         * subtraction has not wrapped: dec_value=0, elapsed=100 gives
+         * 0 - 100 = 2^64-100, whose low word is 0xffffff9c and whose high word
+         * is 0xffffffff -- so it HAS underflowed. */
+        check(spu::dec_underflowed(0, 100, 0, false),
+              "dec_value 0 is an underflow one tick later (64-bit wrap)");
+        /* But after the re-arm the next event is a full period away. */
+        const uint64_t rearmed = spu::dec_rearm(0, 0, 100);
+        check(rearmed == 0 - (uint64_t(0xffffffff) << 32) || rearmed > 0xFFFFFFF000000000ull,
+              "re-arm advances the start by the whole 2^32 period");
+
+        /* The behaviour the old code got wrong, stated as an observable: with
+         * dec_value = 0 the OLD rule (elapsed > 0) is true at now = 1 and also
+         * at now = 2 after re-basing; the RPCS3 rule is true at now = 1 and
+         * FALSE at now = 2, because the counter was re-armed a period ahead.
+         * A test that could not tell these apart would pass on both. */
+        const uint64_t start0 = 0;
+        check(spu::dec_underflowed(0, 1, start0, false), "tick 1 underflows a zero counter");
+        const uint64_t start1 = spu::dec_rearm(start0, 0, 1);
+        check(!spu::dec_underflowed(0, 2, start1, false),
+              "tick 2 does NOT underflow again: re-arm is a period, not 'now'");
+
+        /* And the low word the guest reads keeps counting down through the
+         * period instead of being pinned at 0. */
+        check(spu::dec_read(0xFFFFFFFFu, 0, 0, false) == 0xFFFFFFFFu,
+              "at start the counter reads its full value");
+        check(spu::dec_read(0xFFFFFFFFu, 1, 0, false) == 0xFFFFFFFEu,
+              "one tick later it has counted down by one");
+    }
+
+    /* ======================================================================
      * WrEventAck freezes the decrementer only for TM outside the mask.
      *   rpcs3/Emu/Cell/SPUThread.cpp:6588
      * ==================================================================== */
@@ -471,6 +522,59 @@ int main() {
         check(spu::dma_exception_cause(spu::DmaRefusal::None) == spu::SPU_EXC_MFC_STORAGE,
               "an unmapped effective address is the MFC storage cause");
         check(spu::spu_exception_data3(0xDEADBEEF) == 0xDEADBEEF, "the exception carries the faulting address");
+    }
+
+    /* The channel trace's distinct-value set.
+     *
+     * The audit's question is "what values did this channel carry", and the set
+     * is the only answer that can be falsified: a channel whose first and last
+     * value are both legal can still have carried a wrong one in between. A mean
+     * or a range would hide exactly that.
+     *
+     * Measured shape it has to represent, from the RDR run (RESULTS-N3b.md
+     * measurement 2): ch22 WrTagMask carried exactly six distinct values over
+     * 1,083,066 writes, and ch8 RdDec carried a new value on every one of its
+     * 109,385 reads. The first is why eight slots suffice; the second is why the
+     * cap must COUNT the excess instead of growing. */
+    {
+        spu::ChHist h;
+        check(spu::ch_hist_total(h) == 0, "an empty channel histogram totals zero");
+
+        spu::ch_hist_add(h, 0x400);
+        spu::ch_hist_add(h, 0x400);
+        spu::ch_hist_add(h, 0x400);
+        check(h.n == 1 && h.v[0].value == 0x400 && h.v[0].n == 3,
+              "a repeated value increments its slot instead of taking a new one (RdEventStat 0x400 x3721)");
+        check(spu::ch_hist_total(h) == 3, "the set counts every observation exactly once");
+
+        /* The six distinct tag masks actually measured on ch22. The set has to
+         * hold ALL of them: an audit that drops one cannot compare the channel
+         * against the guest. */
+        spu::ChHist mask;
+        for (uint32_t v : {0x80000000u, 0xffffffffu, 0x0000ffffu, 0x00000020u, 0x00000080u, 0x00000040u}) {
+            spu::ch_hist_add(mask, v);
+            spu::ch_hist_add(mask, v);
+        }
+        check(mask.n == 6, "the six tag masks measured on ch22 fit in the set");
+        check(spu::ch_hist_total(mask) == 12, "each of the six is counted twice");
+
+        /* A counter channel takes a distinct value on every read. Past the cap
+         * the value is dropped and counted, never stored: the structure is owned
+         * by an SPU thread and must not grow with guest traffic. */
+        spu::ChHist dec;
+        for (uint32_t i = 0; i < 1000; i++) spu::ch_hist_add(dec, 0x10000000u + i);
+        check(dec.n == 8, "the set stops growing at eight distinct values");
+        check(dec.other == 992, "values past the cap are counted, not stored (RdDec takes a new value per read)");
+        check(spu::ch_hist_total(dec) == 1000, "counting the excess still totals every observation");
+
+        /* And a value already in the set is still found after the set is full:
+         * a counter that returns an OLD value must increment that slot, not be
+         * swallowed by the "other" counter. Missing this would make a repeated
+         * event mask look like an unbounded counter. */
+        spu::ChHist full;
+        for (uint32_t i = 0; i < 8; i++) spu::ch_hist_add(full, 0x10u + i);
+        spu::ch_hist_add(full, 0x10u);
+        check(full.other == 0 && full.v[0].n == 2, "a repeat after the cap still finds its slot");
     }
 
     std::printf("spu_channel_conformance: %d checks, %d failures\n", checks, failures);
