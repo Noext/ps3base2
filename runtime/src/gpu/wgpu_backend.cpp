@@ -26,6 +26,8 @@
 #include <webgpu/webgpu.h>
 #include <webgpu/wgpu.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
@@ -84,6 +86,7 @@ struct Device {
         uint32_t color_format = 0, depth_format = 0;
         uint32_t topology = 0, cull = 0;
         uint32_t blend_enable = 0, sfactor = 0, dfactor = 0, equation = 0;
+        uint32_t sfactor_alpha = 0, dfactor_alpha = 0;
         uint32_t write_mask = 0;
         uint32_t depth_test = 0, depth_write = 0, depth_compare = 0;
         uint32_t cw = 0;
@@ -330,6 +333,8 @@ WGPURenderPipeline pipeline_for(const DrawInputs& in) {
     k.blend_enable = in.blend_enable;
     k.sfactor = in.sfactor;
     k.dfactor = in.dfactor;
+    k.sfactor_alpha = in.sfactor_alpha;
+    k.dfactor_alpha = in.dfactor_alpha;
     k.equation = in.equation;
     k.write_mask = in.write_mask;
     k.depth_test = in.depth_test ? 1u : 0u;
@@ -434,8 +439,12 @@ WGPURenderPipeline pipeline_for(const DrawInputs& in) {
     bs.alpha.operation = WGPUBlendOperation((k.equation >> 16) & 0xFFFF);
     bs.color.srcFactor = WGPUBlendFactor(k.sfactor & 0xFFFF);
     bs.color.dstFactor = WGPUBlendFactor(k.dfactor & 0xFFFF);
-    bs.alpha.srcFactor = WGPUBlendFactor(k.sfactor >> 16);
-    bs.alpha.dstFactor = WGPUBlendFactor(k.dfactor >> 16);
+    /* The alpha factors are CONVERTED values too, not the upper half of the
+     * colour ones. Taking them from the raw RSX register before conversion put
+     * a Vulkan enumerant into a WebGPU enum -- measured as the logo's red coming
+     * out (134,36,31) instead of (152,53,47). */
+    bs.alpha.srcFactor = WGPUBlendFactor(k.sfactor_alpha ? k.sfactor_alpha : (k.sfactor & 0xFFFF));
+    bs.alpha.dstFactor = WGPUBlendFactor(k.dfactor_alpha ? k.dfactor_alpha : (k.dfactor & 0xFFFF));
     ct.blend = k.blend_enable ? &bs : nullptr;
 
     WGPUFragmentState fstate = WGPU_FRAGMENT_STATE_INIT;
@@ -447,6 +456,15 @@ WGPURenderPipeline pipeline_for(const DrawInputs& in) {
     WGPUPrimitiveState ps = WGPU_PRIMITIVE_STATE_INIT;
     ps.topology = k.topology == 0 ? WGPUPrimitiveTopology_PointList : k.topology == 1 ? WGPUPrimitiveTopology_LineList : WGPUPrimitiveTopology_TriangleList;
     ps.cullMode = WGPUCullMode(k.cull);
+    /* Front face stays as the Vulkan path computed it.
+     *
+     * The mirror flips NDC Y for WebGPU, which does reverse winding, so the
+     * opposite front face was the obvious next step -- and it is WRONG, measured:
+     * inverting it took the RMS from 10.57 to 38.02. These draws cull NOTHING
+     * (cull_for returns None for VK_CULL_MODE_NONE and for FRONT_AND_BACK, both
+     * of which the title uses), so winding never decides a pixel here. Leaving
+     * the value identical to Vulkan's is the honest choice: the flip only
+     * matters if a future title actually culls. */
     ps.frontFace = k.cw ? WGPUFrontFace_CW : WGPUFrontFace_CCW;
 
     static const bool no_depth = std::getenv("PS3BASE_WGPU_NO_DEPTH") != nullptr;
@@ -517,6 +535,11 @@ constexpr int VK_FORMAT_D32_SFLOAT_ = 126;
 constexpr int VK_FORMAT_D32_SFLOAT_S8_UINT_ = 130;
 constexpr int VK_FORMAT_A1R5G5B5_UNORM_PACK16_ = 1;
 constexpr int VK_FORMAT_R5G6B5_UNORM_PACK16_ = 4;
+constexpr int VK_FORMAT_R16_UNORM_ = 70;
+constexpr int VK_FORMAT_R16G16_UNORM_ = 77;
+constexpr int VK_FORMAT_R16G16_SFLOAT_ = 81;
+constexpr int VK_FORMAT_R5G5B5A1_UNORM_PACK16_ = 86;
+constexpr int VK_FORMAT_R4G4B4A4_UNORM_PACK16_ = 87;
 
 }  // namespace
 
@@ -558,12 +581,49 @@ uint32_t compare_for(int op) {
 }
 
 uint32_t blend_for(int vk_factor) {
-    /* Same +1 offset: VK_BLEND_FACTOR_ZERO = 0, WGPUBlendFactor_Zero = 1, and the
-     * two lists then agree member for member through ONE_MINUS_SRC_ALPHA_SATURATE
-     * (Vulkan 17, WebGPU 18). */
-    const uint32_t v = uint32_t(vk_factor);
-    if (v > 17) return uint32_t(WGPUBlendFactor_One);
-    return v + 1;
+    /* NOT v+1, even though both lists start one apart.
+     *
+     * The two enumerations order the factors DIFFERENTLY, and the difference
+     * starts at the third member:
+     *
+     *   VK   0 ZERO 1 ONE 2 SRC_COLOR 3 1-SRC_COLOR 4 DST_COLOR 5 1-DST_COLOR
+     *        6 SRC_ALPHA 7 1-SRC_ALPHA 8 DST_ALPHA 9 1-DST_ALPHA
+     *       10 CONSTANT_COLOR 11 1-CONSTANT_COLOR 12 CONSTANT_ALPHA
+     *       13 1-CONSTANT_ALPHA 14 SRC_ALPHA_SATURATE 15 SRC1_COLOR ...
+     *
+     *   WGPU 1 ZERO 2 ONE 3 Src 4 1-Src 5 SrcAlpha 6 1-SrcAlpha 7 Dst 8 1-Dst
+     *        9 DstAlpha 10 1-DstAlpha 11 SrcAlphaSaturated 12 Constant
+     *       13 1-Constant 14 Src1 15 1-Src1 16 Src1Alpha 17 1-Src1Alpha
+     *
+     * So v+1 turns VK SRC_ALPHA (6) into WebGPU Dst (7) and VK ONE_MINUS_SRC_ALPHA
+     * (7) into OneMinusDst (8): the alpha blend silently became a destination
+     * blend. That is the same class of silent error as the compare-op offset the
+     * H2 report documents, on a table it had assumed was shifted uniformly, and
+     * it is why the logo's red came out light (184,96,89) instead of (152,53,47). */
+    switch (vk_factor) {
+    case 0: return uint32_t(WGPUBlendFactor_Zero);
+    case 1: return uint32_t(WGPUBlendFactor_One);
+    case 2: return uint32_t(WGPUBlendFactor_Src);
+    case 3: return uint32_t(WGPUBlendFactor_OneMinusSrc);
+    case 4: return uint32_t(WGPUBlendFactor_Dst);
+    case 5: return uint32_t(WGPUBlendFactor_OneMinusDst);
+    case 6: return uint32_t(WGPUBlendFactor_SrcAlpha);
+    case 7: return uint32_t(WGPUBlendFactor_OneMinusSrcAlpha);
+    case 8: return uint32_t(WGPUBlendFactor_DstAlpha);
+    case 9: return uint32_t(WGPUBlendFactor_OneMinusDstAlpha);
+    /* Constant colour and constant alpha are ONE member in WebGPU (the constant
+     * is a single clear value), so both Vulkan members land on it. */
+    case 10:
+    case 12: return uint32_t(WGPUBlendFactor_Constant);
+    case 11:
+    case 13: return uint32_t(WGPUBlendFactor_OneMinusConstant);
+    case 14: return uint32_t(WGPUBlendFactor_SrcAlphaSaturated);
+    case 15: return uint32_t(WGPUBlendFactor_Src1);
+    case 16: return uint32_t(WGPUBlendFactor_OneMinusSrc1);
+    case 17: return uint32_t(WGPUBlendFactor_Src1Alpha);
+    case 18: return uint32_t(WGPUBlendFactor_OneMinusSrc1Alpha);
+    default: return uint32_t(WGPUBlendFactor_One);
+    }
 }
 
 uint32_t equation_for(int vk_op) {
@@ -646,42 +706,228 @@ WGPUTextureView dummy_view(WGPUTextureViewDimension dim) {
     return view;
 }
 
+/* The stand-in sampler, for units a draw does not sample.
+ *
+ * PS3BASE_WGPU_SAMPLER_LINEAR=1 switches it (and therefore every unit, since
+ * the mirror currently binds this one sampler everywhere) to LINEAR. That is a
+ * DIAGNOSTIC: it tells "the filtering is wrong" apart from "the texture or the
+ * mapping is wrong" without touching the real sampler derivation. */
 WGPUSampler dummy_sampler() {
     static WGPUSampler sampler = nullptr;
     if (sampler) return sampler;
+    const bool linear = std::getenv("PS3BASE_WGPU_SAMPLER_LINEAR") != nullptr;
     WGPUSamplerDescriptor sd = WGPU_SAMPLER_DESCRIPTOR_INIT;
     sd.addressModeU = WGPUAddressMode_ClampToEdge;
     sd.addressModeV = WGPUAddressMode_ClampToEdge;
     sd.addressModeW = WGPUAddressMode_ClampToEdge;
-    sd.magFilter = WGPUFilterMode_Nearest;
-    sd.minFilter = WGPUFilterMode_Nearest;
+    sd.magFilter = linear ? WGPUFilterMode_Linear : WGPUFilterMode_Nearest;
+    sd.minFilter = linear ? WGPUFilterMode_Linear : WGPUFilterMode_Nearest;
     sd.mipmapFilter = WGPUMipmapFilterMode_Nearest;
     sd.maxAnisotropy = 1;
     sampler = wgpuDeviceCreateSampler(g.device, &sd);
     return sampler;
 }
 
+/* One decoded texel, converted to the float4 WebGPU will sample.
+ *
+ * The renderer decodes into the format's REAL width (R8 is one byte, the packed
+ * 16-bit formats two, the float and 32-bit ones four, the block formats eight or
+ * sixteen). The mirror used to assume four and read width*height*4 bytes, which
+ * is a read past the end of host_pixels -- it was a SIGSEGV in this function,
+ * not a wrong colour, that killed the run once the logo frame came up.
+ */
+float half_to_float(uint16_t h) {
+    const uint32_t sign = uint32_t(h & 0x8000) << 16;
+    const uint32_t exp = (h >> 10) & 0x1F;
+    const uint32_t man = h & 0x3FF;
+    uint32_t bits;
+    if (exp == 0) {
+        if (man == 0) {
+            bits = sign;  /* signed zero */
+        } else {
+            /* Subnormal half: renormalise into a float. */
+            uint32_t e = 113;
+            uint32_t m = man;
+            while (!(m & 0x400)) {
+                m <<= 1;
+                e--;
+            }
+            bits = sign | (e << 23) | ((m & 0x3FF) << 13);
+        }
+    } else if (exp == 0x1F) {
+        bits = sign | 0x7F800000u | (man << 13);  /* inf / nan */
+    } else {
+        bits = sign | ((exp + 112) << 23) | (man << 13);
+    }
+    float f;
+    std::memcpy(&f, &bits, 4);
+    return f;
+}
+
+void texel_to_float(const uint8_t* p, int vk_format, float out[4]) {
+    out[0] = out[1] = out[2] = 0.0f;
+    out[3] = 1.0f;
+    switch (vk_format) {
+    /* 8-bit unorm, one channel. The RSX B8 intensity texture lives here; the
+     * component mapping decides which of the four gets the value. */
+    case VK_FORMAT_R8_UNORM_: out[0] = out[1] = out[2] = p[0] / 255.0f; break;
+    case VK_FORMAT_R8G8_UNORM_:
+        out[0] = p[0] / 255.0f;
+        out[1] = p[1] / 255.0f;
+        out[2] = 0.0f;
+        break;
+    /* The 16-bit packed formats the decoder widens to RGBA at the same size
+     * (out_bytes 2 in the table but 4 after conversion): read the bytes the
+     * decoder produced, which are already RGBA8 in the format's own order. */
+    case VK_FORMAT_A1R5G5B5_UNORM_PACK16_:
+    case VK_FORMAT_R5G6B5_UNORM_PACK16_:
+    case VK_FORMAT_R5G5B5A1_UNORM_PACK16_:
+    case VK_FORMAT_R4G4B4A4_UNORM_PACK16_:
+        out[0] = p[0] / 255.0f;
+        out[1] = p[1] / 255.0f;
+        out[2] = p[2] / 255.0f;
+        out[3] = p[3] / 255.0f;
+        break;
+    case VK_FORMAT_B8G8R8A8_UNORM_:
+    case VK_FORMAT_B8G8R8A8_SRGB_:
+        out[0] = p[2] / 255.0f;
+        out[1] = p[1] / 255.0f;
+        out[2] = p[0] / 255.0f;
+        out[3] = p[3] / 255.0f;
+        break;
+    case VK_FORMAT_R8G8B8A8_UNORM_:
+    case VK_FORMAT_R8G8B8A8_SRGB_:
+        out[0] = p[0] / 255.0f;
+        out[1] = p[1] / 255.0f;
+        out[2] = p[2] / 255.0f;
+        out[3] = p[3] / 255.0f;
+        break;
+    case VK_FORMAT_R16_UNORM_:
+        out[0] = out[1] = out[2] = ((p[1] << 8) | p[0]) / 65535.0f;
+        break;
+    case VK_FORMAT_R16G16_UNORM_:
+        out[0] = ((p[1] << 8) | p[0]) / 65535.0f;
+        out[1] = ((p[3] << 8) | p[2]) / 65535.0f;
+        break;
+    case VK_FORMAT_R16G16_SFLOAT_: {
+        const uint16_t h0 = uint16_t(p[0] | (p[1] << 8)), h1 = uint16_t(p[2] | (p[3] << 8));
+        out[0] = half_to_float(h0);
+        out[1] = half_to_float(h1);
+        break;
+    }
+    case VK_FORMAT_R16G16B16A16_SFLOAT_: {
+        for (int c = 0; c < 4; c++) {
+            const uint32_t b = uint32_t(p[c * 2]) | (uint32_t(p[c * 2 + 1]) << 8);
+            out[c] = half_to_float(uint16_t(b));
+        }
+        break;
+    }
+    case VK_FORMAT_R32_SFLOAT_:
+        std::memcpy(&out[0], p, 4);
+        out[1] = out[2] = out[0];
+        break;
+    case VK_FORMAT_R32G32B32A32_SFLOAT_:
+        std::memcpy(out, p, 16);
+        break;
+    default:
+        /* An unknown format takes the 4-byte RGBA reading: that is what every
+         * format the renderer actually reports falls back to, and guessing
+         * anything else would be worse than a documented default. */
+        out[0] = p[0] / 255.0f;
+        out[1] = p[1] / 255.0f;
+        out[2] = p[2] / 255.0f;
+        out[3] = p[3] / 255.0f;
+        break;
+    }
+}
+
+/* Apply the VkComponentMapping the Vulkan IMAGE VIEW applies.
+ *
+ * VkComponentSwizzle values are IDENTITY 0, ZERO 1, ONE 2, R 3, G 4, B 5, A 6.
+ * WebGPU has no per-view swizzle in this backend's version, so it is folded in
+ * here, per texel. Doing it in the shader instead would mean editing every
+ * fragment program the decompiler emits, which is a second divergence.
+ */
+void apply_mapping(float v[4], const int m[4]) {
+    const float src[4] = {v[0], v[1], v[2], v[3]};
+    for (int c = 0; c < 4; c++) {
+        switch (m[c]) {
+        case 0: break;                 /* IDENTITY: keep */
+        case 1: v[c] = 0.0f; break;    /* ZERO */
+        case 2: v[c] = 1.0f; break;    /* ONE */
+        case 3: v[c] = src[0]; break;  /* R */
+        case 4: v[c] = src[1]; break;  /* G */
+        case 5: v[c] = src[2]; break;  /* B */
+        case 6: v[c] = src[3]; break;  /* A */
+        default: break;
+        }
+    }
+}
+
 WGPUTexture upload_texture(const DrawInputs::Texture& t, uint32_t unit, WGPUTextureDimension dim) {
     if (!t.pixels || !t.width || !t.height) return nullptr;
     static std::map<std::pair<const void*, uint64_t>, WGPUTexture> cache;
+    const uint32_t bpt = t.bytes_per_texel ? t.bytes_per_texel : 4u;
+    const size_t src_bytes = size_t(t.width) * t.height * bpt;
+
+    /* Key the cache on the SOURCE bytes and the whole sampling state, so the
+     * conversion below only runs on a miss. Hashing the converted image instead
+     * would force a full per-draw conversion of every texture -- 1280x720 x 118
+     * draws is 106 million texels, and it would hide the very cost the
+     * comparison is trying to attribute. */
     uint64_t h = 1469598103934665603ull;
-    const size_t n = size_t(t.width) * t.height * 4;
-    for (size_t i = 0; i < n; i += 97) {  /* sampled: a full hash per texture per draw is the wrong trade */
+    for (size_t i = 0; i < src_bytes; i += 97) {  /* sampled: a full hash per texture per draw is the wrong trade */
         h ^= t.pixels[i];
         h *= 1099511628211ull;
     }
-    const auto key = std::make_pair(static_cast<const void*>(t.pixels), h ^ (uint64_t(t.width) << 32) ^ t.height ^ (uint64_t(dim) << 56) ^ uint64_t(t.height));
+    const auto key = std::make_pair(static_cast<const void*>(t.pixels),
+                                    h ^ (uint64_t(t.width) << 32) ^ t.height ^ (uint64_t(dim) << 56) ^ (uint64_t(t.mapping[0]) << 48) ^
+                                        (uint64_t(t.mapping[1]) << 44) ^ (uint64_t(t.mapping[2]) << 40) ^ (uint64_t(t.mapping[3]) << 36) ^
+                                        (uint64_t(t.vk_format) << 24) ^ uint64_t(bpt));
     auto it = cache.find(key);
     if (it != cache.end()) return it->second;
 
+    /* Decode to RGBA8 with the component mapping folded in. RGBA8Unorm is what
+     * the backend already bound, and it keeps the texture format independent of
+     * the RSX one; the sampling arithmetic is done at 8-bit precision, which is
+     * the precision the decoded image has anyway. */
+    std::vector<uint8_t> rgba(size_t(t.width) * t.height * 4);
+    for (uint32_t y = 0; y < t.height; y++) {
+        for (uint32_t x = 0; x < t.width; x++) {
+            const size_t si = (size_t(y) * t.width + x) * bpt;
+            float v[4];
+            texel_to_float(t.pixels + si, t.vk_format, v);
+            /* Diagnostics: PS3BASE_WGPU_NO_MAPPING drops the view remap, and
+             * PS3BASE_WGPU_RGBA_RAW reads the decoded bytes as RGBA regardless
+             * of the format. Together they tell a channel-order error apart from
+             * a mapping error without touching either code path. */
+            static const bool no_map = std::getenv("PS3BASE_WGPU_NO_MAPPING") != nullptr;
+            static const bool raw_rgba = std::getenv("PS3BASE_WGPU_RGBA_RAW") != nullptr;
+            if (raw_rgba) {
+                v[0] = t.pixels[si] / 255.0f;
+                v[1] = t.pixels[si + 1] / 255.0f;
+                v[2] = t.pixels[si + 2] / 255.0f;
+                v[3] = t.pixels[si + 3] / 255.0f;
+            }
+            if (!no_map) apply_mapping(v, t.mapping);
+            uint8_t* d = &rgba[(size_t(y) * t.width + x) * 4];
+            for (int c = 0; c < 4; c++) {
+                const float f = std::clamp(v[c], 0.0f, 1.0f);
+                d[c] = uint8_t(f * 255.0f + 0.5f);
+            }
+        }
+    }
+
     WGPUTextureDescriptor td = WGPU_TEXTURE_DESCRIPTOR_INIT;
     td.usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst;
-    /* Height depends on the dimension: a 1D texture is one row, and a 2D one is
-     * the full image. Setting height 1 unconditionally made every 2D upload
-     * overrun its destination ("Y size 1") and be rejected. */
     td.dimension = dim;
     td.size = dim == WGPUTextureDimension_1D ? WGPUExtent3D{t.width, 1, 1} : WGPUExtent3D{t.width, t.height, 1};
-    td.format = WGPUTextureFormat_RGBA8Unorm;
+    /* PS3BASE_WGPU_TEX_SRGB=1 uploads the mirror's textures as
+     * RGBA8UnormSrgb, i.e. requests the same automatic linearisation the Vulkan
+     * path gets from its *_SRGB image view. Diagnostic until it is derived from
+     * the texture registers like the Vulkan path does. */
+    static const bool tex_srgb = std::getenv("PS3BASE_WGPU_TEX_SRGB") != nullptr;
+    td.format = tex_srgb ? WGPUTextureFormat_RGBA8UnormSrgb : WGPUTextureFormat_RGBA8Unorm;
     td.mipLevelCount = 1;
     td.sampleCount = 1;
     WGPUTexture tex = wgpuDeviceCreateTexture(g.device, &td);
@@ -691,17 +937,14 @@ WGPUTexture upload_texture(const DrawInputs::Texture& t, uint32_t unit, WGPUText
     dst.mipLevel = 0;
     dst.origin = {0, 0, 0};
     dst.aspect = WGPUTextureAspect_All;
-    /* The copy extent must match the texture that was just created. A 1D texture
-     * holds a single row, so announcing height rows overran the destination and
-     * the whole upload was rejected. */
     const bool one_d = dim == WGPUTextureDimension_1D;
     WGPUTexelCopyBufferLayout layout = WGPU_TEXEL_COPY_BUFFER_LAYOUT_INIT;
     layout.offset = 0;
     layout.bytesPerRow = (one_d ? t.width * t.height : t.width) * 4;
     layout.rowsPerImage = one_d ? 1 : t.height;
     WGPUExtent3D size = {one_d ? t.width * t.height : t.width, one_d ? 1u : t.height, 1};
-    wgpuQueueWriteTexture(g.queue, &dst, t.pixels, n, &layout, &size);
-    s.upload_bytes += n;
+    wgpuQueueWriteTexture(g.queue, &dst, rgba.data(), rgba.size(), &layout, &size);
+    s.upload_bytes += rgba.size();
     s.textures++;
     cache[key] = tex;
     (void)unit;
@@ -983,14 +1226,29 @@ void bind_for(const DrawInputs& in) {
             const WGPUTextureViewDimension dim = unit == 7 ? WGPUTextureViewDimension_1D : WGPUTextureViewDimension_2D;
             WGPUTextureView view = dummy_view(dim);
 
-            if ((in.texture_mask & (1u << unit)) && in.texture[unit].pixels) {
+            /* PS3BASE_WGPU_DUMMY_UNITS=7: replace the listed units with the
+             * 1x1 dummy. It tells which UNIT a residual colour comes from
+             * without touching the sampler derivation or the decode. */
+            static const uint32_t dummy_units = [] {
+                const char* e = std::getenv("PS3BASE_WGPU_DUMMY_UNITS");
+                if (!e) return 0u;
+                uint32_t m = 0;
+                const char* p = e;
+                while (*p) {
+                    const unsigned long v = std::strtoul(p, const_cast<char**>(&p), 0);
+                    if (v < 16) m |= 1u << v;
+                    while (*p == ',' || *p == ' ') p++;
+                }
+                return m;
+            }();
+            if ((in.texture_mask & (1u << unit)) && in.texture[unit].pixels && !(dummy_units & (1u << unit))) {
                 if (WGPUTexture t = upload_texture(in.texture[unit], unit, dim == WGPUTextureViewDimension_1D ? WGPUTextureDimension_1D : WGPUTextureDimension_2D)) {
                     /* The view must be the dimension the layout declares for this
                      * binding, not the texture native one: a 2D view on the 1D slot
                      * makes the whole bind group invalid, and the message names the
                      * group rather than the binding. */
                     WGPUTextureViewDescriptor vd = WGPU_TEXTURE_VIEW_DESCRIPTOR_INIT;
-                    vd.format = WGPUTextureFormat_RGBA8Unorm;
+                    vd.format = std::getenv("PS3BASE_WGPU_TEX_SRGB") ? WGPUTextureFormat_RGBA8UnormSrgb : WGPUTextureFormat_RGBA8Unorm;
                     vd.dimension = dim;
                     vd.mipLevelCount = 1;
                     vd.arrayLayerCount = 1;

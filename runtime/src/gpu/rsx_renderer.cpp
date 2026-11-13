@@ -238,11 +238,22 @@ struct Texture {
     std::vector<uint8_t> host_pixels;
     uint32_t host_width = 0;
     uint32_t host_height = 0;
+    /* What the mirror needs to read those bytes correctly, all of it copied from
+     * the layout the decoder actually used: the byte width, the format and the
+     * component mapping of the view THIS draw binds (the remap lives in CONTROL1
+     * of the draw, so it is not a property of the texture). */
+    uint32_t host_bytes_per_texel = 4;
+    int host_vk_format = 0;
 };
 
 /* The Texture bind_texture resolved last, so the WebGPU mirror reuses the same
  * decoded pixels instead of resolving the unit a second time. */
 Texture* g_last_bound_texture = nullptr;
+
+/* The VkComponentMapping the last bind_texture applied to its VIEW. The remap is
+ * draw state (CONTROL1) and not a property of the texture, so the mirror cannot
+ * recover it from the Texture object; it has to be carried beside it. */
+VkComponentMapping g_last_bound_mapping{};
 
 struct PooledImage {
     VkImage image = VK_NULL_HANDLE;
@@ -1904,6 +1915,11 @@ Texture* memory_texture(const TextureRegs& t, uint32_t ea) {
         tex->host_pixels.assign(staging.ptr, staging.ptr + tex->layout.decoded_size);
         tex->host_width = tex->layout.width;
         tex->host_height = tex->layout.height;
+        /* The decoder writes the format's REAL width per texel (1 for R8, 8/16
+         * for the block ones). The mirror assumed four and read past the end of
+         * this vector -- a SIGSEGV, not a colour error. */
+        tex->host_bytes_per_texel = tex->layout.out_bytes;
+        tex->host_vk_format = int(tex->layout.format);
     }
     end_pass();
     VkCommandBuffer cmd = frame_cmd();
@@ -2276,6 +2292,11 @@ Binding bind_texture(uint32_t unit, uint32_t dim, const std::vector<Surface*>& c
 
 Binding bind_texture_impl(uint32_t unit, uint32_t dim, const std::vector<Surface*>& colors, Surface* depth) {
     Binding b{g_dummy[dim].view, VK_NULL_HANDLE};
+    /* Always describe the mapping of THIS bind: identity (all IDENTITY) means
+     * "the view applies no swizzle", which is what a dummy or a binding that
+     * bails out early really has. Without this reset a unit inherited the remap
+     * of whatever was bound before it. */
+    g_last_bound_mapping = VkComponentMapping{};
     TextureRegs t = texture_regs(unit);
     if (!(t.control0 >> 31)) return b;
     uint32_t loc = (t.format & 3) - 1;
@@ -2325,6 +2346,7 @@ Binding bind_texture_impl(uint32_t unit, uint32_t dim, const std::vector<Surface
             bool depth_copy = src != redirect && src->depth();
             if (depth_copy) m = VkComponentMapping{};
             b.view = temp_view(tmp, m, !depth_copy && src != redirect && texture_srgb(t));
+            g_last_bound_mapping = m;
             b.scale = tmp->scale;
             uint32_t tzf = (t.address >> 28) & 7;
             b.sampler = sampler(t, 1, depth_copy && tzf != 0 && tzf != 7);
@@ -2374,6 +2396,7 @@ Binding bind_texture_impl(uint32_t unit, uint32_t dim, const std::vector<Surface
                      int(tex->layout.format));
         }
     }
+    g_last_bound_mapping = want_map;
     uint64_t mk = fnv(&want_map, sizeof want_map);
     auto vit = tex->remap_views.find(mk);
     if (vit != tex->remap_views.end()) {
@@ -3172,6 +3195,11 @@ bool draw() {
     uint32_t nw = 0, ni = 0;
     float tex_scales[16];
     Texture* texture_units[16] = {};
+    /* Per-unit component mappings. A single global held whichever unit was
+     * bound last, so every unit of a multi-texture draw got the LAST unit's
+     * remap -- the logo's white background was sampled through the glyph
+     * atlas's mapping. */
+    VkComponentMapping texture_mappings[16]{};
     for (float& v : tex_scales) v = 1.0f;
     uint64_t bind_start = ticks();
     for (uint32_t u = 0; u < 16; u++) {
@@ -3179,6 +3207,7 @@ bool draw() {
         g_last_bound_texture = nullptr;
         Binding b = bind_texture(u, (fp->dims >> (u * 2)) & 3, colors, depth);
         texture_units[u] = g_last_bound_texture;
+        texture_mappings[u] = g_last_bound_mapping;
         tex_scales[u] = b.scale;
         images[ni] = {b.sampler, b.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         writes[nw] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, VK_NULL_HANDLE, 32 + u, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &images[ni], nullptr, nullptr};
@@ -3778,6 +3807,20 @@ bool draw() {
             }
             win.texture[tu].width = ht->host_width;
             win.texture[tu].height = ht->host_height;
+            /* The bytes are the DECODER output, whose width is the format's,
+             * not always four: reading width*height*4 from a 1-byte R8 atlas is
+             * a read past the end and it segfaulted the process. */
+            win.texture[tu].bytes_per_texel = ht->host_bytes_per_texel;
+            win.texture[tu].vk_format = ht->host_vk_format;
+            /* The view mapping this draw applies. Vulkan applies it in the
+             * image view; wgpu-native has no such feature, so the mirror folds
+             * it into the converted texels. Ignoring it cost 17.4% of pixels
+             * and turned the logo red into a saturated (255,89,96). */
+            const VkComponentMapping& m = texture_mappings[tu];
+            win.texture[tu].mapping[0] = int(m.r);
+            win.texture[tu].mapping[1] = int(m.g);
+            win.texture[tu].mapping[2] = int(m.b);
+            win.texture[tu].mapping[3] = int(m.a);
             win.texture_mask |= (1u << tu);
         }
         win.color_format = uint32_t(wgpu::format_for(colors.empty() ? VK_FORMAT_UNDEFINED : colors[0]->format));
@@ -3791,6 +3834,8 @@ bool draw() {
          * WebGPU factors/ops are numbered like the Vulkan ones, not like RSX. */
         win.sfactor = uint32_t(wgpu::blend_for(int(blend_factor(k.sfactor & 0xFFFF))));
         win.dfactor = uint32_t(wgpu::blend_for(int(blend_factor(k.dfactor & 0xFFFF))));
+        win.sfactor_alpha = uint32_t(wgpu::blend_for(int(blend_factor(k.sfactor >> 16))));
+        win.dfactor_alpha = uint32_t(wgpu::blend_for(int(blend_factor(k.dfactor >> 16))));
         win.equation = uint32_t(wgpu::equation_for(int(blend_op(k.equation & 0xFFFF))));
         win.write_mask = k.write_masks & 0xF;
         win.cull = uint32_t(wgpu::cull_for(cull));
@@ -3800,6 +3845,8 @@ bool draw() {
          * is (0, 0, w*ps, h*ps) and the scissor is the sub-rectangle. */
         win.target_width = up(w, ps);
         win.target_height = up(h, ps);
+        /* The vertex shader's NDC Y is flipped for WebGPU in the decompiler, so
+         * the viewport stays positive-Y-down exactly as the Vulkan one. */
         win.viewport[0] = 0.0f; win.viewport[1] = 0.0f;
         win.viewport[2] = float(win.target_width);
         win.viewport[3] = float(win.target_height);

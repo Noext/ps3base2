@@ -40,6 +40,13 @@ struct TextureLayout {
     uint32_t layers = 1;
     uint32_t source_size = 0;
     uint64_t decoded_size = 0;
+    /* Bytes the DECODER writes per texel. It is the format's real width (1 for
+     * R8, 2 for the packed 16-bit ones, 4 for the 32-bit ones, 8/16 for the
+     * block formats), NOT always 4. The WebGPU mirror has to know it: it was
+     * reading width*height*4 bytes out of a buffer that can be four times
+     * smaller, which is a read past the end -- measured as a SIGSEGV in
+     * wgpu::upload_texture with the fault address one past the vector. */
+    uint32_t out_bytes = 4;
     bool is_depth = false;
     std::vector<TextureRegion> regions;
 };

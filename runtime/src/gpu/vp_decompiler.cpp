@@ -115,7 +115,13 @@ public:
         src << "    gl_PointSize = (omask & 32u) != 0u ? o[6].x : uintBitsToFloat(flags.z);\n";
         src << "    vec4 p = o[0];\n";
         src << "    vec2 xy = (vp_scale.xy * p.xy + (vp_offset.xy - surface.xy * 0.5) * p.w) * surface.zw * 2.0;\n";
-        src << "    gl_Position = vec4(xy, vp_scale.z * p.z + vp_offset.z * p.w, p.w);\n";
+        /* The NDC Y axis points the other way in WebGPU. Vulkan's clip space has
+         * +Y DOWN the target, WebGPU's has +Y UP it, so the SAME xy puts the
+         * scene upside down on the second device. Measured: comparing the two
+         * images of one frame, flipping the mirror vertically took the RMS from
+         * 59.73 to 32.92. The Vulkan form keeps the axis it has always had. */
+        if (wgpu_target_) src << "    gl_Position = vec4(xy.x, -xy.y, vp_scale.z * p.z + vp_offset.z * p.w, p.w);\n";
+        else src << "    gl_Position = vec4(xy, vp_scale.z * p.z + vp_offset.z * p.w, p.w);\n";
         src << "}\n";
         info.glsl = src.str();
         info.input_mask = inputs_;

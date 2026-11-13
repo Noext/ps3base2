@@ -73,6 +73,22 @@ struct DrawInputs {
         uint32_t width = 0;
         uint32_t height = 0;
         uint32_t mip_levels = 1;
+        /* The DECODED format, as the VkFormat the Vulkan path created its image
+         * with, and the bytes the decoder really writes per texel (1, 2, 4, 8 or
+         * 16). Assuming four made the backend read past the end of host_pixels
+         * and SIGSEGV inside upload_texture. */
+        int vk_format = 0;
+        uint32_t bytes_per_texel = 4;
+        /* True when the Vulkan image is an sRGB format: WebGPU linearises on
+         * sample only for an *Srgb texture format, so this cannot be ignored. */
+        bool srgb = false;
+        /* The component remap the Vulkan path applies in its IMAGE VIEW
+         * (VkComponentMapping, r/g/b/a, each a VkComponentSwizzle). wgpu-native
+         * v29 has no texture-component-swizzle feature (no such symbol in the
+         * library), so the only way to reproduce it is to apply it while the
+         * texels are converted on the host. Ignoring it was worth 17.4% of
+         * pixels at more than 8 levels of error. */
+        int mapping[4] = {0, 1, 2, 3};
     } texture[16];
     uint32_t texture_mask = 0;
     /* Values the RSX shader multiplies its texture coordinates by; part of the
@@ -88,6 +104,11 @@ struct DrawInputs {
     uint32_t depth_compare = 0;  /* WGPUCompareFunction */
     uint32_t blend_enable = 0;
     uint32_t sfactor = 0, dfactor = 0, equation = 0;  /* WGPUBlendFactor/Op */
+    /* The ALPHA factors are separate in WebGPU and are derived from the upper
+     * 16 bits of the RSX registers. Passing those bits through as if they were
+     * WebGPU enumerants is the same trap as the color ones: the numbers are
+     * Vulkan's. The renderer converts them with the same table. */
+    uint32_t sfactor_alpha = 0, dfactor_alpha = 0;
     uint32_t write_mask = 0xF;
     uint32_t cull = 0;           /* WGPUCullMode */
     bool front_face_cw = false;
