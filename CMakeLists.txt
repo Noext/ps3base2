@@ -348,6 +348,14 @@ add_test(NAME cellfiber_contract COMMAND cellfiber_contract)
 add_test(NAME lift_stamp
          COMMAND python3 "${CMAKE_SOURCE_DIR}/tests/lift_stamp.py")
 
+# crash_stack: stack_from() must keep the host stack when rip is 0. RDR's rare
+# crash is a NULL HOST CODE POINTER; the old code searched backtrace() for a
+# frame equal to rip, which with rip = 0 can never match, so it printed the single
+# frame "#0 ?" and threw the stack away. Red on the old code (2 frames), green now
+# (4: the faulting pc plus the three captured frames).
+add_test(NAME crash_stack
+         COMMAND python3 "${CMAKE_SOURCE_DIR}/tests/crash_stack.py")
+
 # ppu_dispatch_table: the lifter's shared-table bctr detector, on synthetic
 # words. Pins the two shape rules that cost a session on Red Dead Redemption:
 # mtctr is not always at bctr-4 (26 of f_00d19208's 163 are at -2, 3 at -3 and

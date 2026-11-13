@@ -17,6 +17,12 @@ namespace ppu {
 void syscall(Context& ctx, uint8_t* base);
 void call_import(Context& ctx, uint8_t* base, uint32_t index);
 void call_indirect(Context& ctx, uint8_t* base, uint32_t addr);
+
+/* The last few indirect calls, oldest first. A crash at rip = 0 is a NULL HOST
+ * CODE POINTER: the fault is in the dispatcher, so the crash dump cannot say
+ * which guest call produced it. The crash handler prints this ring for exactly
+ * that case. Defined in ppu_runtime.cpp. */
+void indirect_history(void (*emit)(uint32_t lr, uint32_t target, uint32_t ctr, uint32_t r3));
 void trap(Context& ctx, uint8_t* base, uint32_t pc);
 void unimplemented(Context& ctx, uint8_t* base, uint32_t pc, uint32_t word);
 uint64_t timebase();

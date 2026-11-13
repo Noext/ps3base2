@@ -49,6 +49,7 @@ std::string sample_stack(void* native, int depth) {
 #include <cxxabi.h>
 #include <dlfcn.h>
 #include "runtime/backtrace_port.h"
+#include "ppu/ops.h"
 #include <pthread.h>
 #include <sys/mman.h>
 #include <ucontext.h>
@@ -81,17 +82,32 @@ int stack_from(const ucontext_t* uc, void** pcs, int depth) {
     int n = backtrace_port::capture(raw, 64);
     uintptr_t rip = uc ? static_cast<uintptr_t>(uc->uc_mcontext.gregs[REG_RIP]) : 0;
     int start = 0;
+    bool found = false;
     if (uc) {
         start = std::min(n, 2);
         for (int i = 0; i < n; i++) {
             if (reinterpret_cast<uintptr_t>(raw[i]) == rip) {
                 start = i;
+                found = true;
                 break;
             }
         }
     }
     int out = 0;
-    if (uc && (start >= n || reinterpret_cast<uintptr_t>(raw[start]) != rip)) pcs[out++] = reinterpret_cast<void*>(rip);
+    /* A rip of 0 is a NULL CODE POINTER being called, not a return address:
+     * nothing in backtrace() will ever equal it, so the search above cannot
+     * succeed. MEASURED: the old code then left start at 2 and printed the single
+     * frame "#0 ?" -- the whole host stack was thrown away exactly when it was
+     * most needed. RDR's rare crash (rip = 0) produced no frame to resolve for
+     * that reason.
+     *
+     * So: always emit the faulting pc, and when it is not found in the captured
+     * stack, keep the captured stack as well instead of skipping it. A caller
+     * reading the dump then sees both "we jumped to 0" and the frames that made
+     * the call. */
+    if (uc) pcs[out++] = reinterpret_cast<void*>(rip);
+    if (uc && !found && rip == 0) start = 0;   /* keep the whole captured stack */
+    else if (uc && !found) start = std::min(n, 2);
     for (int i = start; i < n && out < depth; i++) pcs[out++] = raw[i];
     return out;
 }
@@ -361,6 +377,14 @@ void fault_handler(int sig, siginfo_t* si, void* ctx) {
     void* pcs[24];
     int n = stack_from(uc, pcs, 24);
     for (int i = 0; i < n; i++) LOG_ERROR("crash", "  #%d %s", i, symbol_of(reinterpret_cast<uintptr_t>(pcs[i])).c_str());
+    /* The last indirect calls, oldest first. RDR's rare crash is rip = 0 -- a
+     * NULL HOST CODE POINTER -- and the host stack alone cannot say which guest
+     * call produced it, because the fault is in the dispatcher rather than in
+     * guest code. This ring names the call that led there. */
+    LOG_ERROR("crash", "  last indirect calls (oldest first): lr -> target (ctr, r3)");
+    ppu::indirect_history([](uint32_t lr, uint32_t target, uint32_t ctr, uint32_t r3) {
+        LOG_ERROR("crash", "    lr 0x%08x -> 0x%08x (ctr 0x%08x, r3 0x%08x)", lr, target, ctr, r3);
+    });
     /* The cellFiber events that led here. Printed BEFORE the register dump so
      * the reader sees the sequence first: what the fault is a consequence of is
      * the last import that ran, not the address it faulted at. */

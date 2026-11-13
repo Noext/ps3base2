@@ -338,7 +338,39 @@ std::string describe_address(uint32_t addr) {
 
 namespace ppu {
 
+/* The last few indirect calls, kept so a crash report can say what was called
+ * through a pointer. RDR has a rare crash at rip = 0 -- a NULL HOST CODE POINTER
+ * -- and the crash dump cannot show which guest call produced it: the fault is in
+ * the host dispatcher, not in guest code. A small ring of (lr, target, ctr) is
+ * enough to name the call that led there.
+ *
+ * It is a ring in memory, written on every indirect call, so it costs one store
+ * per call and nothing per sample. crash_posix.cpp prints it. */
+namespace {
+constexpr int kIndirectRing = 16;
+struct IndirectRec {
+    uint32_t lr, target, ctr, r3;
+};
+IndirectRec g_indirect_ring[kIndirectRing];
+std::atomic<unsigned> g_indirect_next{0};
+}  // namespace
+
+void indirect_history(void (*emit)(uint32_t lr, uint32_t target, uint32_t ctr, uint32_t r3)) {
+    const unsigned end = g_indirect_next.load(std::memory_order_relaxed);
+    for (unsigned k = 0; k < kIndirectRing; k++) {
+        const unsigned i = (end + k) % kIndirectRing;
+        const IndirectRec& r = g_indirect_ring[i];
+        if (r.lr | r.target) emit(r.lr, r.target, r.ctr, r.r3);
+    }
+}
+
 void call_indirect(Context& ctx, uint8_t* base, uint32_t addr) {
+    {
+        const unsigned i = g_indirect_next.fetch_add(1, std::memory_order_relaxed) % kIndirectRing;
+        g_indirect_ring[i] = {static_cast<uint32_t>(ctx.lr), addr,
+                              static_cast<uint32_t>(ctx.ctr),
+                              static_cast<uint32_t>(ctx.gpr[3])};
+    }
     /* PS3BASE_CTR_PROBE: print ctr at entry to call_indirect for one lr. An
      * indirect call whose ctr does not match the word the guest just loaded
      * from the pointer register means the register file and the dispatch
