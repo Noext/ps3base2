@@ -265,3 +265,35 @@ thread is not woken once per 5.33 ms block, it is woken when its own producer
 posts. That is the title's design (it polls the index between waits), not a
 delivery shortfall -- every event posted was received.
 
+
+## Measurement 5 -- one CELL_AUDIO_EVENT_MIX per period, measured on the LIVE mixer thread
+
+RDR registers no notify queue, so the delivery path cannot be observed through
+the title itself. The unit test drives audio::step, but with a stub send. This
+observes the live mixer thread: `PS3BASE_AUDIO_NOTIFY_PROBE` (added here,
+runtime/src/hle/cellAudio.cpp) creates a real queue under the console's own key
+base (0x80004d494f323221, audio_hle.h:524), registers it through the console's own
+set_notify_event_queue (:547), and starts a real consumer that receives exactly as
+a title would. Both counters and the mixer's period counter are read from the
+same run.
+
+    $ PS3BASE_AUDIO_NOTIFY_PROBE=1 PS3BASE_LOG=info timeout 26 ./build-rdr/ps3base --no-launcher
+    I   3.634874 cellAudio: N5b probe: notify queue key 0x80004d494f323221 registered, receiver started
+    I   8.654559 cellAudio: N5b probe: period  937, delivered  937, received  937, failed 0
+    I  13.656947 cellAudio: N5b probe: period 1875, delivered 1875, received 1875, failed 0
+    I  18.659288 cellAudio: N5b probe: period 2813, delivered 2813, received 2813, failed 0
+
+period == delivered == received at all three sample points, failed 0, and the
+consumer is an independent thread that blocks on the queue's condition variable
+(probe_receiver, cellAudio.cpp) rather than polling. So:
+
+  - **one event per block**: 937 events in the 937 periods of the first 5.02 s.
+    Periods are AUDIO_BLOCK_PERIOD_US = 5333 us, so that is one event per 5.33 ms;
+  - **the read index advances**: 937 index writes in the same 937 periods
+    (the stats line's own `after 937 writes`);
+  - **the consumer wakes**: received == delivered, so every event pushed was taken
+    by a blocked receive, not left pending and not refused with CELL_EBUSY.
+
+(The probe logs 'failed 0' on every interval, which is the counter that would
+have moved if the delivery had been dropped because a consumer was not draining.)
+

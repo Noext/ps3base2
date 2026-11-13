@@ -242,13 +242,57 @@ void mix_block(const Port& p, uint64_t block, float* stereo) {
     }
 }
 
+/* N5b probe: PS3BASE_AUDIO_NOTIFY_PROBE registers a real notify queue from the
+ * host and counts what audio::step delivers into it, so "one event per block" is
+ * a number from the live mixer thread and not a claim about the code. It is off
+ * unless asked for; when on it changes only this runtime's own queue state. */
+std::atomic<uint64_t> g_probe_delivered{0};
+std::atomic<uint64_t> g_probe_failed{0};
+std::atomic<uint64_t> g_probe_key{0};
+
 /* The delivery function audio::step calls once per registered notify queue. */
 void deliver(uint64_t key, uint64_t source, uint64_t d1, uint64_t d2, uint64_t d3) {
+    const bool probe = g_probe_key.load() == key;
     if (!lv2::send_event_by_key(key, source, d1, d2, d3)) {
+        if (probe) g_probe_failed.fetch_add(1, std::memory_order_relaxed);
         static std::atomic<int> warned{0};
         if (warned.fetch_add(1) < 4)
             LOG_WARN("cellAudio", "notify event for key 0x%llx went nowhere (the queue was destroyed)",
                      static_cast<unsigned long long>(key));
+        return;
+    }
+    if (probe) g_probe_delivered.fetch_add(1, std::memory_order_relaxed);
+}
+
+/* Create a real notify queue under the console's key base and register it with
+ * audio::set_notify_event_queue, so the live audio::step delivers into a real
+ * lv2 queue that a real receive can drain. Returns the key, 0 on failure. */
+uint64_t probe_register_notify_queue() {
+    const uint32_t depth = 8;
+    for (uint32_t i = 0; i < 64; i++) {
+        const uint64_t key = 0x80004d494f323221ull + i;
+        if (!lv2::create_queue_by_key(key, depth, "cellAudio notify (N5b probe)")) continue;
+        if (audio::set_notify_event_queue(g_mgr, key, 0)) return 0;
+        g_probe_key.store(key);
+        return key;
+    }
+    return 0;
+}
+
+/* The consumer side of the probe: one thread per probe queue, receiving exactly
+ * as a title would, so "the queue delivers and something wakes" is one loop. */
+void probe_receiver(uint64_t key) {
+    host::set_thread_name("cellAudio probe rx");
+    auto q = lv2::queue_by_key(key);
+    if (!q) return;
+    std::unique_lock lk(q->m);
+    while (g_thread_live) {
+        if (!lv2::wait_for(lk, q->cv, 20000, [&] { return !q->events.empty() || q->destroyed; })) continue;
+        if (q->destroyed) break;
+        while (!q->events.empty()) {
+            q->events.pop_front();
+            q->received++;
+        }
     }
 }
 
@@ -317,6 +361,21 @@ void audio_thread() {
                          static_cast<unsigned long long>(g_mgr.counter),
                          static_cast<unsigned long long>(index_last), static_cast<unsigned long long>(index_writes),
                          fill);
+            if (g_probe_key.load()) {
+                /* The probe's own line: periods vs deliveries vs the counter the
+                 * consumer advanced. All three from the same thread pair in the
+                 * same interval, so "one event per period" is a ratio, not a claim. */
+                uint64_t received = 0;
+                if (auto q = lv2::queue_by_key(g_probe_key.load())) {
+                    std::lock_guard ql(q->m);
+                    received = q->received;
+                }
+                LOG_INFO("cellAudio", "N5b probe: period %llu, delivered %llu, received %llu, failed %llu",
+                         static_cast<unsigned long long>(g_mgr.counter),
+                         static_cast<unsigned long long>(g_probe_delivered.load()),
+                         static_cast<unsigned long long>(received),
+                         static_cast<unsigned long long>(g_probe_failed.load()));
+            }
             late = stale = blocks = 0;
         }
         std::fill(stereo.begin(), stereo.end(), 0.0f);
@@ -428,6 +487,15 @@ HLE_FUNC(cellAudio, cellAudioInit) {
              g_mgr.index_area_size, g_mgr.free_count, loader::g_process.sdk_version);
     g_thread_live = true;
     std::thread(audio_thread).detach();
+    if (std::getenv("PS3BASE_AUDIO_NOTIFY_PROBE")) {
+        const uint64_t key = probe_register_notify_queue();
+        if (!key) LOG_WARN("cellAudio", "N5b probe: could not create/register a notify queue");
+        else {
+            LOG_INFO("cellAudio", "N5b probe: notify queue key 0x%llx registered, receiver started",
+                     static_cast<unsigned long long>(key));
+            std::thread(probe_receiver, key).detach();
+        }
+    }
     ret(ctx, 0);
 }
 
