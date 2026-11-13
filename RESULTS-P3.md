@@ -110,3 +110,77 @@ Measured effect of the overhead alone, same machine, same binary family:
 That difference is not a fix -- it is what running the same title without
 50 000 synchronous log writes does to the timing. It is recorded because the
 next measurement must not read it as one.
+## Measurement 4 -- THE ANSWER: a fibre IS switched, 23 ms before the crash
+
+Same binary, ring buffer on, display :0 (the display the crash reproduces on).
+The run crashed:
+
+    E  39.537142 crash: signal 11 at 0x...726 (exe+0x17aa726) fault 0x8a540000010 (guest 0x10) thread main_thread 0x1000000
+    E  39.569965 crash:   cellFiber import nesting depth on this thread: 2 (the fault happened INSIDE a cellFiber import)
+    E  39.569971 crash:   guest lr 0x0 r1 0xd0032d30 r2 0x0 r3 0x0 r4 0x0 r5 0xd0033360
+
+The last events of the 91666 the ring saw, verbatim:
+
+    t=39.514795 th=0x1000000 ENTER  _cellFiberPpuAttributeInitialize r1=0xd0025140 r3=0xd00251b0 lr=0x005332f4
+    t=39.514802 th=0x1000000 LEAVE  _cellFiberPpuAttributeInitialize r1=0xd0025140 r3=0x0        lr=0x005332f4
+    t=39.514803 th=0x1000000 ENTER  cellFiberPpuCreateFiber          r1=0xd0025140 r3=0x165d580 lr=0x0053334c
+    t=39.514902 th=0x1000000 LEAVE  cellFiberPpuCreateFiber          r1=0xd0025140 r3=0x0        lr=0x0053334c
+    t=39.514903 th=0x1000000 ENTER  cellFiberPpuRunFibers            r1=0xd00252e0 r3=0x165d580 lr=0x00533498
+    t=39.514955 th=0x1000000 ENTER  cellFiberPpuYield                r1=0xd0032d60 r3=0x1000000720bcbe0 lr=0x0053339c
+    ... then the SIGSEGV at 39.537142.
+
+Three facts, each one a line above:
+
+1. cellFiberPpuCreateFiber IS called -- once, at t=39.514803, returning 0
+   (CELL_OK). This is a NEW call: the earlier 36 s run (/tmp/p3-fiber1.log) had
+   zero of them in 24439 yields. Fibre creation is reached late, at 39.51 s,
+   immediately before the fault.
+2. cellFiberPpuRunFibers is entered and never returns -- the ENTER at
+   t=39.514903 has no matching LEAVE, and the crash handler reports nesting
+   depth 2 on main_thread (RunFibers + the Yield inside it). That is the switch
+   point: the guest entered the scheduler and control never came back.
+3. The yield inside RunFibers runs on a DIFFERENT stack. Every one of the
+   preceding 24000 yields on main_thread entered with r1=0xd004f440. This one
+   enters with r1=0xd0032d60, and the crash has r1=0xd0032d30 -- the same
+   allocation, 0x30 bytes lower, and it is not the thread's stack.
+
+So the hypothesis in the task is CONFIRMED BY MEASUREMENT: a fibre switch
+precedes the crash. r1 goes 0xd004f440 (main thread) -> 0xd0032d60 (the fibre,
+after RunFibers switched) -> 0xd0032d30 (at the fault). The crash is on the
+fibre's own guest stack, inside LLE libfiber, executing the fibre body.
+
+The mechanism, read off the crash itself: the faulting instruction is
+libfiber_000.cpp:232, "ld64(base, gpr[9] + 16)" with gpr[9] = 0 -- the
+back-chain restore that walks r1 to a saved frame's link word. gpr[9] came from
+"ld64(base, gpr[1] + 0)" (line 231) on the fibre's stack, which returned 0, so
+0 + 16 = 0x10 is the fault. The fibre's stack slot 0 is zero where a saved stack
+pointer belongs.
+
+Where this leaves the decision in the task:
+
+    "If a fibre switch precedes the crash, cellFiber cannot stay lifted"
+
+The precondition is MET. cellFiberPpuRunFibers switches the guest stack and the
+switched-to code faults on a zero field of its own frame.
+
+The caveat, stated rather than glossed: this is a CONDITION, not the steady
+state. For the first 39.5 s the title calls cellFiberPpuYield 24439 times and
+cellFiberPpuCreateFiber zero times, and every one of those yields returns
+CELL_FIBER_ERROR_PERM (0x80760009) with r1 unchanged. Only after the save-prompt
+path runs does the fibre code execute. An HLE rewrite therefore has to answer
+both the PERM-yield path the title lives on for 39 s and the RunFibers switch
+that faults.
+
+## A/B note -- display :0 vs :150, and what that does to a measurement
+
+The crash reproduces on DISPLAY=:0 and did not reproduce on :150 in three runs
+(85 s, 236 s, 236 s alive). This is not evidence about fibres; it is a
+configuration difference that is visible in the log:
+
+    :0   swapchain 1280x720, 4 images      (the crash runs, /tmp/seg.log, /tmp/p3-fiber4.log)
+    :150 swapchain 1208x680, 3 images      (/tmp/p3-fiber3.log)
+
+The Xvfb size and the swapchain image count change the frame pacing, which
+changes when the title reaches the save-prompt path, which changes whether the
+fibre code runs before the harness stops it. Recorded so that "no crash on :150"
+is never read as "the crash went away".

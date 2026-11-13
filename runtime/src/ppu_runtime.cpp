@@ -703,6 +703,22 @@ void call_import_inner(Context& ctx, uint8_t* base, uint32_t index, ImportSlot& 
             guest::Thread* t = guest::current();
             fibertrace::note(fibertrace::Kind::Enter, t ? t->id : 0u, 0,
                              imp.name ? imp.name : "?", lr_in, r1_in, c.gpr[3]);
+            /* Every cellFiber import EXCEPT the yield is a rare setup or a
+             * switch, and these are the ones whose arguments decide what the
+             * fibre is: CreateFiber carries the entry, the stack and its size,
+             * RunFibers is the switch. Logging them cannot cost the run -- there
+             * are five of them -- and the ring only keeps the last 512 events,
+             * which a 90 000-event run of yields would otherwise bury. */
+            if (std::strcmp(imp.name ? imp.name : "", "cellFiberPpuYield") != 0) {
+                LOG_INFO("fiber", "-> %s(0x%llx,0x%llx,0x%llx,0x%llx,0x%llx,0x%llx,0x%llx,0x%llx) "
+                         "r1=0x%08x lr=0x%08x th=0x%x '%s'",
+                         imp.name ? imp.name : "?",
+                         static_cast<unsigned long long>(c.gpr[3]), static_cast<unsigned long long>(c.gpr[4]),
+                         static_cast<unsigned long long>(c.gpr[5]), static_cast<unsigned long long>(c.gpr[6]),
+                         static_cast<unsigned long long>(c.gpr[7]), static_cast<unsigned long long>(c.gpr[8]),
+                         static_cast<unsigned long long>(c.gpr[9]), static_cast<unsigned long long>(c.gpr[10]),
+                         r1_in, lr_in, t ? t->id : 0u, t ? t->name.c_str() : "?");
+            }
         }
         ~FiberScope() {
             if (!on) return;
