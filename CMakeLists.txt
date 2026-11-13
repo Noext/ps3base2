@@ -347,6 +347,14 @@ add_test(NAME export_coverage
          COMMAND python3 "${CMAKE_SOURCE_DIR}/tools/check_export_coverage.py"
                  "${PS3BASE_GENERATED_DIR}/table.cpp" --root "${CMAKE_SOURCE_DIR}")
 
+# export_coverage_gate: the gate's own regression test, on a synthetic PRX. It
+# needs no disc, so it runs everywhere, and it pins the six cases that matter --
+# including the two the old check missed (an unnamed export row, and a
+# descriptor whose code word is outside the image text) and the zero-size libent
+# link that once made this gate allocate 24 GB.
+add_test(NAME export_coverage_gate
+         COMMAND python3 "${CMAKE_SOURCE_DIR}/tests/export_coverage.py")
+
 add_executable(memory_map tests/memory_map.cpp runtime/src/memory.cpp runtime/src/regions.cpp runtime/src/mem.cpp runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/backtrace_port.cpp runtime/src/host.cpp runtime/src/log.cpp)
 target_include_directories(memory_map PRIVATE runtime/include)
 target_compile_options(memory_map PRIVATE ${PS3BASE_ARCH_FLAGS})
