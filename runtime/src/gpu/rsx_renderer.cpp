@@ -935,7 +935,12 @@ VpEntry* vertex_program() {
         {
             WgslShader w = emit_vertex_wgsl(g_vp_canon, g_vp_canon_start);
             if (w.valid) wgsl = std::move(w.source);
-            else if (g_vp_failures++ < 20) dump_failure("vp_wgsl_fail", h, vp.glsl, "WGSL emitter refused this vertex program");
+            /* No decompiled GLSL exists in THIS frame: the decompile runs inside the
+             * worker lambda below, and `vp` is declared there. Naming vp.glsl here was
+             * the compile error that stopped S1's last build (RESULTS sec. 2.7, "ligne
+             * 938"). The diagnostic still carries the ucode hash, which is what
+             * identifies the program; the GLSL body is not yet available to attach. */
+            else if (g_vp_failures++ < 20) dump_failure("vp_wgsl_fail", h, std::string(), "WGSL emitter refused this vertex program (async path: GLSL not yet decompiled)");
         }
 #endif
         g_compile_pool.submit([&e, canon = std::move(canon), st = g_vp_canon_start
@@ -1924,6 +1929,16 @@ TextureDecodePool& texture_pool() {
     std::call_once(once, [] {
         const char* e = std::getenv("GOWA_TEXTURE_THREADS");
         int n = e ? std::atoi(e) : 3;
+#if defined(__EMSCRIPTEN__)
+        /* T1: getenv is inert under wasm, so the default of 3 was ALWAYS in force and
+         * the decode ran on pool threads. Under -sPROXY_TO_PTHREAD the guest already
+         * lives on a pthread; these pool threads are additional ones, and a texture
+         * decode running there while the FIFO thread records is the first place the
+         * run dies (measured: "table index is out of bounds" immediately after the
+         * first texloc, at t=15.6 s). Decode inline on the FIFO thread instead: it is
+         * slower and it is correct, which is the trade this track needs. */
+        n = 0;
+#endif
         if (n > 0) g_texture_pool.start(std::min(n, 8));
     });
     return g_texture_pool;
@@ -2012,7 +2027,36 @@ Texture* memory_texture(const TextureRegs& t, uint32_t ea) {
     }
     const uint8_t* src = vm::ptr(ea);
     uint64_t ht = ticks();
+    /* T1: the read below is the first one that walks source_size bytes of guest
+     * memory, and under wasm a byte past the flat buffer is a TRAP, not a garbage
+     * read. readable() above consults the page map, which mem::commit fills in
+     * SOFTWARE (bitset mode) and clamps to g_pages: a range that runs past the
+     * buffer can therefore be "mapped" and still trap. Name the overrun here
+     * instead of dying inside fast_hash with no address. */
+    {
+        const uint64_t kFlat = uint64_t(2432) << 20;   /* mem::reserve size, logged at boot */
+        if (uint64_t(ea) + tex->layout.source_size > kFlat) {
+            static std::atomic<uint32_t> over{0};
+            if (over.fetch_add(1) < 20) {
+                LOG_ERROR("texover", "texture read past the flat buffer: ea 0x%08x size 0x%x end 0x%llx flat 0x%llx (%ux%u fmt 0x%08x)",
+                          ea, tex->layout.source_size,
+                          static_cast<unsigned long long>(uint64_t(ea) + tex->layout.source_size),
+                          static_cast<unsigned long long>(kFlat),
+                          tex->layout.width, tex->layout.height, t.format);
+            }
+            return nullptr;
+        }
+    }
+    /* T1 BISECT: name the step, so the trap that follows has a predecessor in the
+     * log instead of an address. Remove once the crash is attributed. */
+    static std::atomic<uint32_t> steps{0};
+    const bool trace_step = steps.fetch_add(1) < 8;
+    if (trace_step) LOG_INFO("texstep", "A ea 0x%08x src_size 0x%x dec_size 0x%llx %ux%u fmt 0x%08x out_bytes %u",
+                             ea, tex->layout.source_size,
+                             static_cast<unsigned long long>(tex->layout.decoded_size),
+                             tex->layout.width, tex->layout.height, t.format, tex->layout.out_bytes);
     uint64_t h = fast_hash(src, tex->layout.source_size);
+    if (trace_step) LOG_INFO("texstep", "B hash ok");
     g_stats.hash_ticks += ticks() - ht;
     g_stats.hash_bytes += tex->layout.source_size;
     g_stats.hash_count++;
@@ -2037,8 +2081,10 @@ Texture* memory_texture(const TextureRegs& t, uint32_t ea) {
         tex->watched = watch_ok;
         return tex;
     }
+    if (trace_step) LOG_INFO("texstep", "C before ring_alloc");
     RingAlloc staging;
     if (!ring_alloc(tex->layout.decoded_size, 16, staging)) return nullptr;
+    if (trace_step) LOG_INFO("texstep", "D ring_alloc ok ptr %p", static_cast<void*>(staging.ptr));
     const bool async_decode = texture_pool().threads() && tex->layout.decoded_size >= 65536 && !g_trace;
     if (async_decode) {
         texture_pool().submit([src, t, layout = tex->layout, dst = staging.ptr] { decode_texture(src, t, layout, dst); });
@@ -2050,6 +2096,7 @@ Texture* memory_texture(const TextureRegs& t, uint32_t ea) {
     } else {
         decode_texture(src, t, tex->layout, staging.ptr);
     }
+    if (trace_step) LOG_INFO("texstep", "E decode ok");
     if (wgpu::enabled()) {
         /* A copy for the mirror, taken from the same staging data the Vulkan
          * path uploads. Sharing one decode is what keeps a texture difference
@@ -2063,7 +2110,9 @@ Texture* memory_texture(const TextureRegs& t, uint32_t ea) {
         tex->host_bytes_per_texel = tex->layout.out_bytes;
         tex->host_vk_format = int(tex->layout.format);
     }
+    if (trace_step) LOG_INFO("texstep", "F mirror copy ok, before end_pass");
     end_pass();
+    if (trace_step) LOG_INFO("texstep", "G end_pass ok");
     VkCommandBuffer cmd = frame_cmd();
     VkImageMemoryBarrier br{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
     br.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -4113,11 +4162,36 @@ bool draw() {
         win.vs_words = vp->spirv_wgpu.size();
         win.fs_spirv = fp->spirv_wgpu.empty() ? nullptr : fp->spirv_wgpu.data();
         win.fs_words = fp->spirv_wgpu.size();
-        if (!win.vs_spirv || !win.fs_spirv) {
+        /* T1: THE WEB PATH HAS NO SPIR-V, AND THAT IS NOT A REASON TO SKIP.
+         *
+         * This gate demanded spirv_wgpu on both stages. On the web path there is no
+         * glslang, so compile_glsl always fails and spirv_wgpu is always empty; the
+         * program the renderer actually holds is the WGSL emitted by wgsl_emit.cpp
+         * (VpEntry::wgsl / FpEntry::wgsl, already copied into win.vs_wgsl and
+         * win.fs_wgsl just above). wgpu_backend.cpp's shader_module() ignores SPIR-V
+         * under __EMSCRIPTEN__ and calls module_from_wgsl(in.vs_wgsl) -- so the gate
+         * was refusing exactly the draws the backend was ready to accept.
+         *
+         * Measured before this fix: 30 080 skips at this line, draws=0, and the
+         * backend's own summary read "0 draws replayed, 0 pipelines".
+         *
+         * The requirement is therefore "the backend has a module for this stage",
+         * which on web means WGSL and on native means SPIR-V. Neither substitutes
+         * for the other: a stage with no source of its own still skips, so "the
+         * shader did not translate" stays distinguishable from "the image differs". */
+#if defined(__EMSCRIPTEN__)
+        const bool vs_ready = !win.vs_wgsl.empty();
+        const bool fs_ready = !win.fs_wgsl.empty();
+#else
+        const bool vs_ready = win.vs_spirv != nullptr;
+        const bool fs_ready = win.fs_spirv != nullptr;
+#endif
+        if (!vs_ready || !fs_ready) {
             static std::atomic<uint32_t> no_shader{0};
             if (no_shader.fetch_add(1) < 10)
-                LOG_WARN("wgpu", "no wgpu module for vp %016llx fp %016llx; draw not mirrored",
-                         (unsigned long long)vp->hash, (unsigned long long)fp->hash);
+                LOG_WARN("wgpu", "no wgpu module for vp %016llx fp %016llx (vs_wgsl %zu fs_wgsl %zu vs_spirv %zu fs_spirv %zu); draw not mirrored",
+                         (unsigned long long)vp->hash, (unsigned long long)fp->hash,
+                         win.vs_wgsl.size(), win.fs_wgsl.size(), win.vs_words, win.fs_words);
             return skip(__LINE__);
         }
         wgpu::draw(win);
@@ -5061,6 +5135,13 @@ static void dump_presented(uint32_t buffer_id, uint64_t n)
 
 bool present(uint32_t buffer_id) {
     if (!enabled()) return false;
+    /* T1: a presented frame is what the RING rotates its two slots on. This has to
+     * happen at the frame boundary, before the next frame's ring_alloc calls, or
+     * g_head grows for the whole run and every draw after the first few MB is
+     * refused with "ring buffer exhausted in one frame". Deliberately NOT
+     * frame_serial(): that one is constant under wasm and advancing it stalled the
+     * FIFO (see gpu_wasm_support.cpp). */
+    ring_frame_advance();
     /* The WebGPU mirror's frame ends here, with the Vulkan frame: submitting
      * and reading back per present is what makes the two images the SAME
      * moment of the SAME run rather than two runs that happen to look alike.

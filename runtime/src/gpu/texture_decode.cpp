@@ -359,6 +359,16 @@ void decode_texture(const uint8_t* src, const TextureRegs& regs, const TextureLa
     }
     uint32_t fmt = (regs.format >> 8) & 0xFF;
     const FormatInfo* f = find_format(fmt & ~0x60u);
+    /* T1 BISECT: inside decode_texture, the frame that traps. */
+    {
+        static std::atomic<uint32_t> dn{0};
+        if (dn.fetch_add(1) < 8) {
+            LOG_INFO("texdec", "in decode fmt 0x%02x %ux%u levels %u layers %u regions %zu src_size 0x%x dec_size 0x%llx",
+                     fmt, layout.width, layout.height, layout.levels, layout.layers,
+                     layout.regions.size(), layout.source_size,
+                     static_cast<unsigned long long>(layout.decoded_size));
+        }
+    }
     if (!f) {
         /* A format this table does not know leaves the staging buffer
          * untouched, and uninitialised ring memory is exactly the static that

@@ -26,6 +26,7 @@
 #if defined(__EMSCRIPTEN__)
 
 #include "vk_context.h"
+#include "runtime/log.h"
 
 #include <cstdint>
 #include <cstdlib>
@@ -527,6 +528,22 @@ static VKAPI_ATTR VkResult VKAPI_CALL r3_null_vkMapMemory(VkDevice device, VkDev
      * The whole range is mapped because ring.cpp maps RING_SIZE*RING_SLOTS at offset 0
      * and then indexes by a frame-bumped base. */
     void* p = std::calloc(1, size_t(size ? size : 1));
+    if (!p) {
+        /* NEVER a fake success. The previous version returned VK_SUCCESS with
+         * *ppData = null, and gpu/ring.cpp then computed out.ptr = null + offset:
+         * a small integer that is a VALID wasm address, so the renderer wrote its
+         * decoded textures over its own data and the run died with "memory access
+         * out of bounds" several functions away from the cause.
+         *
+         * Measured in T1: the guest flat buffer is 2432 MB and this ring asks for
+         * 512 MB (256 MB x 2 slots) against -sMAXIMUM_MEMORY=3072 MB, so the calloc
+         * could not succeed. The failure has to be visible HERE, where the size is
+         * known, and it has to reach ring_alloc as a refusal. */
+        LOG_ERROR("vkn", "vkMapMemory: cannot map %llu bytes (wasm memory exhausted); refusing instead of returning a null pointer",
+                  static_cast<unsigned long long>(size));
+        *ppData = nullptr;
+        return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    }
     *ppData = p;
     return VK_SUCCESS;
 }

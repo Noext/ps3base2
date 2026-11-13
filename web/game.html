@@ -52,6 +52,15 @@ const bar = document.getElementById('bar');
 const logEl = document.getElementById('log');
 const canvas = document.getElementById('canvas');
 
+/* The canvas context is created HERE, on the page's own thread, before the module
+ * starts. This is load-bearing, not a probe: the bridge's s1_canvas_configure runs
+ * through a sync proxy, and a proxied call could not create a 'webgpu' context on
+ * this canvas (measured: "s1: canvas has no webgpu context" on every run, while the
+ * same call from the page's thread returns a context immediately). Taking it here
+ * means the bridge's getContext() returns the SAME object instead of failing. */
+const canvasCtx = canvas.getContext('webgpu');
+console.log('page: canvas webgpu context ' + (canvasCtx ? 'acquired' : 'UNAVAILABLE'));
+
 function log(msg) {
   logEl.textContent = (msg + '\n' + logEl.textContent).slice(0, 4000);
   bar.textContent = String(msg).slice(0, 120);

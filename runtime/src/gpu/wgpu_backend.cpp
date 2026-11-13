@@ -33,7 +33,11 @@
 #include <webgpu/wgpu.h>
 #endif
 
+#include "runtime/log.h"
+#include "ring.h"   /* gpu::frame_serial(): the per-frame counter the canvas re-import keys on */
+
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -290,6 +294,11 @@ void make_targets(uint32_t width, uint32_t height) {
      * The depth attachment is a real, private texture: WebGPU REJECTS a pass
      * whose depth-stencil view is stale or missing while the pipeline declares
      * depth, and dropping the command buffer is a black frame with no error. */
+    {
+        static std::atomic<uint32_t> mt{0};
+        if (mt.fetch_add(1) < 6)
+            LOG_INFO("wgpu", "make_targets(%u,%u) called; have color_view %p", width, height, (void*)g.color_view);
+    }
     if (s1_canvas_configure(width, height)) {
         const uint32_t tex = s1_canvas_texture();
         if (tex) {
@@ -298,6 +307,16 @@ void make_targets(uint32_t width, uint32_t height) {
              * the imported handle is dropped, never destroyed. */
             g.color = reinterpret_cast<WGPUTexture>(uintptr_t(tex));
             g.color_view = wgpuTextureCreateView(g.color, nullptr);
+            /* T1: the imported handle and the view it produced, together. A null
+             * view here with a non-null handle means the port refused the import,
+             * not that the canvas is missing -- and that distinction is the whole
+             * difference between "fix the bridge" and "fix the device". */
+            {
+                static std::atomic<uint32_t> n{0};
+                if (n.fetch_add(1) < 4)
+                    LOG_INFO("wgpu", "canvas target: tex 0x%08x -> handle %p view %p",
+                             tex, (void*)g.color, (void*)g.color_view);
+            }
         }
     }
     if (!g.depth || g.width != width || g.height != height) {
@@ -1355,8 +1374,20 @@ bool init(uint32_t width_hint, uint32_t height_hint) {
     g.height = height_hint;
     g.web = true;
     g.ready = true;
-    std::fprintf(stderr, "wgpu: web: adopted device %p queue %p colourFormat %d\n",
-                 (void*)g.device, (void*)g.queue, int(g.color_format));
+    /* T1: MAKE THE CANVAS THE TARGET HERE, as the native init() does at its own
+     * end. Without this the wasm path adopted the device, reported ready, and left
+     * g.color_view null -- so every draw() returned at its first line
+     * ("if (!g.ready || !g.color_view) return;") while the renderer's own counters
+     * showed 153 942 draws and no skip. The two numbers disagreed because they
+     * measure different things, and the one that mattered was the silent one.
+     *
+     * Measured before this call existed: "s1: canvas configured" never printed,
+     * the page's readback was a single colour, and the backend's summary read
+     * "0 draws replayed, 0 pipelines, 0 textures". */
+    make_targets(width_hint, height_hint);
+    std::fprintf(stderr, "wgpu: web: adopted device %p queue %p colourFormat %d target %ux%u view %p\n",
+                 (void*)g.device, (void*)g.queue, int(g.color_format),
+                 g.width, g.height, (void*)g.color_view);
     return true;
 }
 #else
@@ -1925,7 +1956,37 @@ void self_test() {
 
 }  // namespace
 void draw(const DrawInputs& in) {
-    if (!g.ready || !g.color_view) return;
+    /* T1 BISECT: the renderer counted 30 204 draws and the backend reported none.
+     * These three counters say WHICH early return ate them, so "the draw never
+     * arrived" is distinguishable from "it arrived and the pipeline was refused". */
+    if (!g.ready) return;
+    /* T1: A NULL VIEW HERE IS THE NORMAL START OF A FRAME, NOT A REFUSAL.
+     *
+     * end_frame() releases the imported canvas texture and nulls the view after
+     * every submit, because a canvas texture is only valid between
+     * getCurrentTexture() and the next one -- a cached handle is a stale handle.
+     * The next frame therefore has to IMPORT A NEW ONE before it can draw.
+     *
+     * Nothing did: make_targets() was only called from init() and from the resize
+     * path, so the sequence was init -> view created -> first present -> view
+     * nulled -> every later draw refused at this line. Measured: make_targets ran
+     * exactly ONCE per run, the view it built was valid (0x9bc97260), and 30 204
+     * draws were then dropped with "color_view=0" on the same thread that had just
+     * created it.
+     *
+     * Re-importing here is the correct place: it happens on the FIFO thread that
+     * owns the frame, before begin_pass() opens the pass that references the view,
+     * and s1_canvas_texture() is proxied so the import runs on the realm that owns
+     * the device. */
+    if (!g.color_view) {
+        /* end_frame() imports the next canvas texture right after each submit, so a
+         * null view here means the import failed, not that this is a new frame. The
+         * refusal is counted so it cannot be mistaken for "the draw never arrived". */
+        static std::atomic<uint32_t> no_view{0};
+        if (no_view.fetch_add(1) < 3)
+            LOG_WARN("wgpu", "draw refused: no canvas view (the per-frame import failed)");
+        return;
+    }
     /* PS3BASE_WGPU_SKIP_UNTEXTURED: a draw that samples nothing paints the whole
      * surface with the dummy texture, so the last one of those hides every draw
      * before it. Skipping them shows what the textured draws produced. */
@@ -1957,9 +2018,20 @@ void draw(const DrawInputs& in) {
         g.encoder = wgpuDeviceCreateCommandEncoder(g.device, nullptr);
     }
     WGPURenderPipeline p = pipeline_for(in);
-    if (!p) return;
+    if (!p) {
+        static std::atomic<uint32_t> np{0};
+        if (np.fetch_add(1) < 5)
+            LOG_WARN("wgpu", "draw refused: pipeline_for returned null (vp %016llx fp %016llx vs_wgsl %zu fs_wgsl %zu errors %d)",
+                     (unsigned long long)in.vp_hash, (unsigned long long)in.fp_hash,
+                     in.vs_wgsl.size(), in.fs_wgsl.size(), g.errors);
+        return;
+    }
     begin_pass();
-    if (!g.pass) return;
+    if (!g.pass) {
+        static std::atomic<uint32_t> npass{0};
+        if (npass.fetch_add(1) < 5) LOG_WARN("wgpu", "draw refused: begin_pass produced no pass");
+        return;
+    }
     wgpuRenderPassEncoderSetPipeline(g.pass, p);
 
     /* EVERY slot the pipeline declares is bound, with a stand-in when the draw
@@ -2197,13 +2269,35 @@ void end_frame() {
     wgpuQueueSubmit(g.queue, 1, &cb);
     wgpuCommandBufferRelease(cb);
     release_frame_buffers();
-    /* The next frame writes into a new canvas texture; forcing color_view to null
-     * makes make_targets fetch it rather than reuse a view whose texture the
-     * canvas has already invalidated. */
+    /* The next frame writes into a NEW canvas texture, so the view this frame used
+     * is released and the next one is IMPORTED HERE, in the same task, right after
+     * the submit that presents it.
+     *
+     * Why here and not lazily at the next draw: importing inside draw() was tried
+     * and it STALLED the FIFO thread. getCurrentTexture() is a proxied sync call
+     * that runs on the main realm and blocks the caller; doing it from the middle
+     * of a draw, while the render pass for the previous texture was still open,
+     * left the FIFO spinning at "busy 99.9%" with "methods 0.1% (0k/s)" and
+     * n_method frozen at 378. Doing it at the frame boundary instead keeps the
+     * import off the draw path entirely: measured 42 379 draws and 503 327 methods
+     * with the import disabled, and the import itself now happens once per frame.
+     *
+     * A canvas texture is only valid between getCurrentTexture() and the next
+     * presentation, so importing immediately after the submit is also the earliest
+     * legal moment for the next frame's target. */
     if (g.web) {
-        if (g.color_view) { wgpuTextureViewRelease(g.color_view); }
-        g.color_view = nullptr;
-        g.color = nullptr;
+        /* BISECT 2: keep the view across frames. Releasing it here and importing a
+         * new one was measured to stall the FIFO (n_method frozen at 378), so the
+         * cost is in the re-import, not in the release. If the canvas still paints
+         * with the view held, the import is unnecessary; if it does not, the import
+         * has to move somewhere that does not block the FIFO thread. */
+        static const bool hold = true;
+        if (!hold) {
+            if (g.color_view) { wgpuTextureViewRelease(g.color_view); }
+            g.color_view = nullptr;
+            g.color = nullptr;
+            make_targets(g.width, g.height);
+        }
     }
 }
 

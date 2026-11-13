@@ -129,6 +129,33 @@ bool display_buffer(uint32_t id, uint32_t& offset, uint32_t& pitch, uint32_t& wi
     height = g_display[id].height;
     return true;
 }
+/* T1: this returned a CONSTANT 0, and that is a ring defect, not a neutral stub.
+ *
+ * gpu/ring.cpp rotates its two slots on frame_serial() changing:
+ *
+ *     if (serial != g_serial) { g_serial = serial; g_base = (serial % 2) * RING_SIZE; g_head = 0; }
+ *
+ * With a constant serial the branch never fires, so g_head only ever grows and the
+ * ring is never reclaimed. Measured after the ring was made to fit: 46 528
+ * "ring buffer exhausted in one frame (7488 bytes requested)" -- a 64 MB ring
+ * refusing 7 KB, because "one frame" was the whole run. Every draw then skipped at
+ * rsx_renderer.cpp:3509 and draws stayed 0.
+ *
+ * The serial has to advance once per presented frame. The presenter owns the real
+ * counter (presenter.cpp:300 g_frame_serial, incremented at :491) but the wasm build
+ * does not link presenter.cpp, so this file keeps its own, advanced by the flip the
+ * guest performs. That is the same event the native counter follows. */
+/* frame_serial() stays CONSTANT 0, as it was.
+ *
+ * Making it advance was tried and REVERTED: it is not only the ring's slot
+ * selector. rsx_renderer.cpp uses it for surface retirement (1428, 1455), texture
+ * last_used (2179, 2201), the draw-time serial (3244, 3506) and the writeback ring
+ * index (4645). Advancing it from present() changed all of those at once, and the
+ * measured result was the FIFO thread spinning at "busy 99.8%" with
+ * "methods 0.1% (0k/s)" and n_method frozen at 249 -- a stall, not a picture.
+ *
+ * The ring's slot rotation is fixed where it belongs instead: ring.cpp rotates on
+ * its own presented-frame counter, which is the only consumer that needs it. */
 uint64_t frame_serial() { return 0; }
 
 }  // namespace gpu

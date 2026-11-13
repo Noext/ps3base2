@@ -24,6 +24,9 @@
 addToLibrary({
   /* Configure the canvas for the adopted device, once per size change. */
   s1_canvas_configure: (w, h) => {
+    /* T1: prove the call arrives at all. If this line never prints, the C++ call
+     * site is not reaching the bridge and no amount of bridge debugging matters. */
+    if (!Module.s1CfgSeen) { Module.s1CfgSeen = 1; console.log('s1cfg: configure CALLED ' + w + 'x' + h); }
     var canvas = Module.s1Canvas;
     if (!canvas) { console.error('s1: no canvas on Module.s1Canvas'); return 0; }
     /* The device comes from the same property the port reads. Module.s1Device was
@@ -62,11 +65,42 @@ addToLibrary({
    * WebGPU.importJsTexture would not (that name does not exist in this port). */
   s1_canvas_texture: () => {
     var ctx = Module.s1CanvasContext;
-    if (!ctx) return 0;
-    var tex = ctx.getCurrentTexture();
+    if (!ctx) {
+      if (!Module.s1TexErr1) { Module.s1TexErr1 = 1; console.error('s1tex: no s1CanvasContext'); }
+      return 0;
+    }
+    var tex;
+    try {
+      tex = ctx.getCurrentTexture();
+    } catch (e) {
+      if (!Module.s1TexErr0) { Module.s1TexErr0 = 1; console.error('s1tex: getCurrentTexture threw: ' + e.message); }
+      return 0;
+    }
+    if (!tex) {
+      if (!Module.s1TexErr5) { Module.s1TexErr5 = 1; console.error('s1tex: getCurrentTexture returned null'); }
+      return 0;
+    }
+    /* _emwgpuCreateTexture is the port's OWN allocator, but it is a library-internal
+     * name: if the port did not export it to this scope, calling it throws and the
+     * whole texture import silently yields nothing -- the colour view stays null and
+     * every draw returns at its first line. Name each failure instead. */
+    if (typeof _emwgpuCreateTexture !== 'function') {
+      if (!Module.s1TexErr2) { Module.s1TexErr2 = 1; console.error('s1tex: _emwgpuCreateTexture is ' + typeof _emwgpuCreateTexture); }
+      return 0;
+    }
     var ptr = _emwgpuCreateTexture(0);
-    WebGPU.Internals.jsObjectInsert(ptr, tex);
+    if (!ptr) {
+      if (!Module.s1TexErr3) { Module.s1TexErr3 = 1; console.error('s1tex: allocator returned 0'); }
+      return 0;
+    }
+    try {
+      WebGPU.Internals.jsObjectInsert(ptr, tex);
+    } catch (e) {
+      if (!Module.s1TexErr4) { Module.s1TexErr4 = 1; console.error('s1tex: jsObjectInsert threw: ' + e.message); }
+      return 0;
+    }
     Module.s1CanvasTexturePtr = ptr;
+    if (!Module.s1TexOk) { Module.s1TexOk = 1; console.log('s1tex: canvas texture imported ptr=' + ptr + ' ' + tex.width + 'x' + tex.height); }
     return ptr;
   },
   s1_canvas_texture__proxy: 'sync',
