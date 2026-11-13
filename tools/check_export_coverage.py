@@ -95,11 +95,35 @@ def module_function_exports(elf, prx):
     """
     out = []
     addr, end = prx["libent"]
+    # BOUNDED BY CONSTRUCTION, and that is not decoration.
+    #
+    # The chain is a linked list whose link is a single BYTE at offset 0. A
+    # malformed or mis-built image can put 0 there, and `addr += size` then
+    # never advances: the loop appends forever. This happened -- a synthetic
+    # fixture wrote the size as a 4-byte word, so b[0] was 0, and three runs of
+    # this gate grew to 24 GB, 15 GB and 7.5 GB and were killed. A checker must
+    # not be able to take the machine down on bad input.
+    #
+    # So: a zero size is an error, a non-advancing address is an error, and the
+    # entry count is capped at a number far above any real module (liblv2 has 5,
+    # libsre 7) so a chain that walks off into data terminates instead of
+    # allocating. Every one of those is reported, not silently absorbed: a gate
+    # that quietly truncates its own input is the same fake success it exists to
+    # prevent.
+    MAX_ENTRIES = 4096
+    entries = 0
     while addr < end:
+        if entries >= MAX_ENTRIES:
+            raise ValueError("libent chain at 0x%08x exceeds %d entries; refusing to walk it"
+                             % (prx["libent"][0], MAX_ENTRIES))
         b = elf.read(addr, 0x1C)
         if not b or len(b) < 0x1C:
             break
         size = b[0]
+        if size == 0:
+            raise ValueError("libent entry at 0x%08x has size 0; the chain cannot advance "
+                             "(the size is one byte at offset 0, not a word)" % addr)
+        entries += 1
         num_func, num_var, num_tls = struct.unpack(">HHH", b[6:12])
         name_p, nid_p, addr_p = struct.unpack(">3I", b[0x10:0x1C])
         name = elf.cstr(name_p) if name_p else ""
@@ -170,7 +194,14 @@ def main(argv):
         if not prx or "libent" not in prx:
             failures.append((im["name"], "NO-LIBENT", 0, "", 0, 0))
             continue
-        rows = module_function_exports(elf, prx)
+        try:
+            rows = module_function_exports(elf, prx)
+        except ValueError as exc:
+            # A malformed chain is a FAILURE of the gate, reported like any
+            # other, not a traceback that leaves a half-written table behind.
+            failures.append((im["name"], "LIBENT-MALFORMED", 0, str(exc), 0, 0))
+            print("%-14s  malformed libent chain: %s" % (im["name"], exc))
+            continue
         lifted = miss = rowmiss = badopd = badtoc = 0
         for r in rows:
             tag = (r["module"], r["nid"])

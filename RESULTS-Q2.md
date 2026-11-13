@@ -349,3 +349,99 @@ error, and it is the error the finding document made when it wrote
 'le lift de libfiber s'arrete a 0x36005c80'. 0x36005c80 is the highest address
 the .opd names; it is not where the lift stopped.
 
+
+## Measurement 6 -- the memory bug in my own gate, found and fixed
+
+The lead observed three runs of `tools/check_export_coverage.py` in this
+worktree grow to 24 GB, 15 GB and 7.5 GB and get killed. That is a real defect
+in the gate, and it is worth naming precisely because the gate exists to stop
+exactly this class of silent failure.
+
+### Cause
+
+`module_function_exports()` walks the PRX libent chain:
+
+```python
+addr, end = prx["libent"]
+while addr < end:
+    b = elf.read(addr, 0x1C)
+    size = b[0]          # <- the link is ONE BYTE at offset 0
+    ...
+    out.append(...)
+    addr += size         # <- size == 0 means this never advances
+```
+
+The chain's link is a single byte. `tools/check_lle_exports.py` uses
+`inventory.exports()`, which has the same `addr += size` shape, so the hazard
+was inherited rather than invented -- but I made it fire: the synthetic fixture
+in `tests/export_coverage.py` wrote the size with
+`struct.pack_into(">I", data, off, 0x1C)`, which stores `00 00 00 1C`. `b[0]`
+is then **0**, `addr` never moves, and the loop appends a dict forever. One
+`ulimit`-free run is unbounded; three in parallel is the machine.
+
+The real ELFs are fine -- libfiber's entry at 0x36005db4 begins `1c 00 00 00`,
+i.e. `b[0] == 0x1C == 28`. The fixture was wrong, and the gate had no guard, so
+a wrong fixture became a runaway instead of an error.
+
+### Fix, and the proof it holds
+
+Three changes, all in the gate rather than only in the fixture, because a
+checker must not be able to take the machine down on bad input:
+
+1. a zero size raises `ValueError` naming the address and the byte-vs-word
+   mistake, instead of looping;
+2. the entry count is capped at 4096 (liblv2 has 5 entries, libsre 7), so a
+   chain that walks into data terminates;
+3. the `ValueError` is caught in `main()` and reported as a normal
+   `LIBENT-MALFORMED` failure, so the gate exits 1 with a diagnosis instead of
+   a traceback.
+
+The fixture now writes the byte the real ELFs write. Re-running the *broken*
+fixture (size as a word) under the same ceiling:
+
+```
+$ ( ulimit -v 2000000; /usr/bin/time -v timeout 30 python3 tests/_q2_broken.py )
+test            malformed libent chain: libent entry at 0x30002040 has size 0;
+                the chain cannot advance (the size is one byte at offset 0, not a word)
+  test           LIBENT-MALFORMED   ...
+exit=1
+        Maximum resident set size (kbytes): 10496
+        Elapsed (wall clock) time (m:ss): 0:00.19
+```
+
+24 GB and a dead machine became 10 MB and 0.19 s.
+
+### The gate was never expensive. The loop was.
+
+One run per real table, sequential, each under `ulimit -v 2000000` and a 60 s
+`timeout`, peak RSS measured by `/usr/bin/time -v`:
+
+```
+reg3/out-rdr   exit 0   Elapsed 0:00.05   Maximum resident set size 24576 kB
+reg3/out-mc    exit 0   Elapsed 0:00.04   Maximum resident set size 16420 kB
+reg3/out-gta   exit 0   Elapsed 0:00.03   Maximum resident set size 16348 kB
+```
+
+16-24 MB and 30-50 ms per title. The cost is bounded by the size of `table.cpp`
+plus the module ELFs; nothing is built per export. The 24 GB was one unbounded
+`while` loop, not the algorithm.
+
+### The synthetic test: six cases, 0.21 s, 10 MB
+
+`tests/export_coverage.py` builds a minimal PRX (one R+X LOAD, one R+W LOAD, a
+PT_PRX_PARAM inside the data segment) and a matching `table.cpp`, then checks
+that the gate accepts the good case and rejects each corruption:
+
+```
+$ ( ulimit -v 2000000; /usr/bin/time -v timeout 60 python3 tests/export_coverage.py )
+PASS baseline: all exports lifted                   exit 0 expected
+PASS A: export code address not lifted              exit 1 expected
+PASS D: unnamed PRX-entry export row missing        exit 1 expected
+PASS G: descriptor code word outside text           exit 1 expected
+PASS B: descriptor opd zero                         exit 1 expected
+PASS T: descriptor TOC wrong                        exit 1 expected
+PASS
+        Maximum resident set size (kbytes): 10496
+        Elapsed (wall clock) time (m:ss): 0:00.21
+```
+
