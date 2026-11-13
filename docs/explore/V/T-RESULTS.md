@@ -185,3 +185,35 @@ critere 3, mais son log associe (`/tmp/V-native/run.log`) **ne contient aucune l
 1280x720, non plat) mais sa **commande de capture n'est pas tracee** dans le log. Je l'accepte comme
 reference de comparaison, je ne l'accepte pas comme preuve de provenance independante.
 
+
+---
+
+## 6. Un piege de mesure sur la regle du verrou, mesure le 13/11 13:5x
+
+La consigne impose `pgrep -f 'ps3base --no-launcher' | wc -l` == 0 avant tout lancement. **Cette
+commande se compte elle-meme** : le `bash -c` qui la porte contient la chaine cherchee, donc
+`pgrep -f` le trouve. Mesure :
+
+```
+$ pgrep -af 'ps3base --no-launcher'
+3059888 bash -c sleep 900; for t in T1 T2 T3; do ... grep 'ps3base --no-launcher' ...   <- un AUTRE agent
+3067299 bash -c pgrep -af 'ps3base --no-launcher'; echo ...                              <- MOI
+$ pgrep -f 'ps3base --no-launcher' | wc -l
+2
+```
+
+Aucun de ces deux PID n'est un jeu. La verification correcte, sans auto-correspondance :
+
+```
+$ ps -eo comm= | grep -cx 'ps3base'                                            -> 0
+$ ps -eo args= | grep -v '^bash -c\|^sh -c\|grep' | grep -c 'ps3base --no-launcher' -> 0
+```
+
+**Consequence pour la file de fusion** : une annonce qui prouve « aucun natif ne tourne » par le
+seul `pgrep -f ... | wc -l` a mesure un nombre qui inclut sa propre commande. C'est de la meme
+famille que `grep -c flip` : le compteur compte autre chose que ce qu'on croit. Le chiffre 2
+ci-dessus n'est **pas** deux jeux, c'est deux shells.
+
+Le binaire natif existe sur disque (`/root/Dev/ps3base2/build/ps3base`, 353 597 008 o,
+13/11 12:25) mais **aucun processus ne l'execute**.
+
