@@ -1,0 +1,5 @@
+agent: Q2
+branch: explore/q2
+worktree: /root/Dev/wt-Q2
+task: export coverage gate -- build-time check that every LLE export (export table -> descriptor -> code address) has a lifted function; run on all modules of all three games; answer why 47/47 exports verified was false (what tools/check_lle_exports.py actually checked) and why the libfiber lift stopped at 0x36005c80.
+started: 2026-11-13T12:25Z
