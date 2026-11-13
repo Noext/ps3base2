@@ -101,6 +101,13 @@ uint32_t t1_replay_adopt(uint32_t width, uint32_t height) {
 
 
 
+/* Set the bisection mode (?dbg=N on the page). 0 = the game's own draws. */
+void t1_set_debug_mode(uint32_t mode) { gpu::wgpu::set_debug_mode(mode); }
+
+/* The number of validation errors the per-frame scope has seen. "0 errors" is
+ * this number, not an absence of instrumentation. */
+uint32_t t1_frame_error_count(void) { return gpu::wgpu::frame_error_count(); }
+
 /* Reset the counters, keeping popped so a rate measurement stays monotonic. */
 void t1_replay_reset(void) { gpu::replay::reset_stats(); }
 

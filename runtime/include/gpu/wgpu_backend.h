@@ -229,6 +229,10 @@ bool capture_ppm(const std::string& path, uint32_t width, uint32_t height);
 
 void shutdown();
 
+/* T1 -- the bisection mode and the per-frame validation error count. */
+void set_debug_mode(uint32_t mode);
+uint32_t frame_error_count();
+
 /* Vulkan -> WebGPU value conversion for the handful of values the mirror
  * passes across. Each takes the Vulkan enum the renderer already computed, so the
  * mirror never re-derives state from RSX registers: if it did, a difference would

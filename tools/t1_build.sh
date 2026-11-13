@@ -91,7 +91,7 @@ echo "== link (objects: $(ls "$OUT"/obj/*.o | wc -l))"
     -sINITIAL_MEMORY=268435456 -sMAXIMUM_MEMORY=3221225472 \
     -sERROR_ON_UNDEFINED_SYMBOLS=0 \
     -sEXPORTED_RUNTIME_METHODS=HEAPU8,HEAPU32 \
-    -sEXPORTED_FUNCTIONS=_main,_malloc,_free,_ps3_pad_words_address,_ps3_pad_connected_address,_rsx_ring_address,_rsx_ring_capacity,_rsx_ring_control,_rsx_ring_word,_rsx_ring_stat,_rsx_ring_tee,_r3_draws,_r3_skipped,_r3_skip_reasons,_r3_n_method_get,_r3_n_enabled_false_get,_t1_replay_frame,_t1_replay_stats,_t1_replay_stat_offset,_t1_replay_adopt,_t1_replay_reset,_t1_replay_ready \
+    -sEXPORTED_FUNCTIONS=_main,_malloc,_free,_ps3_pad_words_address,_ps3_pad_connected_address,_rsx_ring_address,_rsx_ring_capacity,_rsx_ring_control,_rsx_ring_word,_rsx_ring_stat,_rsx_ring_tee,_r3_draws,_r3_skipped,_r3_skip_reasons,_r3_n_method_get,_r3_n_enabled_false_get,_t1_replay_frame,_t1_replay_stats,_t1_replay_stat_offset,_t1_replay_adopt,_t1_replay_reset,_t1_replay_ready,_t1_set_debug_mode,_t1_frame_error_count \
     --js-library "$ROOT/web/s1-bridge.js" \
     --preload-file "$DISK@/" \
     -o "$OUT/game.js" "$OUT"/obj/*.o \

@@ -226,6 +226,13 @@ async function main() {
          * entry the wasm imports, so it is not visible as mod._s1_adopt_device from
          * here. Measured: that property is undefined, the page passed 0, and the
          * replay logged "adopt_device: null device" and never started. */
+        /* THE BISECTION MODE, from ?dbg=N. Set before the first frame so the very
+         * first capture already reflects it. */
+        const dbgParam = new URLSearchParams(location.search).get('dbg');
+        if (dbgParam !== null && mod._t1_set_debug_mode) {
+          mod._t1_set_debug_mode(parseInt(dbgParam, 10) || 0);
+          console.log('T1DBG mode=' + dbgParam);
+        }
         const ok = mod._t1_replay_adopt(canvas.width, canvas.height);
         replayAdopted = true;
         console.log('T1REPLAY adopt ok=' + ok + ' (device handle is taken in C++)');
@@ -247,7 +254,8 @@ async function main() {
                     ' clears=' + stat(7) + ' flips=' + stat(8) +
                     ' bufs=' + stat(10) + ' texs=' + stat(11) + ' shaders=' + stat(12) +
                     ' peak=' + stat(13) + '/' + stat(14) +
-                    ' offthread=' + stat(16));
+                    ' offthread=' + stat(16) +
+                    ' frame_errors=' + (mod._t1_frame_error_count ? mod._t1_frame_error_count() : -1));
       }
     } catch (e) {
       if (!window.__S1.replayError) {

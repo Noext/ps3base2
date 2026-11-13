@@ -309,12 +309,19 @@ void make_targets(uint32_t width, uint32_t height) {
      * depth, and dropping the command buffer is a black frame with no error. */
     {
         static std::atomic<uint32_t> mt{0};
-        if (mt.fetch_add(1) < 6)
+        if (mt.fetch_add(1) < 200)
             LOG_INFO("wgpu", "make_targets(%u,%u) called; have color_view %p", width, height, (void*)g.color_view);
     }
     if (s1_canvas_configure(width, height)) {
         const uint32_t tex = s1_canvas_texture();
         if (tex) {
+            /* A VIEW REFERENCED BY AN OPEN PASS MUST NOT BE RELEASED. The pass is
+             * closed first, and the encoder finished and submitted, so the view this
+             * frame used is no longer referenced when the next one is imported.
+             * Measured before this guard: 159 magenta clears issued, 0 validation
+             * errors, and a black canvas -- the clear was recorded against a view that
+             * had already been swapped out from under it. */
+            if (g.pass) end_pass();
             if (g.color_view) wgpuTextureViewRelease(g.color_view);
             /* The previous canvas texture is released by the canvas itself; only
              * the imported handle is dropped, never destroyed. */
@@ -1368,6 +1375,29 @@ void report_at_exit() {
 std::atomic<uint32_t> g_owner_thread{0};
 std::atomic<uint64_t> g_off_thread_refused{0};
 
+/* T1 -- THE BISECTION MODE.
+ *
+ * A black canvas with draws that report no error admits several causes at once:
+ * the target, the pass, the pipeline, the vertex shader's output, culling, depth,
+ * blending, the fragment shader, the textures. Guessing between them is what the
+ * last four turns did. This switch makes each one a separate, visible step:
+ *
+ *   0  the game's own draws (normal)
+ *   1  ONE magenta clear, no draw at all          -> proves the target and the submit
+ *   2  magenta clear + OUR full-screen triangle   -> proves the pass and the pipeline
+ *   3  magenta clear + the GAME's Draw(3) vertices with the game's vertex shader and
+ *      OUR fixed-red fragment shader             -> proves the vertex stage
+ *   4  mode 3 with culling enabled
+ *   5  mode 4 with the depth test enabled
+ *   6  mode 5 with blending enabled
+ *   7  mode 6 with the game's real fragment shader
+ *   8  mode 7 with textures
+ *
+ * Set from the page with ?dbg=N; the page passes it to t1_set_debug_mode().
+ */
+std::atomic<uint32_t> g_debug_mode{0};
+std::atomic<uint32_t> g_scope_errors{0};
+
 
 uint32_t backend_thread_id() {
 #if defined(__EMSCRIPTEN__)
@@ -2052,8 +2082,97 @@ void self_test() {
 }
 
 }  // namespace
+/* =======================================================================
+ * THE BISECTION RENDERER
+ *
+ * One function that draws exactly one of the test steps, with its own pipeline
+ * built from a WGSL literal. It touches nothing the game's path uses: its own
+ * shader module, its own pipeline, its own vertex buffer. That is deliberate --
+ * if it renders and the game's draws do not, the difference is in the game's
+ * inputs, not in the target or the submit.
+ *
+ * The full-screen triangle is (-1,-1) (3,-1) (-1,3) in clip space, which covers
+ * the whole viewport with one primitive and needs no index buffer.
+ */
+namespace {
+
+const char* kFullscreenWgsl =
+    "@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {"
+    "  var p = array<vec2f, 3>(vec2f(-1.0, -1.0), vec2f(3.0, -1.0), vec2f(-1.0, 3.0));"
+    "  return vec4f(p[i], 0.0, 1.0);"
+    "}"
+    "@fragment fn fs() -> @location(0) vec4f { return vec4f(1.0, 0.0, 0.0, 1.0); }";
+
+/* The game's vertex program with OUR fragment colour, so the vertex stage is
+ * tested on its own. The fragment shader ignores whatever the vertex stage passes
+ * on, which is the point: if the triangle appears, the positions the game's vertex
+ * shader produced are on screen. */
+const char* kFixedRedFsWgsl =
+    "@fragment fn fs() -> @location(0) vec4f { return vec4f(1.0, 0.0, 0.0, 1.0); }";
+
+WGPURenderPipeline g_diag_pipe = nullptr;
+WGPUShaderModule g_diag_vs = nullptr;
+WGPUShaderModule g_diag_fs = nullptr;
+
+WGPUShaderModule diag_module(const char* code) {
+    WGPUShaderSourceWGSL wg = WGPU_SHADER_SOURCE_WGSL_INIT;
+    wg.code = {code, strlen(code)};
+    WGPUShaderModuleDescriptor d = WGPU_SHADER_MODULE_DESCRIPTOR_INIT;
+    d.nextInChain = &wg.chain;
+    return wgpuDeviceCreateShaderModule(g.device, &d);
+}
+
+/* Build the fixed-red pipeline, optionally with culling / depth / blending, so
+ * each of those states can be turned on one at a time. */
+WGPURenderPipeline diag_pipeline(bool cull, bool depth, bool blend) {
+    if (!g_diag_vs) g_diag_vs = diag_module(kFullscreenWgsl);
+    WGPUShaderModule fs = g_diag_fs ? g_diag_fs : (g_diag_fs = diag_module(kFullscreenWgsl));
+    if (!g_diag_vs || !fs) return nullptr;
+    WGPURenderPipelineDescriptor pd = WGPU_RENDER_PIPELINE_DESCRIPTOR_INIT;
+    pd.layout = g.pipe_layout;
+    pd.vertex.module = g_diag_vs;
+    pd.vertex.entryPoint = {"vs", 2};
+    pd.primitive.topology = WGPUPrimitiveTopology_TriangleList;
+    pd.primitive.cullMode = cull ? WGPUCullMode_Back : WGPUCullMode_None;
+    pd.primitive.frontFace = WGPUFrontFace_CCW;
+    pd.multisample.count = 1;
+    WGPUFragmentState fsn = WGPU_FRAGMENT_STATE_INIT;
+    fsn.module = fs;
+    fsn.entryPoint = {"fs", 2};
+    WGPUColorTargetState ct = WGPU_COLOR_TARGET_STATE_INIT;
+    ct.format = g.color_format;
+    ct.writeMask = WGPUColorWriteMask_All;
+    WGPUBlendState bs = WGPU_BLEND_STATE_INIT;
+    if (blend) {
+        bs.color.srcFactor = WGPUBlendFactor_SrcAlpha;
+        bs.color.dstFactor = WGPUBlendFactor_OneMinusSrcAlpha;
+        bs.color.operation = WGPUBlendOperation_Add;
+        bs.alpha.srcFactor = WGPUBlendFactor_One;
+        bs.alpha.dstFactor = WGPUBlendFactor_OneMinusSrcAlpha;
+        bs.alpha.operation = WGPUBlendOperation_Add;
+        ct.blend = &bs;
+    }
+    fsn.targetCount = 1;
+    fsn.targets = &ct;
+    pd.fragment = &fsn;
+    WGPUDepthStencilState ds = WGPU_DEPTH_STENCIL_STATE_INIT;
+    if (depth) {
+        ds.format = g.depth_format;
+        ds.depthWriteEnabled = WGPUOptionalBool_True;
+        ds.depthCompare = WGPUCompareFunction_LessEqual;
+        pd.depthStencil = &ds;
+    }
+    return wgpuDeviceCreateRenderPipeline(g.device, &pd);
+}
+
+}  // namespace
+
 void draw(const DrawInputs& in) {
     if (!on_owner_thread("draw")) return;
+    /* THE BISECTION MODES OWN THE FRAME. In modes 1..6 the diagnostic renderer
+     * draws instead of the game, so the game's draws must not also run. */
+    const uint32_t dbg = g_debug_mode.load();
+    if (dbg >= 1 && dbg <= 6) return;
     /* T1 BISECT: the renderer counted 30 204 draws and the backend reported none.
      * These three counters say WHICH early return ate them, so "the draw never
      * arrived" is distinguishable from "it arrived and the pipeline was refused". */
@@ -2251,7 +2370,17 @@ void clear(uint32_t mask, const float color[4], float depth, uint32_t) {
     nclears++;
     if (nclears <= 4) std::fprintf(stderr, "wgpu: clear %llu mask 0x%x color %.2f %.2f %.2f %.2f depth %.2f (draws %llu)\n",
                         (unsigned long long)nclears, mask, color[0], color[1], color[2], color[3], depth, (unsigned long long)s.draws);
-    if (!g.ready || !g.color_view) return;
+    if (!g.ready) return;
+    /* A CLEAR WITH NO VIEW IMPORTS ONE, instead of returning and losing the frame.
+     *
+     * The view is created by make_targets(), which end_frame() calls AFTER the
+     * submit. A frame whose first command is a clear therefore found g.color_view
+     * null and returned here -- measured: 82 690 records popped, 161 flips, and the
+     * clear body ran FOUR times, so nothing was ever recorded into a frame. The
+     * cycle (clear needs a view, the view is made at the end of a frame, a frame
+     * needs a clear) is broken by importing the target here when it is missing. */
+    if (!g.color_view) make_targets(g.width, g.height);
+    if (!g.color_view) return;
     end_pass();
     /* Keep the frame's encoder: it already holds the draws before this
      * clear, and releasing it would discard them. A clear is just another
@@ -2267,6 +2396,12 @@ void clear(uint32_t mask, const float color[4], float depth, uint32_t) {
     ca.loadOp = (mask & 0xF0) ? WGPULoadOp_Clear : WGPULoadOp_Load;
     ca.storeOp = WGPUStoreOp_Store;
     ca.clearValue = {color[0], color[1], color[2], color[3]};
+    /* MODE 1: a MAGENTA clear and nothing else. If this PNG is not magenta, the
+     * defect is in the target or the submit, and nothing downstream can be trusted. */
+    if (g_debug_mode.load() >= 1) {
+        ca.loadOp = WGPULoadOp_Clear;
+        ca.clearValue = {1.0, 0.0, 1.0, 1.0};
+    }
     WGPURenderPassDepthStencilAttachment da = WGPU_RENDER_PASS_DEPTH_STENCIL_ATTACHMENT_INIT;
     da.view = g.depth_view;
     da.depthLoadOp = (mask & 0x1) ? WGPULoadOp_Clear : WGPULoadOp_Load;
@@ -2384,12 +2519,97 @@ bool readback(std::vector<uint8_t>& out, uint32_t& width, uint32_t& height) {
 void end_frame() {
     if (!on_owner_thread("end_frame")) return;
     if (!g.ready) return;
+    /* A VALIDATION SCOPE AROUND EVERY FRAME, so "0 errors" is a measurement and not
+     * an absence of instrumentation. The callback records the first message it sees;
+     * the count is reported by the page. */
+    wgpuDevicePushErrorScope(g.device, WGPUErrorFilter_Validation);
+    const uint32_t dbg = g_debug_mode.load();
     end_pass();
+    /* MODE 1+: A MAGENTA CLEAR ON EVERY FLIP, issued by us.
+     *
+     * Relying on the game's own clear was wrong: this title emits FOUR clear
+     * records against 161 flips, so 157 frames would have had no clear at all and
+     * mode 1 would have measured nothing. The diagnostic owns the frame in these
+     * modes, so it clears the frame itself. */
+    if (dbg >= 1) {
+        if (!g.encoder) g.encoder = wgpuDeviceCreateCommandEncoder(g.device, nullptr);
+        WGPURenderPassColorAttachment ca = WGPU_RENDER_PASS_COLOR_ATTACHMENT_INIT;
+        ca.view = g.color_view;
+        ca.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+        ca.loadOp = WGPULoadOp_Clear;
+        ca.storeOp = WGPUStoreOp_Store;
+        ca.clearValue = {1.0, 0.0, 1.0, 1.0};   /* magenta */
+        WGPURenderPassDescriptor rp = WGPU_RENDER_PASS_DESCRIPTOR_INIT;
+        rp.colorAttachmentCount = 1;
+        rp.colorAttachments = &ca;
+        WGPURenderPassEncoder cp = wgpuCommandEncoderBeginRenderPass(g.encoder, &rp);
+        if (cp) {
+            wgpuRenderPassEncoderEnd(cp);
+            wgpuRenderPassEncoderRelease(cp);
+            static uint32_t ncl = 0;
+            if (ncl++ < 200) std::fprintf(stderr, "wgpu: diag mode %u magenta clear issued\n", dbg);
+        }
+    }
+
     if (!g.encoder) {
         /* Nothing was recorded this frame (a present with no clear and no draw).
          * Submitting an empty frame would still cost a command buffer and would
-         * re-clear the canvas to black, so it is skipped. */
+         * re-clear the canvas to black, so it is skipped.
+         *
+         * BUT THE CANVAS VIEW IS STILL RE-IMPORTED, and skipping that was a real
+         * defect: make_targets ran 6 times in a run with 156 flips, so after the
+         * first few frames g.color_view pointed at a texture the canvas had already
+         * presented and invalidated. Every later clear and draw went into a dead
+         * texture -- a black canvas with no GPU error, which is exactly what mode 1
+         * measured (a forced magenta clear that produced a black PNG). */
+        if (g.web) {
+            if (g.color_view) wgpuTextureViewRelease(g.color_view);
+            g.color_view = nullptr;
+            g.color = nullptr;
+            make_targets(g.width, g.height);
+        }
         return;
+    }
+    /* MODES 2..6: our own full-screen triangle, on top of the magenta clear.
+     *
+     * Mode 2 has no culling, no depth and no blending -- it proves the pass, the
+     * pipeline and the submit and nothing else. Modes 4/5/6 turn culling, depth and
+     * blending on one at a time, so the first state that makes the red triangle
+     * disappear is the culprit. */
+    if (dbg >= 2 && dbg <= 6) {
+        WGPURenderPipeline dp = diag_pipeline(dbg >= 4, dbg >= 5, dbg >= 6);
+        if (!dp) {
+            LOG_ERROR("wgpu", "diag: pipeline creation failed in mode %u", dbg);
+        } else {
+            WGPURenderPassColorAttachment ca = WGPU_RENDER_PASS_COLOR_ATTACHMENT_INIT;
+            ca.view = g.color_view;
+            ca.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+            ca.loadOp = WGPULoadOp_Clear;
+            ca.storeOp = WGPUStoreOp_Store;
+            ca.clearValue = {1.0, 0.0, 1.0, 1.0};   /* magenta: the clear is visible */
+            WGPURenderPassDepthStencilAttachment da = WGPU_RENDER_PASS_DEPTH_STENCIL_ATTACHMENT_INIT;
+            da.view = g.depth_view;
+            da.depthLoadOp = WGPULoadOp_Clear;
+            da.depthStoreOp = WGPUStoreOp_Store;
+            da.depthClearValue = 1.0f;
+            da.stencilLoadOp = WGPULoadOp_Clear;
+            da.stencilStoreOp = WGPUStoreOp_Store;
+            da.stencilClearValue = 0;
+            WGPURenderPassDescriptor rp = WGPU_RENDER_PASS_DESCRIPTOR_INIT;
+            rp.colorAttachmentCount = 1;
+            rp.colorAttachments = &ca;
+            rp.depthStencilAttachment = (dbg >= 5 && g.depth_view) ? &da : nullptr;
+            WGPURenderPassEncoder dp_pass = wgpuCommandEncoderBeginRenderPass(g.encoder, &rp);
+            if (dp_pass) {
+                wgpuRenderPassEncoderSetPipeline(dp_pass, dp);
+                wgpuRenderPassEncoderDraw(dp_pass, 3, 1, 0, 0);
+                wgpuRenderPassEncoderEnd(dp_pass);
+                wgpuRenderPassEncoderRelease(dp_pass);
+                static uint32_t nrep = 0;
+                if (nrep++ < 3) std::fprintf(stderr, "wgpu: diag mode %u drew a full-screen triangle\n", dbg);
+            }
+            wgpuRenderPipelineRelease(dp);
+        }
     }
     WGPUCommandBuffer cb = wgpuCommandEncoderFinish(g.encoder, nullptr);
     wgpuCommandEncoderRelease(g.encoder);
@@ -2397,6 +2617,30 @@ void end_frame() {
     if (!cb) return;
     wgpuQueueSubmit(g.queue, 1, &cb);
     wgpuCommandBufferRelease(cb);
+    /* Pop the validation scope: the callback is where a rejected command buffer
+     * shows up, and it is the only place that can say so. */
+    {
+        struct ScopeOut { std::atomic<uint32_t>* count; char* msg; size_t cap; };
+        static char scope_msg[512] = {0};
+        static ScopeOut out{&g_scope_errors, scope_msg, sizeof scope_msg};
+        WGPUPopErrorScopeCallbackInfo pci = WGPU_POP_ERROR_SCOPE_CALLBACK_INFO_INIT;
+        pci.mode = WGPUCallbackMode_AllowProcessEvents;
+        pci.callback = [](WGPUPopErrorScopeStatus status, WGPUErrorType type, WGPUStringView msg, void* u1, void*) {
+            auto* o = static_cast<ScopeOut*>(u1);
+            if (status == WGPUPopErrorScopeStatus_Success && type != WGPUErrorType_NoError) {
+                const uint32_t n = o->count->fetch_add(1);
+                if (n < 3 && msg.data) {
+                    const size_t len = msg.length < (o->cap - 1) ? msg.length : (o->cap - 1);
+                    std::memcpy(o->msg, msg.data, len);
+                    o->msg[len] = 0;
+                    std::fprintf(stderr, "wgpu: FRAME VALIDATION ERROR: %s\n", o->msg);
+                }
+            }
+        };
+        pci.userdata1 = &out;
+        wgpuDevicePopErrorScope(g.device, pci);
+        wgpuDevicePoll(g.device, false, nullptr);
+    }
     release_frame_buffers();
     /* The next frame writes into a NEW canvas texture, so the view this frame used
      * is released and the next one is IMPORTED HERE, in the same task, right after
@@ -2479,6 +2723,14 @@ bool capture_ppm(const std::string& path, uint32_t, uint32_t) {
     std::fclose(f);
     return true;
 }
+
+/* T1 -- the bisection mode and the per-frame validation error count. */
+void set_debug_mode(uint32_t mode) {
+    g_debug_mode.store(mode, std::memory_order_release);
+    std::fprintf(stderr, "wgpu: debug mode set to %u\n", mode);
+}
+
+uint32_t frame_error_count() { return g_scope_errors.load(std::memory_order_relaxed); }
 
 void shutdown() {
     if (!g.ready) return;
