@@ -39,6 +39,10 @@ public:
     virtual bool stop_and_signal(uint32_t code) = 0;
     virtual void halt(uint32_t pc, uint32_t word) = 0;
     virtual bool interrupt_pending() { return true; }
+    /* N1: every conditional branch, so a refused DMA can be traced back to the
+     * branch that chose the path to it. Default is a no-op: the interpreter is
+     * also used by the fuzzer, which does not want a ring. */
+    virtual void on_branch(uint32_t pc, uint32_t a, uint32_t b, bool taken) {}
 };
 
 void interpret(Context& c, Host& host);

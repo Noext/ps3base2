@@ -154,10 +154,10 @@ SPU_INLINE bool op_br(Context& c, Host&, uint32_t w, uint32_t pc) { c.pc = (pc +
 SPU_INLINE bool op_bra(Context& c, Host&, uint32_t w, uint32_t) { c.pc = static_cast<uint32_t>(S16(w) << 2) & PC_MASK; return true; }
 SPU_INLINE bool op_brsl(Context& c, Host&, uint32_t w, uint32_t pc) { uint32_t t = (pc + (S16(w) << 2)) & PC_MASK; G(RT(w)) = pref_only((pc + 4) & PC_MASK); c.pc = t; return true; }
 SPU_INLINE bool op_brasl(Context& c, Host&, uint32_t w, uint32_t pc) { uint32_t t = static_cast<uint32_t>(S16(w) << 2) & PC_MASK; G(RT(w)) = pref_only((pc + 4) & PC_MASK); c.pc = t; return true; }
-SPU_INLINE bool op_brz(Context& c, Host&, uint32_t w, uint32_t pc) { if (pref(G(RT(w))) == 0) c.pc = (pc + (S16(w) << 2)) & PC_MASK; return true; }
-SPU_INLINE bool op_brnz(Context& c, Host&, uint32_t w, uint32_t pc) { if (pref(G(RT(w))) != 0) c.pc = (pc + (S16(w) << 2)) & PC_MASK; return true; }
-SPU_INLINE bool op_brhz(Context& c, Host&, uint32_t w, uint32_t pc) { if (G(RT(w)).u16[6] == 0) c.pc = (pc + (S16(w) << 2)) & PC_MASK; return true; }
-SPU_INLINE bool op_brhnz(Context& c, Host&, uint32_t w, uint32_t pc) { if (G(RT(w)).u16[6] != 0) c.pc = (pc + (S16(w) << 2)) & PC_MASK; return true; }
+SPU_INLINE bool op_brz(Context& c, Host& h, uint32_t w, uint32_t pc) { const uint32_t a = pref(G(RT(w))); const bool t = a == 0; h.on_branch(pc, a, 0, t); if (t) c.pc = (pc + (S16(w) << 2)) & PC_MASK; return true; }
+SPU_INLINE bool op_brnz(Context& c, Host& h, uint32_t w, uint32_t pc) { const uint32_t a = pref(G(RT(w))); const bool t = a != 0; h.on_branch(pc, a, 0, t); if (t) c.pc = (pc + (S16(w) << 2)) & PC_MASK; return true; }
+SPU_INLINE bool op_brhz(Context& c, Host& h, uint32_t w, uint32_t pc) { const uint32_t a = G(RT(w)).u16[6]; const bool t = a == 0; h.on_branch(pc, a, 0, t); if (t) c.pc = (pc + (S16(w) << 2)) & PC_MASK; return true; }
+SPU_INLINE bool op_brhnz(Context& c, Host& h, uint32_t w, uint32_t pc) { const uint32_t a = G(RT(w)).u16[6]; const bool t = a != 0; h.on_branch(pc, a, 0, t); if (t) c.pc = (pc + (S16(w) << 2)) & PC_MASK; return true; }
 
 SPU_INLINE void interrupt_bits(Context& c, uint32_t w) {
     if (w & 0x40000) {

@@ -1090,6 +1090,9 @@ void SpuThread::note_dma_refusal(uint32_t cmd, uint32_t lsa, uint32_t ea, uint32
                   id, name.c_str(), put ? "PUT" : "GET", cmd, refusal == DmaRefusal::Range ? " (range)" : " (unmapped)",
                   ea, size, lsa, ctx.pc, elem);
     }
+    /* N1: and everything that led here. Gated on the same 32-fault budget so a
+     * guest retrying a broken pointer cannot flood the log. */
+    if (should_log && std::getenv("PS3BASE_SPU_REFUSAL_DUMP")) dump_refusal_context();
     /* Nothing was written: the local store still holds exactly what it held
      * before the command. That is the whole point -- the destination of a
      * refused GET is not the MFC's to scribble on. */
@@ -1172,6 +1175,11 @@ void SpuThread::dma(uint32_t cmd, uint32_t lsa, uint32_t ea, uint32_t size, uint
     }
     if (put && edge::gpu::g_active && edge::gpu::on_put(ls, lsa, ea, size)) return;
     if (dma_watched(ea, size)) log_watched_dma(put ? "PUT" : "GET", cmd, ea, lsa, size, put ? ls + lsa : nullptr);
+    /* N1: remember the block the guest loads, so a later refusal can print it.
+     * The object that carries the audio-port fields is 0x90 bytes at 0x0177cc00;
+     * the SPU copies it to LS 0x36200, and it is the hot field of that block that
+     * ends up in the effective address. */
+    if (!put && ea == 0x0177cc00u && size == 0x90u) { block_ls = lsa; block_size = size; }
     if (trace::on(trace::DMA)) trace::emit(trace::T_DMA, slot | (uint32_t(put) << 8) | (cmd << 16), ea, lsa, size, ctx.pc, id);
     bool handled;
     uint8_t* p = translate(ea, size, put, handled, lsa);
@@ -1268,8 +1276,62 @@ void SpuThread::dma(uint32_t cmd, uint32_t lsa, uint32_t ea, uint32_t size, uint
  * AFTER the wrch that did the damage, so the history is what identifies the
  * argument. Cheap to record; dumped on refusal.
  */
+void SpuThread::branch_note(uint32_t pc, uint32_t a, uint32_t b, bool taken) {
+    BranchRec& r = branch_ring[branch_ring_i++ & 63u];
+    r.pc = pc; r.a = a; r.b = b; r.taken = taken ? 1 : 0;
+}
+
+/*
+ * N1: everything that led to a refused DMA, printed at the refusal.
+ *
+ * The refusal site named the PC and the arguments, and that was not enough: the
+ * PC is where the transfer was issued, not where the decision to use a zero
+ * effective address was made. Three things are dumped here because each answers
+ * a different question:
+ *
+ *   mfc_hist    the last 64 writes to the MFC parameter channels: what the guest
+ *               put in ch16/ch18/ch19, which is exactly what the transfer used.
+ *   branch_ring the last 64 conditional branches with the values compared: which
+ *               branch chose this path, and what decided it.
+ *   block       the guest block that was loaded into local storage, so the field
+ *               the zero came from can be read as the SPU saw it.
+ */
+void SpuThread::dump_refusal_context() {
+    if (mfc_hist_i) {
+        const uint32_t n = mfc_hist_i < 64 ? mfc_hist_i : 64;
+        LOG_ERROR("spu", "  mfc_hist: %u write(s), most recent first", n);
+        for (uint32_t k = 0; k < n; k++) {
+            const MfcHist& h = mfc_hist[(mfc_hist_i - 1 - k) & 63u];
+            LOG_ERROR("spu", "    -%u: ch%u <- 0x%08x at pc 0x%05x", k + 1, h.ch, h.value, h.pc);
+        }
+    }
+    if (branch_ring_i) {
+        const uint32_t n = branch_ring_i < 64 ? branch_ring_i : 64;
+        LOG_ERROR("spu", "  branch_ring: %u taken record(s), most recent first", n);
+        for (uint32_t k = 0; k < n; k++) {
+            const BranchRec& r = branch_ring[(branch_ring_i - 1 - k) & 63u];
+            LOG_ERROR("spu", "    -%u: pc 0x%05x cmp 0x%08x vs 0x%08x -> %s",
+                      k + 1, r.pc, r.a, r.b, r.taken ? "TAKEN" : "not taken");
+        }
+    }
+    if (block_ls && block_size) {
+        LOG_ERROR("spu", "  block: ls 0x%05x, 0x%x byte(s)", block_ls, block_size);
+        for (uint32_t k = 0; k < block_size; k += 16) {
+            const uint8_t* w = ls + ((block_ls + k) & 0x3FFFFu);
+            LOG_ERROR("spu", "    +0x%03x: %02x%02x%02x%02x %02x%02x%02x%02x %02x%02x%02x%02x %02x%02x%02x%02x",
+                      k, w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7],
+                      w[8], w[9], w[10], w[11], w[12], w[13], w[14], w[15]);
+        }
+    }
+}
+
 void SpuThread::mfc_hist_note(uint32_t ch, uint32_t value, uint32_t pc) {
-    MfcHist& h = mfc_hist[mfc_hist_i++ & 7u];
+    /* Only the MFC parameter channels and the tag-command channels carry the
+     * arguments of a transfer. Recording every channel would fill the ring with
+     * ch0 defaults and hide the four writes that actually built the refused
+     * command: measured, 60 of 64 slots were empty ch0 before this filter. */
+    if (ch < 16 && ch != 0x24 && ch != 0x25 && ch != 0x27 && ch != 0x28) return;
+    MfcHist& h = mfc_hist[mfc_hist_i++ & 63u];
     h.ch = ch;
     h.value = value;
     h.pc = pc;

@@ -131,10 +131,20 @@ struct SpuThread : Host {
     void* native = nullptr;
 
     uint32_t mfc_lsa = 0, mfc_eal = 0, mfc_size = 0, mfc_tag = 0;
-    struct MfcHist { uint32_t ch = 0, value = 0, pc = 0; } mfc_hist[8]{};
+    struct MfcHist { uint32_t ch = 0, value = 0, pc = 0; } mfc_hist[64]{};
     struct TrapRec { uint32_t pc = 0, ch = 0, value = 0, r3 = 0, r4 = 0, r0 = 0; } trap_ring[16]{};
     uint32_t trap_ring_i = 0;
     uint32_t mfc_hist_i = 0;
+    /* N1: the last 64 conditional branches, so a refused DMA can be traced back
+     * to the branch that chose the path to it: the branch's own address, the two
+     * values it compared, and which way it went. */
+    struct BranchRec { uint32_t pc = 0, a = 0, b = 0; uint8_t taken = 0; } branch_ring[64]{};
+    uint32_t branch_ring_i = 0;
+    void branch_note(uint32_t pc, uint32_t a, uint32_t b, bool taken);
+    void on_branch(uint32_t pc, uint32_t a, uint32_t b, bool taken) override { branch_note(pc, a, b, taken); }
+    void dump_refusal_context();
+    /* N1: the block the guest Most recently loaded, for the refusal dump. */
+    uint32_t block_ls = 0, block_size = 0;
     void mfc_hist_note(uint32_t ch, uint32_t value, uint32_t pc);
     /* The tag-status state machine lives in spu/channel_state.h so the unit test
      * drives the same code the runtime does. */
