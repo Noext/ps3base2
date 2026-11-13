@@ -1,0 +1,1177 @@
+I   0.000673 [3164190] settings: applied: GOWA_TURBO=1 GOWA_RES_SCALE=1 GOWA_FULLSCREEN=0 GOWA_FPS_UNLOCK=1 GOWA_FPS_OSD=1 GOWA_MOTION_BLUR=1 GOWA_ASYNC_SHADERS=1 GOWA_DLSSG=0 GOWA_AUDIO=1 GOWA_AUDIO_LATENCY_MS=100 GOWA_SPU_PARK=0 GOWA_VDEC_HLE=1 GOWA_SESSION=0
+I   0.000839 [3164190] settings: environment overrides settings.ini: PS3BASE_DISC_DIR
+I   0.001923 [3164190] codewatch: 76793 legal call targets registered: a text word that is one of them is a function pointer, not corruption
+I   0.001972 [3164190] blockwatch: watching guest 0x0177caa0..0x0177cab0 from t=0; every write into it is logged with offset, width, value and caller
+I   0.008067 [3164191] place: thread placement 'mode=mask;ppu:main_thread=c0;fifo=c1;spu=c2,c3,c4,c5,c6,c7', cores [0,1] [2,3] [4,5] [6,7] [8,9] [10,11] [12,13] [14,15] [16] [17] [18] [19] [20] [21] [22] [23] [24] [25] [26] [27] [28] [29] [30] [31]
+E   0.016568 [3164191] gpu: SDL window creation failed: No available video device
+I   0.016739 [3164190] main: GOWA-pc: 9 images, 76793 functions, 447 imports, 860 exports, root .
+I   0.016859 [3164190] vm: guest base 0x77360c000000 (backing: os)
+I   0.016868 [3164190] main: game profile: '(none)' -- generic runtime only
+I   0.047234 [3164190] loader: loaded rdr (bin/rdr/EBOOT.elf) text 0x00010200-0x010d9f74 toc 0x0139ebb0 entry 0x01332080
+I   0.048004 [3164190] loader: loaded liblv2 (out-rdr/gen/reloc/liblv2.elf) text 0x30000000-0x30013b68 toc 0x3001c620 entry 0x30013bd8
+I   0.048016 [3164190] main: sdk 0x300001 prio 2048 stack 0x40000 malloc page 0x100000 tls 0x1397654/0x54/0x444
+I   0.048170 [3164190] stacks: thread 16777216 'main_thread' requested 0x40000 allocated 0x40000 range 0xd0010000..0xd0050000 guard 0xd0000000..0xd0010000 (adjacent)
+I   0.048319 [3164190] vfs: disc /root/Dev/rdr-port/vfs/dev_bdvd (BLES00680 01.00), patch  ()
+I   0.048339 [3164190] main: argc 1
+I   0.048368 [3164190] trap: trap 0: read/write 0x0177caa8+0x4 arm-time words: 00000000
+I   0.048508 [3164193] place: ppu:main_thread -> 0
+I   0.048525 [3164193] ppu: thread 0x1000000 'main_thread' start entry opd 0x30013bd8
+I   0.061493 [3164193] vm: region 1 placed at 0x10000000
+I   0.061561 [3164193] memory: sys_memory_allocate(0x10000 flags 0x200) -> 0x10000000 (used now 0x10000 / 0xd500000, 0 MiB)
+I   0.062038 [3164193] memory: sys_memory_allocate(0x80000 flags 0x200) -> 0x10010000 (used now 0x90000 / 0xd500000, 1 MiB)
+I   0.062288 [3164193] loader: loaded libsysmodule (out-rdr/gen/reloc/libsysmodule.elf) text 0x31000000-0x31008a68 toc 0x31011e90 entry 0x31009900
+I   0.062297 [3164193] prx: load '/dev_flash/sys/external/libsysmodule.sprx' -> 0x23000a00 (LLE, start 0x31009900)
+I   0.062538 [3164193] prx: load '/dev_flash/sys/external/libsysutil.sprx' -> 0x23000c00 (HLE, start 0x00000000)
+I   0.062562 [3164193] prx: libsysutil shared memory at 0x20000000
+I   0.062568 [3164193] prx: started 'libsysutil.sprx'
+I   0.062693 [3164193] loader: loaded libgcm_sys (out-rdr/gen/reloc/libgcm_sys.elf) text 0x33000000-0x3300b730 toc 0x33014000 entry 0x3300bf3c
+I   0.062700 [3164193] prx: load '/dev_flash/sys/external/libgcm_sys.sprx' -> 0x23000d00 (LLE, start 0x3300bf3c)
+I   0.062775 [3164193] prx: started 'libgcm_sys.sprx'
+I   0.062803 [3164193] prx: load '/dev_flash/sys/external/libaudio.sprx' -> 0x23000e00 (HLE, start 0x00000000)
+I   0.062810 [3164193] prx: started 'libaudio.sprx'
+I   0.062835 [3164193] prx: load '/dev_flash/sys/external/libio.sprx' -> 0x23000f00 (HLE, start 0x00000000)
+I   0.062842 [3164193] prx: started 'libio.sprx'
+I   0.063228 [3164193] loader: loaded libsre (out-rdr/gen/reloc/libsre.elf) text 0x32000000-0x3202e000 toc 0x32039ab0 entry 0x00000000
+I   0.063248 [3164193] prx: load '/dev_flash/sys/external/libsre.sprx' -> 0x23001000 (LLE, start 0x00000000)
+I   0.063258 [3164193] prx: started 'libsre.sprx'
+I   0.063274 [3164193] prx: started 'libsysmodule.sprx'
+I   0.063814 [3164193] prx: load '/dev_flash/sys/external/libnetctl.sprx' -> 0x23001b00 (HLE, start 0x00000000)
+I   0.063827 [3164193] prx: started 'libnetctl.sprx'
+I   0.064109 [3164193] loader: loaded libnet (out-rdr/gen/reloc/libnet.elf) text 0x35000000-0x35020fc8 toc 0x3502a0d0 entry 0x35021634
+I   0.064129 [3164193] prx: load '/dev_flash/sys/external/libnet.sprx' -> 0x23001c00 (LLE, start 0x35021634)
+I   0.064147 [3164193] prx: started 'libnet.sprx'
+I   0.064302 [3164193] loader: loaded libfs (out-rdr/gen/reloc/libfs.elf) text 0x34000000-0x3400fef0 toc 0x340194c0 entry 0x340103c0
+I   0.064309 [3164193] prx: load '/dev_flash/sys/external/libfs.sprx' -> 0x23001d00 (LLE, start 0x340103c0)
+I   0.064541 [3164193] prx: started 'libfs.sprx'
+I   0.064578 [3164193] prx: load '/dev_flash/sys/external/libvoice.sprx' -> 0x23003300 (HLE, start 0x00000000)
+I   0.064585 [3164193] prx: started 'libvoice.sprx'
+I   0.064678 [3164193] loader: loaded librtc (out-rdr/gen/reloc/librtc.elf) text 0x37000000-0x37004490 toc 0x3700c5f0 entry 0x00000000
+I   0.064686 [3164193] prx: load '/dev_flash/sys/external/librtc.sprx' -> 0x23003400 (LLE, start 0x00000000)
+I   0.064693 [3164193] prx: started 'librtc.sprx'
+I   0.064745 [3164193] prx: load '/dev_flash/sys/external/libsysutil_np_trophy.sprx' -> 0x23003500 (HLE, start 0x00000000)
+I   0.064757 [3164193] prx: started 'libsysutil_np_trophy.sprx'
+I   0.064789 [3164193] prx: load '/dev_flash/sys/external/libsysutil_np.sprx' -> 0x23003600 (HLE, start 0x00000000)
+I   0.064796 [3164193] prx: started 'libsysutil_np.sprx'
+I   0.064830 [3164193] prx: load '/dev_flash/sys/external/libsysutil_np2.sprx' -> 0x23003700 (HLE, start 0x00000000)
+I   0.064838 [3164193] prx: started 'libsysutil_np2.sprx'
+I   0.064872 [3164193] prx: load '/dev_flash/sys/external/libsysutil_savedata.sprx' -> 0x23003800 (HLE, start 0x00000000)
+I   0.064883 [3164193] prx: started 'libsysutil_savedata.sprx'
+I   0.064890 [3164193] vm: sys_vm_memory_map vsize 0x2000000 psize 0x200000 flags 0x200 policy 0x1
+I   0.075967 [3164193] vm: sys_vm_memory_map -> 0x10090000 (used 0x290000 / 0xd500000)
+I   0.076297 [3164193] spu: group_create 'PrimaryCellSpursKernelGroup' num 5 prio 200 type 0x18 -> 0x4000100
+I   0.076593 [3164193] spu: thread_initialize 'PrimaryCellSpursKernel0' slot 0 group 0x4000100 entry 0x818 -> 0x100
+I   0.076789 [3164193] spu: thread_initialize 'PrimaryCellSpursKernel1' slot 1 group 0x4000100 entry 0x818 -> 0x1000100
+I   0.076963 [3164193] spu: thread_initialize 'PrimaryCellSpursKernel2' slot 2 group 0x4000100 entry 0x818 -> 0x2000100
+I   0.077151 [3164193] spu: thread_initialize 'PrimaryCellSpursKernel3' slot 3 group 0x4000100 entry 0x818 -> 0x3000100
+I   0.077328 [3164193] spu: thread_initialize 'PrimaryCellSpursKernel4' slot 4 group 0x4000100 entry 0x818 -> 0x4000100
+I   0.077539 [3164193] stacks: thread 16777217 'PrimarySpursHdlr1' requested 0x8000 allocated 0x8000 range 0xd0060000..0xd0068000 guard 0xd0050000..0xd0060000 (adjacent)
+I   0.077547 [3164193] ppu: _sys_ppu_thread_create 'PrimarySpursHdlr1' entry 0x320313a4 arg 0x1645200 prio 2016 stack 0x8000 flags 0x1 -> 0x1000001
+I   0.077657 [3164193] stacks: thread 16777218 'PrimarySpursHdlr0' requested 0x4000 allocated 0x4000 range 0xd0080000..0xd0084000 guard 0xd0070000..0xd0080000 (adjacent)
+I   0.077669 [3164193] ppu: _sys_ppu_thread_create 'PrimarySpursHdlr0' entry 0x320312dc arg 0x1645200 prio 2016 stack 0x4000 flags 0x1 -> 0x1000002
+I   0.077725 [3164194] ppu: thread 0x1000001 'PrimarySpursHdlr1' start entry opd 0x320313a4
+I   0.077836 [3164193] spu: group_create 'SecondaryCellSpursKernelGroup' num 1 prio 201 type 0x0 -> 0x4000200
+I   0.077912 [3164195] ppu: thread 0x1000002 'PrimarySpursHdlr0' start entry opd 0x320312dc
+I   0.077930 [3164195] spu: group_start 0x4000100 'PrimaryCellSpursKernelGroup'
+I   0.078096 [3164196] place: spu0 -> 4
+I   0.078125 [3164196] spu: thread 0x100 'PrimaryCellSpursKernel0' start pc 0x00818 args 0x0 0x1645200
+I   0.078209 [3164193] spu: thread_initialize 'SecondaryCellSpursKernel0' slot 0 group 0x4000200 entry 0x818 -> 0x200
+I   0.078342 [3164197] place: spu1 -> 6
+I   0.078368 [3164197] spu: thread 0x1000100 'PrimaryCellSpursKernel1' start pc 0x00818 args 0x100000000 0x1645200
+I   0.078356 [3164198] place: spu2 -> 8
+I   0.078405 [3164198] spu: thread 0x2000100 'PrimaryCellSpursKernel2' start pc 0x00818 args 0x200000000 0x1645200
+I   0.078383 [3164200] place: spu4 -> 12
+I   0.078452 [3164200] spu: thread 0x4000100 'PrimaryCellSpursKernel4' start pc 0x00818 args 0x400000000 0x1645200
+I   0.078417 [3164193] stacks: thread 16777219 'SecondarySpursHdlr1' requested 0x8000 allocated 0x8000 range 0xd00a0000..0xd00a8000 guard 0xd0090000..0xd00a0000 (adjacent)
+I   0.078473 [3164193] ppu: _sys_ppu_thread_create 'SecondarySpursHdlr1' entry 0x320313a4 arg 0x1646400 prio 2016 stack 0x8000 flags 0x1 -> 0x1000003
+I   0.078370 [3164199] place: spu3 -> 10
+I   0.078514 [3164199] spu: thread 0x3000100 'PrimaryCellSpursKernel3' start pc 0x00818 args 0x300000000 0x1645200
+I   0.078570 [3164193] stacks: thread 16777220 'SecondarySpursHdlr0' requested 0x4000 allocated 0x4000 range 0xd00c0000..0xd00c4000 guard 0xd00b0000..0xd00c0000 (adjacent)
+I   0.078578 [3164193] ppu: _sys_ppu_thread_create 'SecondarySpursHdlr0' entry 0x320312dc arg 0x1646400 prio 2016 stack 0x4000 flags 0x1 -> 0x1000004
+I   0.078897 [3164193] tty: [0] [STARTUP] 2048k consumed by modules, 0k consumed by SPURS, 0k consumed by exception handling.
+I   0.078929 [3164202] ppu: thread 0x1000004 'SecondarySpursHdlr0' start entry opd 0x320312dc
+I   0.078940 [3164202] spu: group_start 0x4000200 'SecondaryCellSpursKernelGroup'
+I   0.079007 [3164193] tty: [0] [STARTUP] Restricting 211968k heap to 69632k+3072k+112640k=185344k.
+I   0.079016 [3164193] mmapper: allocate_address 0x10000000 flags 0xf0 align 0x10000000 -> 0x40000000
+I   0.079027 [3164193] mmapper: sys_mmapper_allocate_address r3=0x10000000 r4=0xf0 r5=0x10000000 r6=0xd004fa94 r7=0x0 -> 0x0
+I   0.079034 [3164193] mmapper: allocate_address 0x10000000 flags 0xf0 align 0x10000000 -> 0x50000000
+I   0.079039 [3164193] mmapper: sys_mmapper_allocate_address r3=0x10000000 r4=0xf0 r5=0x10000000 r6=0xd004fa94 r7=0x0 -> 0x0
+I   0.079045 [3164193] mmapper: allocate_address 0x10000000 flags 0xf0 align 0x10000000 -> 0x60000000
+I   0.079122 [3164201] ppu: thread 0x1000003 'SecondarySpursHdlr1' start entry opd 0x320313a4
+I   0.079162 [3164193] mmapper: sys_mmapper_allocate_address r3=0x10000000 r4=0xf0 r5=0x10000000 r6=0xd004fa94 r7=0x0 -> 0x0
+I   0.079165 [3164203] place: spu0 -> 4
+I   0.079184 [3164193] tty: [0] [STARTUP] Allocating 181M
+I   0.079184 [3164203] spu: thread 0x200 'SecondaryCellSpursKernel0' start pc 0x00818 args 0x0 0x1646400
+I   0.079194 [3164193] vm: region 2 placed at 0x70000000
+I   0.083026 [3164196] spu: 71405 compiled SPU blocks
+I   0.142467 [3164193] memory: sys_memory_allocate(0xb500000 flags 0x400) -> 0x70000000 (used now 0xb790000 / 0xd500000, 184 MiB)
+I   0.142541 [3164193] tty: [0] [STARTUP] Heap allocated from [70000000,7b500000)
+I   0.142590 [3164193] tty: [0] [STARTUP] Remaining user memory: 30144kb; USED=181M TSS=1536kb EXTRA=960kb (RESIDUAL)
+I   0.142887 [3164193] memory: sys_memory_allocate(0xf0000 flags 0x200) -> 0x12090000 (used now 0xb880000 / 0xd500000, 184 MiB)
+I   0.143032 [3164193] tty: [0] [POOL] Residual allocator has 980672 bytes available at creation.
+I   0.191888 [3164193] stacks: thread 16777221 '[RAGE] netThreadPool Thread 1' requested 0x4000 allocated 0x4000 range 0xd00e0000..0xd00e4000 guard 0xd00d0000..0xd00e0000 (adjacent)
+I   0.191912 [3164193] ppu: _sys_ppu_thread_create '[RAGE] netThreadPool Thread 1' entry 0x01356420 arg 0x165cc20 prio 2048 stack 0x4000 flags 0x1 -> 0x1000005
+I   0.192017 [3164193] tty: [0] [IPC] '[RAGE] netThreadPool Thread 1' has TID01000005 (29184k remaining)
+I   0.192055 [3164213] ppu: thread 0x1000005 '[RAGE] netThreadPool Thread 1' start entry opd 0x01356420
+I   0.192176 [3164193] stacks: thread 16777222 '[RAGE] netThreadPool Thread 2' requested 0x4000 allocated 0x4000 range 0xd0100000..0xd0104000 guard 0xd00f0000..0xd0100000 (adjacent)
+I   0.192183 [3164193] ppu: _sys_ppu_thread_create '[RAGE] netThreadPool Thread 2' entry 0x01356420 arg 0x165cc20 prio 2048 stack 0x4000 flags 0x1 -> 0x1000006
+I   0.192252 [3164193] tty: [0] [IPC] '[RAGE] netThreadPool Thread 2' has TID01000006 (29184k remaining)
+I   0.192412 [3164214] ppu: thread 0x1000006 '[RAGE] netThreadPool Thread 2' start entry opd 0x01356420
+I   0.192952 [3164193] sceNp: ManagerGetStatus -> -1
+I   0.202515 [3164193] cellNetCtl: Init() -> 0x00000000
+I   0.202691 [3164193] net: sys_net_bnet_sysctl -> OK (no network stack; command ignored)
+I   0.202732 [3164193] net: sys_net_infoctl cmd 53 -> OK (no network stack; command ignored)
+I   0.202787 [3164193] tty: [0] No interface found.
+I   0.202840 [3164193] tty: [0] kernel: free_size=0/free_min=0
+I   0.202870 [3164193] tty: [0] libnet: free_size=125756/free_min=125736
+I   0.202907 [3164193] tty: [0] packets: 0
+I   0.202928 [3164193] tty: [0] thread context (size=3192):
+I   0.202942 [3164193] tty: [0] 
+I   0.202957 [3164193] tty: [0]  tid=0x1000000
+I   0.202966 [3164193] tty: [0] 
+I   0.203304 [3164193] loader: loaded libfiber (out-rdr/gen/reloc/libfiber.elf) text 0x36000000-0x36006558 toc 0x36016a80 entry 0x3600ea68
+I   0.203315 [3164193] prx: load '/dev_flash/sys/external/libfiber.sprx' -> 0x23026500 (LLE, start 0x3600ea68)
+I   0.203330 [3164193] prx: started 'libfiber.sprx'
+I   0.203365 [3164193] tty: [0] [IPC] Module 43 loaded (29184k remaining)
+I   0.205443 [3164193] stacks: thread 16777223 '[RAGE] DVD Reader' requested 0x6000 allocated 0x6000 range 0xd0120000..0xd0126000 guard 0xd0110000..0xd0120000 (adjacent)
+I   0.205465 [3164193] ppu: _sys_ppu_thread_create '[RAGE] DVD Reader' entry 0x01356420 arg 0x165cc20 prio 2048 stack 0x6000 flags 0x1 -> 0x1000007
+I   0.207136 [3164193] tty: [0] [IPC] '[RAGE] DVD Reader' has TID01000007 (29184k remaining)
+I   0.207238 [3164193] stacks: thread 16777224 '[RAGE] DVD Streamer' requested 0x8000 allocated 0x8000 range 0xd0140000..0xd0148000 guard 0xd0130000..0xd0140000 (adjacent)
+I   0.207245 [3164193] ppu: _sys_ppu_thread_create '[RAGE] DVD Streamer' entry 0x01356420 arg 0x165cc4c prio 2048 stack 0x8000 flags 0x1 -> 0x1000008
+I   0.207446 [3164215] ppu: thread 0x1000007 '[RAGE] DVD Reader' start entry opd 0x01356420
+I   0.207535 [3164193] tty: [0] [IPC] '[RAGE] DVD Streamer' has TID01000008 (29184k remaining)
+I   0.207821 [3164216] ppu: thread 0x1000008 '[RAGE] DVD Streamer' start entry opd 0x01356420
+I   0.208065 [3164193] stacks: thread 16777225 '[RAGE] HDD Reader' requested 0x6000 allocated 0x6000 range 0xd0160000..0xd0166000 guard 0xd0150000..0xd0160000 (adjacent)
+I   0.208075 [3164193] ppu: _sys_ppu_thread_create '[RAGE] HDD Reader' entry 0x01356420 arg 0x165cc4c prio 2048 stack 0x6000 flags 0x1 -> 0x1000009
+I   0.208147 [3164193] tty: [0] [IPC] '[RAGE] HDD Reader' has TID01000009 (29184k remaining)
+I   0.208271 [3164193] stacks: thread 16777226 '[RAGE] HDD Streamer' requested 0x8000 allocated 0x8000 range 0xd0180000..0xd0188000 guard 0xd0170000..0xd0180000 (adjacent)
+I   0.208277 [3164193] ppu: _sys_ppu_thread_create '[RAGE] HDD Streamer' entry 0x01356420 arg 0x165cc20 prio 2048 stack 0x8000 flags 0x1 -> 0x100000a
+I   0.208340 [3164193] tty: [0] [IPC] '[RAGE] HDD Streamer' has TID0100000A (29184k remaining)
+I   0.208816 [3164193] sysutil: RegisterCallback slot 0 opd 0x01358f58 -> code 0x005c2790 toc 0x0139ebb0 arg 0x703826e0
+I   0.208863 [3164193] sceNpTrophy: sceNpTrophyCreateContext -> context 0x1 (trp 'NPWR00867_00', read_only 0)
+I   0.208869 [3164193] sceNpTrophy: sceNpTrophyCreateHandle -> handle 0x1
+I   0.208929 [3164193] sceNpTrophy: sceNpTrophyGetRequiredDiskSpace -> 0x0
+I   0.208977 [3164193] prx: load '/dev_flash/sys/external/libsysutil_avconf_ext.sprx' -> 0x23027300 (HLE, start 0x00000000)
+I   0.208985 [3164193] prx: started 'libsysutil_avconf_ext.sprx'
+I   0.209013 [3164193] tty: [0] [IPC] Module 31 loaded (29184k remaining)
+W   0.209030 [3164193] cellSysutil: cellVideoOutSetGamma(0, 1.200000) -> NOT_IMPLEMENTED: this runtime has no gamma stage, the picture is unchanged
+I   0.209094 [3164193] tty: [0] [IPC] Module 31 unloaded (29184k remaining)
+I   0.209210 [3164193] vm: region 3 placed at 0x80000000
+I   0.210094 [3164217] ppu: thread 0x1000009 '[RAGE] HDD Reader' start entry opd 0x01356420
+I   0.210139 [3164218] ppu: thread 0x100000a '[RAGE] HDD Streamer' start entry opd 0x01356420
+I   0.211539 [3164193] rsx: local memory 0xf900000 bytes at 0xc0000000
+I   0.212844 [3164193] rsx: context at 0x80100000 (driver 0x80200000 reports 0x80300000 queue 0x8d027500)
+I   0.212989 [3164193] stacks: thread 16777227 '_gcm_intr_thread' requested 0x4000 allocated 0x4000 range 0xd01a0000..0xd01a4000 guard 0xd0190000..0xd01a0000 (adjacent)
+I   0.212997 [3164193] ppu: _sys_ppu_thread_create '_gcm_intr_thread' entry 0x3300be54 arg 0x0 prio 1 stack 0x4000 flags 0x1 -> 0x100000b
+I   0.212992 [3164220] place: fifo -> 2
+I   0.213066 [3164220] rsx: null RSX FIFO thread started
+I   0.213066 [3164222] ppu: thread 0x100000b '_gcm_intr_thread' start entry opd 0x3300be54
+I   0.213049 [3164193] rsx: iomap io 0x00000000 -> ea 0x70000000 size 0xb500000
+I   0.213868 [3164193] memory: sys_memory_allocate(0x100000 flags 0x400) -> 0x7b500000 (used now 0xb980000 / 0xd500000, 186 MiB)
+I   0.213892 [3164193] rsx: iomap io 0x0e000000 -> ea 0x7b500000 size 0x100000
+I   0.213941 [3164193] tty: [0] [POOL] Secondary residual allocator has 947904 bytes available at creation.
+I   0.214168 [3164193] tty: [0] [GRAPHICS] Output resolution is 1280 by 720, 59.94Hz.
+I   0.214516 [3164193] rsx: context attribute 0x300 a3 0x0 a4 0x1100700000 a5 0x14005c0e0000 a6 0x0
+I   0.214600 [3164193] rsx: context attribute 0x301 a3 0x0 a4 0x32104800280 a5 0x710000 a6 0xff00200400202000
+I   0.214616 [3164193] rsx: context attribute 0x300 a3 0x1 a4 0x71001100e10000 a5 0x28006c1c2071 a6 0x0
+I   0.214735 [3164193] rsx: context attribute 0x300 a3 0x2 a4 0xe2002101450000 a5 0x28005c28a0e2 a6 0x0
+I   0.214753 [3164193] gpu: display buffer 0: offset 0x0 pitch 5120 1280x720
+I   0.214761 [3164193] gpu: display buffer 1: offset 0x384000 pitch 5120 1280x720
+I   0.214779 [3164193] sysutil: cellVideoOutConfigure: res 0x2 format 1 aspect 0 pitch 5120
+I   0.220943 [3164193] prx: load '/dev_flash/sys/external/libsysutil_game.sprx' -> 0x23027700 (HLE, start 0x00000000)
+I   0.220966 [3164193] prx: started 'libsysutil_game.sprx'
+I   0.220999 [3164193] tty: [0] [IPC] Module 3e loaded (28160k remaining)
+I   0.221031 [3164193] cellGame: cellGameBootCheck -> type 1 attrs 0x0 (CATEGORY 'DG', dir '')
+I   0.221059 [3164193] cellGame: cellGameGetParamString(100) -> 'BLES00680'
+I   0.221074 [3164193] cellGame: cellGameContentPermit -> '/dev_bdvd/PS3_GAME'
+I   0.221155 [3164193] cellGame: cellGameDataCheck(3, 'BLES00680') -> '/dev_hdd0/game/BLES00680' (CATEGORY 'GD')
+I   0.221203 [3164193] cellGame: cellGameContentPermit -> '/dev_hdd0/game/BLES00680'
+I   0.221266 [3164193] tty: [0] [IPC] Module 3e loaded (28160k remaining)
+I   0.221290 [3164193] cellGame: cellGameDataCheck(3, 'BLES00680') -> '/dev_hdd0/game/BLES00680' (CATEGORY 'GD')
+I   0.221318 [3164193] cellGame: cellGameContentPermit -> '/dev_hdd0/game/BLES00680'
+I   0.221354 [3164193] tty: [0] [IPC] Module 3e unloaded (28160k remaining)
+I   0.223751 [3164193] tty: [0] [IPC] Module 3e unloaded (28160k remaining)
+I   0.223846 [3164193] stacks: thread 16777228 '[RAGE] SavePreLoadThread' requested 0x4000 allocated 0x4000 range 0xd01c0000..0xd01c4000 guard 0xd01b0000..0xd01c0000 (adjacent)
+I   0.223862 [3164193] ppu: _sys_ppu_thread_create '[RAGE] SavePreLoadThread' entry 0x01356420 arg 0x165cc20 prio 2048 stack 0x4000 flags 0x1 -> 0x100000c
+I   0.223949 [3164193] tty: [0] [IPC] '[RAGE] SavePreLoadThread' has TID0100000C (28160k remaining)
+I   0.224059 [3164193] sysutil: cellSysCacheMount('BLES00680'): cache id 'BLES00680_BLES00680' created under /dev_hdd1/caches; the VFS mapping of /dev_hdd1 is fixed, so the guest path stays /dev_hdd1
+I   0.224084 [3164193] tty: [0] [DiskCache] Cache drive contents need regeneration
+I   0.224259 [3164223] ppu: thread 0x100000c '[RAGE] SavePreLoadThread' start entry opd 0x01356420
+I   0.224371 [3164223] stacks: thread 16777229 '[RAGE] FreeSpaceCheckThread' requested 0x4000 allocated 0x4000 range 0xd01e0000..0xd01e4000 guard 0xd01d0000..0xd01e0000 (adjacent)
+I   0.224379 [3164223] ppu: _sys_ppu_thread_create '[RAGE] FreeSpaceCheckThread' entry 0x01356420 arg 0x165cc20 prio 2048 stack 0x4000 flags 0x1 -> 0x100000d
+I   0.224461 [3164223] tty: [0] [IPC] '[RAGE] FreeSpaceCheckThread' has TID0100000D (28160k remaining)
+I   0.224501 [3164224] ppu: thread 0x100000d '[RAGE] FreeSpaceCheckThread' start entry opd 0x01356420
+I   0.224897 [3164224] ppu: thread 0x100000d '[RAGE] FreeSpaceCheckThread' sys_ppu_thread_exit(0xdeadc0de) from lr=0x30004ea4 liblv2+0x4ea4 (no lifted code)
+I   0.224910 [3164224] ppu: thread 0x100000d '[RAGE] FreeSpaceCheckThread' exit 0xdeadc0de lr=0x30004ea4
+I   0.225707 [3164193] fs: open '/dev_hdd1/cache.dat' flags 02 -> 3
+I   0.225797 [3164193] tty: [0] [DiskCache] ValidateCacheHeader - existing cache is valid.
+I   0.225821 [3164193] fs: open '/dev_hdd1/cache.dat' flags 02 -> 3
+I   0.226042 [3164193] stacks: thread 16777230 '[RAGE] DiskCache Reader' requested 0x6000 allocated 0x6000 range 0xd0210000..0xd0216000 guard 0xd0200000..0xd0210000 (adjacent)
+I   0.226053 [3164193] ppu: _sys_ppu_thread_create '[RAGE] DiskCache Reader' entry 0x01356420 arg 0x165cc20 prio 2047 stack 0x6000 flags 0x1 -> 0x100000e
+I   0.226110 [3164193] tty: [0] [IPC] '[RAGE] DiskCache Reader' has TID0100000E (28160k remaining)
+I   0.226172 [3164193] stacks: thread 16777231 '[RAGE] DiskCache Worker' requested 0x4000 allocated 0x4000 range 0xd0230000..0xd0234000 guard 0xd0220000..0xd0230000 (adjacent)
+I   0.226178 [3164193] ppu: _sys_ppu_thread_create '[RAGE] DiskCache Worker' entry 0x01356420 arg 0x165cc4c prio 2047 stack 0x4000 flags 0x1 -> 0x100000f
+I   0.226249 [3164193] tty: [0] [IPC] '[RAGE] DiskCache Worker' has TID0100000F (28160k remaining)
+I   0.226298 [3164193] tty: [0] [DiskCache] Cache is ready to go in 0.002s (71 valid blocks, cache is NOT primed).
+I   0.226463 [3164193] fs: open '/dev_bdvd/PS3_GAME/USRDIR/rdr2_layer0.rpf' flags 00 -> 4
+I   0.226539 [3164193] tty: [0] [PACKFILE] Loading archive 'game:/rdr2_layer0.rpf' from optical layer 0
+I   0.226918 [3164225] ppu: thread 0x100000e '[RAGE] DiskCache Reader' start entry opd 0x01356420
+I   0.226944 [3164226] ppu: thread 0x100000f '[RAGE] DiskCache Worker' start entry opd 0x01356420
+I   0.633153 [3164193] fs: open '/dev_hdd0/game/BLES00680/USRDIR/rdr2_installed.sdat' -> decrypted 'vfs/dev_hdd0/game/BLES00680/USRDIR/rdr2_installed.sdat.dec'
+I   0.633187 [3164193] fs: open '/dev_hdd0/game/BLES00680/USRDIR/rdr2_installed.sdat' flags 00 -> 5
+I   0.633250 [3164193] tty: [0] [PACKFILE] Loading archive 'gamedata:/rdr2_installed.sdat' from hard drive
+W   0.714808 [3164193] fs: open '/dev_bdvd/PS3_GAME/USRDIR/patch0_ps3.rpf' -> ENOENT (host '/root/Dev/rdr-port/vfs/dev_bdvd/PS3_GAME/USRDIR/patch0_ps3.rpf')
+I   0.714992 [3164193] tty: [1] B
+I   0.715001 [3164193] tty: [1] u
+I   0.715008 [3164193] tty: [1] l
+I   0.715014 [3164193] tty: [1] l
+I   0.715021 [3164193] tty: [1] e
+I   0.715027 [3164193] tty: [1] t
+I   0.715033 [3164193] tty: [1] :
+I   0.715040 [3164193] tty: [1]  
+I   0.715064 [3164193] tty: [1] L
+I   0.715074 [3164193] tty: [1] o
+I   0.715080 [3164193] tty: [1] a
+I   0.715086 [3164193] tty: [1] d
+I   0.715093 [3164193] tty: [1] e
+I   0.715100 [3164193] tty: [1] d
+I   0.715111 [3164193] tty: [1]  
+I   0.715117 [3164193] tty: [1] S
+I   0.715124 [3164193] tty: [1] P
+I   0.715130 [3164193] tty: [1] U
+I   0.715136 [3164193] tty: [1]  
+I   0.715144 [3164193] tty: [1] E
+I   0.715150 [3164193] tty: [1] L
+I   0.715157 [3164193] tty: [1] F
+I   0.715163 [3164193] tty: [1]  
+I   0.715169 [3164193] tty: [1] f
+I   0.715175 [3164193] tty: [1] r
+I   0.715182 [3164193] tty: [1] o
+I   0.715188 [3164193] tty: [1] m
+I   0.715194 [3164193] tty: [1]  
+I   0.715206 [3164193] tty: [1] (
+I   0.715216 [3164193] tty: [1] n
+I   0.715222 [3164193] tty: [1] u
+I   0.715228 [3164193] tty: [1] l
+I   0.715235 [3164193] tty: [1] l
+I   0.715241 [3164193] tty: [1] )
+I   0.715251 [3164193] tty: [1] 
+I   0.715330 [3164193] tty: [0] sizeof MidphaseWorkUnitInput: 400
+I   0.715351 [3164193] tty: [0] sizeof MidphaseWorkUnitOutput: 12
+I   1.007930 [3164193] sys_io: cellKbInit(1): no keyboard attached, 1 port(s) reported
+I   1.007965 [3164193] sys_io: cellPadInit(7): one pad on port 0
+I   1.013638 [3164193] rsx: context attribute 0x300 a3 0x3 a4 0x1b70031027e0000 a5 0x28005c41a146 a6 0x0
+I   1.025022 [3164223] tty: [0] [IPC] Thread TID0100000D exited (28160k remaining)
+I   1.025237 [3164223] stacks: thread 16777232 '[RAGE] LoadThread' requested 0x4000 allocated 0x4000 range 0xd0250000..0xd0254000 guard 0xd0240000..0xd0250000 (adjacent)
+I   1.025247 [3164223] ppu: _sys_ppu_thread_create '[RAGE] LoadThread' entry 0x01356420 arg 0x165cc4c prio 2048 stack 0x4000 flags 0x1 -> 0x1000010
+I   1.025436 [3164233] ppu: thread 0x1000010 '[RAGE] LoadThread' start entry opd 0x01356420
+I   1.025519 [3164223] tty: [0] [IPC] '[RAGE] LoadThread' has TID01000010 (28160k remaining)
+W   1.025706 [3164233] savedata: 'BLES00680RDR2OPTIONS_SAV' stat callback result -4
+I   1.025752 [3164233] ppu: thread 0x1000010 '[RAGE] LoadThread' sys_ppu_thread_exit(0xdeadc0de) from lr=0x30004ea4 liblv2+0x4ea4 (no lifted code)
+I   1.025761 [3164233] ppu: thread 0x1000010 '[RAGE] LoadThread' exit 0xdeadc0de lr=0x30004ea4
+I   1.071420 [3164193] rsx: context attribute 0x301 a3 0x1 a4 0x2104c004c0 a5 0xb4000027f0000 a6 0xff00200400202000
+I   1.071480 [3164193] rsx: context attribute 0x300 a3 0x4 a4 0x27f002102dc0000 a5 0x1400684d620e a6 0x0
+I   1.101894 [3164193] rsx: context attribute 0x301 a3 0x2 a4 0x2102000200 a5 0x21d00003340000 a6 0xff00200400202000
+I   1.101941 [3164193] rsx: context attribute 0x300 a3 0x5 a4 0x334003103730000 a5 0x8006855626c a6 0x0
+I   1.102002 [3164193] rsx: context attribute 0x301 a3 0x3 a4 0x2102000200 a5 0x21d00003540000 a6 0xff00200400202000
+I   1.102081 [3164193] rsx: context attribute 0x301 a3 0x4 a4 0x2101000100 a5 0x25d00003740000 a6 0xff00200400202000
+I   1.102091 [3164193] rsx: context attribute 0x300 a3 0x6 a4 0x3740011038b0000 a5 0x400685862ac a6 0x0
+I   1.102138 [3164193] rsx: context attribute 0x301 a3 0x5 a4 0x2101000100 a5 0x25d000037c0000 a6 0xff00200400202000
+I   1.102190 [3164193] rsx: context attribute 0x301 a3 0x6 a4 0x2101000100 a5 0x25d00003840000 a6 0xff00200400202000
+I   1.102248 [3164193] rsx: context attribute 0x300 a3 0x7 a4 0x30b002103330000 a5 0xd00685d82c4 a6 0x0
+I   1.192140 [3164193] prx: load '/dev_flash/sys/external/libsysutil_game.sprx' -> 0x23029100 (HLE, start 0x00000000)
+I   1.192177 [3164193] prx: started 'libsysutil_game.sprx'
+I   1.192212 [3164193] tty: [0] [IPC] Module 3e loaded (28160k remaining)
+I   1.192223 [3164193] cellGame: cellGameBootCheck -> type 1 attrs 0x0 (CATEGORY 'DG', dir '')
+I   1.192229 [3164193] cellGame: cellGameGetParamString(100) -> 'BLES00680'
+I   1.192236 [3164193] cellGame: cellGameContentPermit -> '/dev_bdvd/PS3_GAME'
+I   1.192312 [3164193] tty: [0] [IPC] Module 3e unloaded (28160k remaining)
+I   1.192932 [3164193] stacks: thread 16777233 '[RDR2] Render Thread' requested 0x41000 allocated 0x41000 range 0xd0270000..0xd02b1000 guard 0xd0260000..0xd0270000 (adjacent)
+I   1.192943 [3164193] ppu: _sys_ppu_thread_create '[RDR2] Render Thread' entry 0x01356420 arg 0x165cc4c prio 2048 stack 0x40400 flags 0x1 -> 0x1000011
+I   1.193012 [3164193] tty: [0] [IPC] '[RDR2] Render Thread' has TID01000011 (28160k remaining)
+I   1.193196 [3164234] ppu: thread 0x1000011 '[RDR2] Render Thread' start entry opd 0x01356420
+I   1.202606 [3164220] rsx: flip 1 (buffer 0) worst 0.0 ms, >50ms 0, >100ms 0
+I   1.494395 [3164193] rsx: context attribute 0x300 a3 0x8 a4 0x3ac001103b50000 a5 0xa005c5ec2ed a6 0x0
+I   1.494452 [3164193] rsx: context attribute 0x300 a3 0x9 a4 0x3b6002103ba0000 a5 0x5005c5f62f7 a6 0x0
+I   1.494506 [3164193] rsx: context attribute 0x300 a3 0xa a4 0x3bb003103ec0000 a5 0x14005c65a2fc a6 0x0
+I   1.680197 [3164193] rsx: context attribute 0x301 a3 0x7 a4 0x2101000100 a5 0x25d000030b0000 a6 0xff00200400202000
+I   1.680562 [3164193] rsx: context attribute 0x300 a3 0xb a4 0x3ed001104820000 a5 0x4005c78632e a6 0x0
+I   1.683538 [3164193] rsx: context attribute 0x300 a3 0xc a4 0x496002104b00000 a5 0x2005c7bc3c4 a6 0x0
+I   1.685667 [3164193] rsx: context attribute 0x300 a3 0xd a4 0x4b5003104c90000 a5 0x2005c7e63df a6 0x0
+I   1.986808 [3164193] trap: trap 0 read 0x0177caa8 prev 0x00000000 -> 0x00000000 (guest lr 0x00609a40) by main_thread
+I   1.986861 [3164193] trap:    <- cw::blockwatch_hit(unsigned int, unsigned int, unsigned char const*, char const*)+0xed <- rsv::store_range(unsigned int, unsigned char const*, unsigned int)+0x45 <- exe+0x63b1bdc <- exe+0x48a4d67 <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38 <- exe+0x1aca717 <- ppu::call_indirect(ppu::Context&, unsigned char*, unsigned int)+0x953
+I   1.986889 [3164193] blockwatch: WRITE +0x008 (0x0177caa8) w4 prev 0x00000000 -> 0x00000000 by rsv::store_range | guest lr 0x00609a40 rdr+0x5f9840 f_00000000+0x0 | thread main_thread
+I   2.012094 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63b1bdc ./build-40/ps3base+0x48a4d67 ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80 ./build-40/ps3base+0x42480a8
+I   2.025662 [3164223] tty: [0] [IPC] Thread TID01000010 exited (28160k remaining)
+I   2.025889 [3164223] stacks: thread 16777234 '[RAGE] LoadThread' requested 0x4000 allocated 0x4000 range 0xd02d0000..0xd02d4000 guard 0xd02c0000..0xd02d0000 (adjacent)
+I   2.025897 [3164223] ppu: _sys_ppu_thread_create '[RAGE] LoadThread' entry 0x01356420 arg 0x165cc4c prio 2048 stack 0x4000 flags 0x1 -> 0x1000012
+I   2.026163 [3164223] tty: [0] [IPC] '[RAGE] LoadThread' has TID01000012 (28160k remaining)
+I   2.026226 [3164263] ppu: thread 0x1000012 '[RAGE] LoadThread' start entry opd 0x01356420
+W   2.026267 [3164263] savedata: 'BLES00680RDR2MPSAVE_SAV' stat callback result -4
+I   2.026307 [3164263] ppu: thread 0x1000012 '[RAGE] LoadThread' sys_ppu_thread_exit(0xdeadc0de) from lr=0x30004ea4 liblv2+0x4ea4 (no lifted code)
+I   2.026313 [3164263] ppu: thread 0x1000012 '[RAGE] LoadThread' exit 0xdeadc0de lr=0x30004ea4
+I   2.036083 [3164193] trap: trap 0 write 0x0177caa8 prev 0x00000000 -> 0x00000000 (guest lr 0x00609a40) by main_thread
+I   2.036112 [3164193] trap:    <- libc.so.6+0x188ddb <- rsv::store_range(unsigned int, unsigned char const*, unsigned int)+0x5d0 <- exe+0x63b1bdc <- exe+0x48a4d67 <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38 <- exe+0x1aca717 <- ppu::call_indirect(ppu::Context&, unsigned char*, unsigned int)+0x953
+I   2.059083 [3164193] trap: trap 0 write 0x0177caa8 prev 0x00000000 -> 0x00000000 (guest lr 0x00609a40) by main_thread
+I   2.059119 [3164193] trap:    <- libc.so.6+0x188ddf <- rsv::store_range(unsigned int, unsigned char const*, unsigned int)+0x5d0 <- exe+0x63b1bdc <- exe+0x48a4d67 <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38 <- exe+0x1aca717 <- ppu::call_indirect(ppu::Context&, unsigned char*, unsigned int)+0x953
+I   2.080027 [3164193] trap: trap 0 read 0x0177caa4 prev 0x00000000 -> 0x00000000 (guest lr 0x00609a40) by main_thread
+I   2.080297 [3164193] trap:    <- cw::blockwatch_hit(unsigned int, unsigned int, unsigned char const*, char const*)+0xed <- rsv::store_range(unsigned int, unsigned char const*, unsigned int)+0x45 <- exe+0x63b1c5d <- exe+0x48a4d67 <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38 <- exe+0x1aca717 <- ppu::call_indirect(ppu::Context&, unsigned char*, unsigned int)+0x953
+I   2.080316 [3164193] blockwatch: WRITE +0x004 (0x0177caa4) w4 prev 0x00000000 -> 0x00000400 by rsv::store_range | guest lr 0x00609a40 rdr+0x5f9840 f_00000000+0x0 | thread main_thread
+I   2.108475 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63b1c5d ./build-40/ps3base+0x48a4d67 ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80 ./build-40/ps3base+0x42480a8
+I   2.128039 [3164193] trap: trap 0 write 0x0177caa4 prev 0x00000000 -> 0x00000000 (guest lr 0x00609a40) by main_thread
+I   2.128078 [3164193] trap:    <- libc.so.6+0x188ddb <- rsv::store_range(unsigned int, unsigned char const*, unsigned int)+0x5d0 <- exe+0x63b1c5d <- exe+0x48a4d67 <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38 <- exe+0x1aca717 <- ppu::call_indirect(ppu::Context&, unsigned char*, unsigned int)+0x953
+I   2.138034 [3164193] trap: trap 0 write 0x0177caa4 prev 0x00000000 -> 0x00000000 (guest lr 0x00609a40) by main_thread
+I   2.138070 [3164193] trap:    <- libc.so.6+0x188ddf <- rsv::store_range(unsigned int, unsigned char const*, unsigned int)+0x5d0 <- exe+0x63b1c5d <- exe+0x48a4d67 <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38 <- exe+0x1aca717 <- ppu::call_indirect(ppu::Context&, unsigned char*, unsigned int)+0x953
+I   2.151091 [3164193] trap: trap 0 read 0x0177caa8 prev 0x00000000 -> 0x00000000 (guest lr 0x00609a40) by main_thread
+I   2.151128 [3164193] trap:    <- exe+0x63b1db6 <- exe+0x48a4d67 <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38 <- exe+0x1aca717 <- ppu::call_indirect(ppu::Context&, unsigned char*, unsigned int)+0x953 <- exe+0x1abe40c <- ppu::call_indirect(ppu::Context&, unsigned char*, unsigned int)+0x953
+I   2.164140 [3164193] trap: trap 0 read 0x0177caa8 prev 0x00000000 -> 0x00000000 (guest lr 0x00609a40) by main_thread
+I   2.164182 [3164193] trap:    <- cw::blockwatch_hit(unsigned int, unsigned int, unsigned char const*, char const*)+0xed <- rsv::store_range(unsigned int, unsigned char const*, unsigned int)+0x45 <- exe+0x63b1fb5 <- exe+0x48a4d67 <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38 <- exe+0x1aca717 <- ppu::call_indirect(ppu::Context&, unsigned char*, unsigned int)+0x953
+I   2.164238 [3164193] blockwatch: WRITE +0x008 (0x0177caa8) w4 prev 0x00000000 -> 0x00000001 by rsv::store_range | guest lr 0x00609a40 rdr+0x5f9840 f_00000000+0x0 | thread main_thread
+I   2.177520 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63b1fb5 ./build-40/ps3base+0x48a4d67 ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80 ./build-40/ps3base+0x42480a8
+I   2.192266 [3164193] trap: trap 0 write 0x0177caa8 prev 0x00000000 -> 0x00000001 (guest lr 0x00609a40) by main_thread
+I   2.192328 [3164193] trap:    <- libc.so.6+0x188ddb <- rsv::store_range(unsigned int, unsigned char const*, unsigned int)+0x5d0 <- exe+0x63b1fb5 <- exe+0x48a4d67 <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38 <- exe+0x1aca717 <- ppu::call_indirect(ppu::Context&, unsigned char*, unsigned int)+0x953
+I   2.202334 [3164193] trap: trap 0 write 0x0177caa8 prev 0x00000001 -> 0x00000001 (guest lr 0x00609a40) by main_thread
+I   2.202373 [3164193] trap:    <- libc.so.6+0x188ddf <- rsv::store_range(unsigned int, unsigned char const*, unsigned int)+0x5d0 <- exe+0x63b1fb5 <- exe+0x48a4d67 <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38 <- exe+0x1aca717 <- ppu::call_indirect(ppu::Context&, unsigned char*, unsigned int)+0x953
+I   2.213582 [3164193] trap: trap 0 read 0x0177caa4 prev 0x00000001 -> 0x00000001 (guest lr 0x00609a40) by main_thread
+I   2.213638 [3164193] trap:    <- cw::blockwatch_hit(unsigned int, unsigned int, unsigned char const*, char const*)+0xed <- rsv::store_range(unsigned int, unsigned char const*, unsigned int)+0x45 <- exe+0x63b2036 <- exe+0x48a4d67 <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38 <- exe+0x1aca717 <- ppu::call_indirect(ppu::Context&, unsigned char*, unsigned int)+0x953
+I   2.213682 [3164193] blockwatch: WRITE +0x004 (0x0177caa4) w4 prev 0x00000400 -> 0x00000200 by rsv::store_range | guest lr 0x00609a40 rdr+0x5f9840 f_00000000+0x0 | thread main_thread
+I   2.230953 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63b2036 ./build-40/ps3base+0x48a4d67 ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80 ./build-40/ps3base+0x42480a8
+I   2.241554 [3164193] trap: trap 0 write 0x0177caa4 prev 0x00000001 -> 0x00000001 (guest lr 0x00609a40) by main_thread
+I   2.241619 [3164193] trap:    <- libc.so.6+0x188ddb <- rsv::store_range(unsigned int, unsigned char const*, unsigned int)+0x5d0 <- exe+0x63b2036 <- exe+0x48a4d67 <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38 <- exe+0x1aca717 <- ppu::call_indirect(ppu::Context&, unsigned char*, unsigned int)+0x953
+I   2.254811 [3164193] trap: trap 0 write 0x0177caa4 prev 0x00000001 -> 0x00000001 (guest lr 0x00609a40) by main_thread
+I   2.254877 [3164193] trap:    <- libc.so.6+0x188ddf <- rsv::store_range(unsigned int, unsigned char const*, unsigned int)+0x5d0 <- exe+0x63b2036 <- exe+0x48a4d67 <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38 <- exe+0x1aca717 <- ppu::call_indirect(ppu::Context&, unsigned char*, unsigned int)+0x953
+I   2.265452 [3164193] trap: trap 0 read 0x0177caa4 prev 0x00000001 -> 0x00000001 (guest lr 0x00609a40) by main_thread
+I   2.265493 [3164193] trap:    <- exe+0x63b20a7 <- exe+0x48a4d67 <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38 <- exe+0x1aca717 <- ppu::call_indirect(ppu::Context&, unsigned char*, unsigned int)+0x953 <- exe+0x1abe40c <- ppu::call_indirect(ppu::Context&, unsigned char*, unsigned int)+0x953
+I   2.270764 [3164193] sysutil: cellAudioOutGetSoundAvailability(0, type 0, fs 0x4) -> 2
+I   2.270797 [3164193] sysutil: cellAudioOutGetSoundAvailability(0, type 1, fs 0x4) -> 0
+I   2.270822 [3164193] tty: [0] [AUDIO] LPCM 	8->2 channel downmix 	2 channel
+I   2.270848 [3164193] sysutil: cellAudioOutConfigure(0): channel 2 encoder 0 downMixer 0
+I   2.270855 [3164193] sysutil: cellAudioOutGetState(0, 0): state 0 encoder 0 downMixer 0 ch 2
+I   2.275999 [3164193] cellAudio: cellAudioInit
+I   2.276049 [3164193] cellAudio: port 0 open: 8 ch, 8 blocks at 0x12190000
+I   2.296003 [3164193] trap: trap 0 read 0x0177caa8 prev 0x00000001 -> 0x00000001 (guest lr 0x0091fd98) by main_thread
+I   2.296045 [3164193] trap:    <- cw::blockwatch_hit(unsigned int, unsigned int, unsigned char const*, char const*)+0xed <- rsv::store_range(unsigned int, unsigned char const*, unsigned int)+0x45 <- exe+0x63b1bdc <- exe+0x63b4a2f <- exe+0x63bb685 <- exe+0x48a58ad <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38
+I   2.296169 [3164193] blockwatch: WRITE +0x008 (0x0177caa8) w4 prev 0x00000001 -> 0x00000000 by rsv::store_range | guest lr 0x0091fd98 rdr+0x90fb98 f_00000000+0x0 | thread main_thread
+W   2.302893 [3164276] cellAudio: SDL audio open failed: ALSA: Couldn't open audio device: No such file or directory
+I   2.310585 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63b1bdc ./build-40/ps3base+0x63b4a2f ./build-40/ps3base+0x63bb685 ./build-40/ps3base+0x48a58ad ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953
+I   2.325709 [3164193] trap: trap 0 write 0x0177caa8 prev 0x00000001 -> 0x00000000 (guest lr 0x0091fd98) by main_thread
+I   2.325744 [3164193] trap:    <- libc.so.6+0x188ddb <- rsv::store_range(unsigned int, unsigned char const*, unsigned int)+0x5d0 <- exe+0x63b1bdc <- exe+0x63b4a2f <- exe+0x63bb685 <- exe+0x48a58ad <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38
+I   2.336400 [3164193] trap: trap 0 write 0x0177caa8 prev 0x00000000 -> 0x00000000 (guest lr 0x0091fd98) by main_thread
+I   2.336433 [3164193] trap:    <- libc.so.6+0x188ddf <- rsv::store_range(unsigned int, unsigned char const*, unsigned int)+0x5d0 <- exe+0x63b1bdc <- exe+0x63b4a2f <- exe+0x63bb685 <- exe+0x48a58ad <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38
+I   2.348207 [3164193] trap: trap 0 read 0x0177caa4 prev 0x00000000 -> 0x00000000 (guest lr 0x0091fd98) by main_thread
+I   2.348252 [3164193] trap:    <- cw::blockwatch_hit(unsigned int, unsigned int, unsigned char const*, char const*)+0xed <- rsv::store_range(unsigned int, unsigned char const*, unsigned int)+0x45 <- exe+0x63b1c5d <- exe+0x63b4a2f <- exe+0x63bb685 <- exe+0x48a58ad <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38
+I   2.348275 [3164193] blockwatch: WRITE +0x004 (0x0177caa4) w4 prev 0x00000200 -> 0x00000400 by rsv::store_range | guest lr 0x0091fd98 rdr+0x90fb98 f_00000000+0x0 | thread main_thread
+I   2.365755 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63b1c5d ./build-40/ps3base+0x63b4a2f ./build-40/ps3base+0x63bb685 ./build-40/ps3base+0x48a58ad ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953
+I   2.376905 [3164193] trap: trap 0 write 0x0177caa4 prev 0x00000000 -> 0x00000000 (guest lr 0x0091fd98) by main_thread
+I   2.376945 [3164193] trap:    <- libc.so.6+0x188ddb <- rsv::store_range(unsigned int, unsigned char const*, unsigned int)+0x5d0 <- exe+0x63b1c5d <- exe+0x63b4a2f <- exe+0x63bb685 <- exe+0x48a58ad <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38
+I   2.392226 [3164193] trap: trap 0 write 0x0177caa4 prev 0x00000000 -> 0x00000000 (guest lr 0x0091fd98) by main_thread
+I   2.392264 [3164193] trap:    <- libc.so.6+0x188ddf <- rsv::store_range(unsigned int, unsigned char const*, unsigned int)+0x5d0 <- exe+0x63b1c5d <- exe+0x63b4a2f <- exe+0x63bb685 <- exe+0x48a58ad <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38
+I   2.402781 [3164193] trap: trap 0 read 0x0177caa8 prev 0x00000000 -> 0x00000000 (guest lr 0x0091fd98) by main_thread
+I   2.402816 [3164193] trap:    <- exe+0x63b1db6 <- exe+0x63b4a2f <- exe+0x63bb685 <- exe+0x48a58ad <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38 <- exe+0x1aca717 <- ppu::call_indirect(ppu::Context&, unsigned char*, unsigned int)+0x953
+I   2.414656 [3164193] trap: trap 0 read 0x0177caa8 prev 0x00000000 -> 0x00000000 (guest lr 0x0091fd98) by main_thread
+I   2.414708 [3164193] trap:    <- cw::blockwatch_hit(unsigned int, unsigned int, unsigned char const*, char const*)+0xed <- rsv::store_range(unsigned int, unsigned char const*, unsigned int)+0x45 <- exe+0x63b1fb5 <- exe+0x63b4a2f <- exe+0x63bb685 <- exe+0x48a58ad <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38
+I   2.414733 [3164193] blockwatch: WRITE +0x008 (0x0177caa8) w4 prev 0x00000000 -> 0x00000001 by rsv::store_range | guest lr 0x0091fd98 rdr+0x90fb98 f_00000000+0x0 | thread main_thread
+I   2.432577 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63b1fb5 ./build-40/ps3base+0x63b4a2f ./build-40/ps3base+0x63bb685 ./build-40/ps3base+0x48a58ad ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953
+I   2.443842 [3164193] trap: trap 0 write 0x0177caa8 prev 0x00000000 -> 0x00000001 (guest lr 0x0091fd98) by main_thread
+I   2.443894 [3164193] trap:    <- libc.so.6+0x188ddb <- rsv::store_range(unsigned int, unsigned char const*, unsigned int)+0x5d0 <- exe+0x63b1fb5 <- exe+0x63b4a2f <- exe+0x63bb685 <- exe+0x48a58ad <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38
+I   2.458505 [3164193] trap: trap 0 write 0x0177caa8 prev 0x00000001 -> 0x00000001 (guest lr 0x0091fd98) by main_thread
+I   2.458563 [3164193] trap:    <- libc.so.6+0x188ddf <- rsv::store_range(unsigned int, unsigned char const*, unsigned int)+0x5d0 <- exe+0x63b1fb5 <- exe+0x63b4a2f <- exe+0x63bb685 <- exe+0x48a58ad <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38
+I   2.469774 [3164193] trap: trap 0 read 0x0177caa4 prev 0x00000001 -> 0x00000001 (guest lr 0x0091fd98) by main_thread
+I   2.469825 [3164193] trap:    <- cw::blockwatch_hit(unsigned int, unsigned int, unsigned char const*, char const*)+0xed <- rsv::store_range(unsigned int, unsigned char const*, unsigned int)+0x45 <- exe+0x63b2036 <- exe+0x63b4a2f <- exe+0x63bb685 <- exe+0x48a58ad <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38
+I   2.469848 [3164193] blockwatch: WRITE +0x004 (0x0177caa4) w4 prev 0x00000400 -> 0x00000200 by rsv::store_range | guest lr 0x0091fd98 rdr+0x90fb98 f_00000000+0x0 | thread main_thread
+I   2.487472 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63b2036 ./build-40/ps3base+0x63b4a2f ./build-40/ps3base+0x63bb685 ./build-40/ps3base+0x48a58ad ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953
+I   2.498909 [3164193] trap: trap 0 write 0x0177caa4 prev 0x00000001 -> 0x00000001 (guest lr 0x0091fd98) by main_thread
+I   2.498958 [3164193] trap:    <- libc.so.6+0x188ddb <- rsv::store_range(unsigned int, unsigned char const*, unsigned int)+0x5d0 <- exe+0x63b2036 <- exe+0x63b4a2f <- exe+0x63bb685 <- exe+0x48a58ad <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38
+I   2.510937 [3164193] trap: trap 0 write 0x0177caa4 prev 0x00000001 -> 0x00000001 (guest lr 0x0091fd98) by main_thread
+I   2.510979 [3164193] trap:    <- libc.so.6+0x188ddf <- rsv::store_range(unsigned int, unsigned char const*, unsigned int)+0x5d0 <- exe+0x63b2036 <- exe+0x63b4a2f <- exe+0x63bb685 <- exe+0x48a58ad <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38
+I   2.525420 [3164193] trap: trap 0 read 0x0177caa4 prev 0x00000001 -> 0x00000001 (guest lr 0x0091fd98) by main_thread
+I   2.525474 [3164193] trap:    <- exe+0x63b20a7 <- exe+0x63b4a2f <- exe+0x63bb685 <- exe+0x48a58ad <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38 <- exe+0x1aca717 <- ppu::call_indirect(ppu::Context&, unsigned char*, unsigned int)+0x953
+I   2.542133 [3164193] trap: trap 0 read 0x0177caa8 prev 0x00000001 -> 0x00000001 (guest lr 0x0091fdb0) by main_thread
+I   2.542175 [3164193] trap:    <- cw::blockwatch_hit(unsigned int, unsigned int, unsigned char const*, char const*)+0xed <- rsv::store_range(unsigned int, unsigned char const*, unsigned int)+0x45 <- exe+0x63b4bc8 <- exe+0x63bb685 <- exe+0x48a58ad <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38 <- exe+0x1aca717
+I   2.542223 [3164193] blockwatch: WRITE +0x008 (0x0177caa8) w4 prev 0x00000001 -> 0x00000000 by rsv::store_range | guest lr 0x0091fdb0 rdr+0x90fbb0 f_00000000+0x0 | thread main_thread
+I   2.559002 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63b4bc8 ./build-40/ps3base+0x63bb685 ./build-40/ps3base+0x48a58ad ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   2.569329 [3164193] trap: trap 0 write 0x0177caa8 prev 0x00000001 -> 0x00000000 (guest lr 0x0091fdb0) by main_thread
+I   2.569359 [3164193] trap:    <- libc.so.6+0x188ddb <- rsv::store_range(unsigned int, unsigned char const*, unsigned int)+0x5d0 <- exe+0x63b4bc8 <- exe+0x63bb685 <- exe+0x48a58ad <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38 <- exe+0x1aca717
+I   2.580291 [3164193] trap: trap 0 write 0x0177caa8 prev 0x00000000 -> 0x00000000 (guest lr 0x0091fdb0) by main_thread
+I   2.580342 [3164193] trap:    <- libc.so.6+0x188ddf <- rsv::store_range(unsigned int, unsigned char const*, unsigned int)+0x5d0 <- exe+0x63b4bc8 <- exe+0x63bb685 <- exe+0x48a58ad <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38 <- exe+0x1aca717
+I   2.596078 [3164193] trap: trap 0 read 0x0177caa4 prev 0x00000000 -> 0x00000000 (guest lr 0x0091fdb0) by main_thread
+I   2.596118 [3164193] trap:    <- cw::blockwatch_hit(unsigned int, unsigned int, unsigned char const*, char const*)+0xed <- rsv::store_range(unsigned int, unsigned char const*, unsigned int)+0x45 <- ppu::st32(unsigned char*, unsigned int, unsigned int)+0x80 <- exe+0x63b4fa6 <- exe+0x63bb685 <- exe+0x48a58ad <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38
+I   2.596157 [3164193] blockwatch: WRITE +0x004 (0x0177caa4) w4 prev 0x00000200 -> 0x00000400 by rsv::store_range | guest lr 0x0091fdb0 rdr+0x90fbb0 f_00000000+0x0 | thread main_thread
+I   2.610300 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 _ZN3ppu4st32EPhjj+0x80 ./build-40/ps3base+0x63b4fa6 ./build-40/ps3base+0x63bb685 ./build-40/ps3base+0x48a58ad ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953
+I   2.624661 [3164193] trap: trap 0 write 0x0177caa4 prev 0x00000000 -> 0x00000000 (guest lr 0x0091fdb0) by main_thread
+I   2.624701 [3164193] trap:    <- libc.so.6+0x188ddb <- rsv::store_range(unsigned int, unsigned char const*, unsigned int)+0x5d0 <- ppu::st32(unsigned char*, unsigned int, unsigned int)+0x80 <- exe+0x63b4fa6 <- exe+0x63bb685 <- exe+0x48a58ad <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38
+I   2.634955 [3164193] trap: trap 0 write 0x0177caa4 prev 0x00000000 -> 0x00000000 (guest lr 0x0091fdb0) by main_thread
+I   2.634997 [3164193] trap:    <- libc.so.6+0x188ddf <- rsv::store_range(unsigned int, unsigned char const*, unsigned int)+0x5d0 <- ppu::st32(unsigned char*, unsigned int, unsigned int)+0x80 <- exe+0x63b4fa6 <- exe+0x63bb685 <- exe+0x48a58ad <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38
+I   2.646499 [3164193] trap: trap 0 read 0x0177caa8 prev 0x00000000 -> 0x00000000 (guest lr 0x0091fdb0) by main_thread
+I   2.646553 [3164193] trap:    <- exe+0x63b5107 <- exe+0x63bb685 <- exe+0x48a58ad <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38 <- exe+0x1aca717 <- ppu::call_indirect(ppu::Context&, unsigned char*, unsigned int)+0x953 <- exe+0x1abe40c
+I   2.661351 [3164193] trap: trap 0 read 0x0177caa8 prev 0x00000000 -> 0x00000000 (guest lr 0x0091fdb0) by main_thread
+I   2.661398 [3164193] trap:    <- cw::blockwatch_hit(unsigned int, unsigned int, unsigned char const*, char const*)+0xed <- rsv::store_range(unsigned int, unsigned char const*, unsigned int)+0x45 <- ppu::st32(unsigned char*, unsigned int, unsigned int)+0x80 <- exe+0x63b5159 <- exe+0x63bb685 <- exe+0x48a58ad <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38
+I   2.661437 [3164193] blockwatch: WRITE +0x008 (0x0177caa8) w4 prev 0x00000000 -> 0x00000001 by rsv::store_range | guest lr 0x0091fdb0 rdr+0x90fbb0 f_00000000+0x0 | thread main_thread
+I   2.675539 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 _ZN3ppu4st32EPhjj+0x80 ./build-40/ps3base+0x63b5159 ./build-40/ps3base+0x63bb685 ./build-40/ps3base+0x48a58ad ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953
+I   2.689842 [3164193] trap: trap 0 write 0x0177caa8 prev 0x00000000 -> 0x00000001 (guest lr 0x0091fdb0) by main_thread
+I   2.689880 [3164193] trap:    <- libc.so.6+0x188ddb <- rsv::store_range(unsigned int, unsigned char const*, unsigned int)+0x5d0 <- ppu::st32(unsigned char*, unsigned int, unsigned int)+0x80 <- exe+0x63b5159 <- exe+0x63bb685 <- exe+0x48a58ad <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38
+I   2.700200 [3164193] trap: trap 0 write 0x0177caa8 prev 0x00000001 -> 0x00000001 (guest lr 0x0091fdb0) by main_thread
+I   2.700258 [3164193] trap:    <- libc.so.6+0x188ddf <- rsv::store_range(unsigned int, unsigned char const*, unsigned int)+0x5d0 <- ppu::st32(unsigned char*, unsigned int, unsigned int)+0x80 <- exe+0x63b5159 <- exe+0x63bb685 <- exe+0x48a58ad <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38
+I   2.711603 [3164193] trap: trap 0 read 0x0177caa4 prev 0x00000001 -> 0x00000001 (guest lr 0x0091fdb0) by main_thread
+I   2.711652 [3164193] trap:    <- cw::blockwatch_hit(unsigned int, unsigned int, unsigned char const*, char const*)+0xed <- rsv::store_range(unsigned int, unsigned char const*, unsigned int)+0x45 <- ppu::st32(unsigned char*, unsigned int, unsigned int)+0x80 <- exe+0x63b5166 <- exe+0x63bb685 <- exe+0x48a58ad <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38
+I   2.711677 [3164193] blockwatch: WRITE +0x004 (0x0177caa4) w4 prev 0x00000400 -> 0x00000200 by rsv::store_range | guest lr 0x0091fdb0 rdr+0x90fbb0 f_00000000+0x0 | thread main_thread
+I   2.729133 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 _ZN3ppu4st32EPhjj+0x80 ./build-40/ps3base+0x63b5166 ./build-40/ps3base+0x63bb685 ./build-40/ps3base+0x48a58ad ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953
+I   2.740625 [3164193] trap: trap 0 write 0x0177caa4 prev 0x00000001 -> 0x00000001 (guest lr 0x0091fdb0) by main_thread
+I   2.740682 [3164193] trap:    <- libc.so.6+0x188ddb <- rsv::store_range(unsigned int, unsigned char const*, unsigned int)+0x5d0 <- ppu::st32(unsigned char*, unsigned int, unsigned int)+0x80 <- exe+0x63b5166 <- exe+0x63bb685 <- exe+0x48a58ad <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38
+I   2.754076 [3164193] trap: trap 0 write 0x0177caa4 prev 0x00000001 -> 0x00000001 (guest lr 0x0091fdb0) by main_thread
+I   2.754135 [3164193] trap:    <- libc.so.6+0x188ddf <- rsv::store_range(unsigned int, unsigned char const*, unsigned int)+0x5d0 <- ppu::st32(unsigned char*, unsigned int, unsigned int)+0x80 <- exe+0x63b5166 <- exe+0x63bb685 <- exe+0x48a58ad <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38
+I   2.765269 [3164193] trap: trap 0 read 0x0177caa4 prev 0x00000001 -> 0x00000001 (guest lr 0x0091fdb0) by main_thread
+I   2.765324 [3164193] trap:    <- exe+0x63b5180 <- exe+0x63bb685 <- exe+0x48a58ad <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38 <- exe+0x1aca717 <- ppu::call_indirect(ppu::Context&, unsigned char*, unsigned int)+0x953 <- exe+0x1abe40c
+I   2.776753 [3164193] trap: trap 0 read 0x0177caa8 prev 0x00000001 -> 0x00000001 (guest lr 0x0091fdb0) by main_thread
+I   2.776811 [3164193] trap:    <- exe+0x63b51d3 <- exe+0x63bb685 <- exe+0x48a58ad <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38 <- exe+0x1aca717 <- ppu::call_indirect(ppu::Context&, unsigned char*, unsigned int)+0x953 <- exe+0x1abe40c
+I   2.791103 [3164193] trap: trap 0 read 0x0177caa8 prev 0x00000001 -> 0x00000001 (guest lr 0x0091fdb0) by main_thread
+I   2.791145 [3164193] trap:    <- exe+0x63b5655 <- exe+0x63bb685 <- exe+0x48a58ad <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38 <- exe+0x1aca717 <- ppu::call_indirect(ppu::Context&, unsigned char*, unsigned int)+0x953 <- exe+0x1abe40c
+I   2.791210 [3164193] blockwatch: WRITE +0x00c (0x0177caac) w4 prev 0x00000000 -> 0x70cdc900 by rsv::store_range | guest lr 0x0091fdb0 rdr+0x90fbb0 f_00000000+0x0 | thread main_thread
+I   2.804129 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 _ZN3ppu4st32EPhjj+0x80 ./build-40/ps3base+0x63b56ab ./build-40/ps3base+0x63bb685 ./build-40/ps3base+0x48a58ad ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953
+I   2.815001 [3164193] trap: trap 0 read 0x0177caa4 prev 0x00000001 -> 0x00000001 (guest lr 0x0091fdb0) by main_thread
+I   2.815057 [3164193] trap:    <- exe+0x63b56e6 <- exe+0x63bb685 <- exe+0x48a58ad <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38 <- exe+0x1aca717 <- ppu::call_indirect(ppu::Context&, unsigned char*, unsigned int)+0x953 <- exe+0x1abe40c
+I   2.829997 [3164193] trap: trap 0 read 0x0177caa8 prev 0x00000001 -> 0x00000001 (guest lr 0x0091fdb0) by main_thread
+I   2.830035 [3164193] trap:    <- exe+0x63b573c <- exe+0x63bb685 <- exe+0x48a58ad <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38 <- exe+0x1aca717 <- ppu::call_indirect(ppu::Context&, unsigned char*, unsigned int)+0x953 <- exe+0x1abe40c
+I   2.842673 [3164193] trap: trap 0 read 0x0177caa8 prev 0x00000001 -> 0x00000001 (guest lr 0x009262b0) by main_thread
+I   2.842712 [3164193] trap:    <- exe+0x63d15eb <- exe+0x63b6647 <- exe+0x63bb685 <- exe+0x48a58ad <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38 <- exe+0x1aca717 <- ppu::call_indirect(ppu::Context&, unsigned char*, unsigned int)+0x953
+I   2.858410 [3164193] trap: trap 0 read 0x0177caa8 prev 0x00000001 -> 0x00000001 (guest lr 0x009262b0) by main_thread
+I   2.858472 [3164193] trap:    <- exe+0x63d15eb <- exe+0x63b6647 <- exe+0x63bb685 <- exe+0x48a58ad <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38 <- exe+0x1aca717 <- ppu::call_indirect(ppu::Context&, unsigned char*, unsigned int)+0x953
+I   2.869264 [3164193] trap: trap 0 read 0x0177caa8 prev 0x00000001 -> 0x00000001 (guest lr 0x009262b0) by main_thread
+I   2.869296 [3164193] trap:    <- exe+0x63d15eb <- exe+0x63b6647 <- exe+0x63bb685 <- exe+0x48a58ad <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38 <- exe+0x1aca717 <- ppu::call_indirect(ppu::Context&, unsigned char*, unsigned int)+0x953
+I   2.880635 [3164193] trap: trap 0 read 0x0177caa8 prev 0x00000001 -> 0x00000001 (guest lr 0x009262b0) by main_thread (further hits not logged)
+I   2.880687 [3164193] trap:    <- exe+0x63d15eb <- exe+0x63b6647 <- exe+0x63bb685 <- exe+0x48a58ad <- exe+0x48a6218 <- exe+0x48a9916 <- exe+0x48d1b92 <- exe+0x48d3142 <- exe+0x48d4ebd <- exe+0x7fe7d38 <- exe+0x1aca717 <- ppu::call_indirect(ppu::Context&, unsigned char*, unsigned int)+0x953
+I   3.026922 [3164223] tty: [0] [IPC] Thread TID01000012 exited (28160k remaining)
+I   3.027214 [3164223] stacks: thread 16777235 '[RAGE] LoadThread' requested 0x4000 allocated 0x4000 range 0xd02f0000..0xd02f4000 guard 0xd02e0000..0xd02f0000 (adjacent)
+I   3.027239 [3164223] ppu: _sys_ppu_thread_create '[RAGE] LoadThread' entry 0x01356420 arg 0x165cc4c prio 2048 stack 0x4000 flags 0x1 -> 0x1000013
+I   3.027334 [3164223] tty: [0] [IPC] '[RAGE] LoadThread' has TID01000013 (28160k remaining)
+I   3.027363 [3164287] ppu: thread 0x1000013 '[RAGE] LoadThread' start entry opd 0x01356420
+W   3.027403 [3164287] savedata: 'BLES00680RDR2SAVE0_SAV' stat callback result -4
+I   3.027448 [3164287] ppu: thread 0x1000013 '[RAGE] LoadThread' sys_ppu_thread_exit(0xdeadc0de) from lr=0x30004ea4 liblv2+0x4ea4 (no lifted code)
+I   3.027455 [3164287] ppu: thread 0x1000013 '[RAGE] LoadThread' exit 0xdeadc0de lr=0x30004ea4
+I   3.168801 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000000 -> 0x00000000 by rsv::store_range | guest lr 0x0092043c rdr+0x91023c f_00000000+0x0 | thread main_thread
+I   3.182701 [3164220] rsx: flip 61 (buffer 0) worst 33.7 ms, >50ms 0, >100ms 0
+I   3.188108 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 _ZN3ppu4st32EPhjj+0x80 ./build-40/ps3base+0x63b6859 ./build-40/ps3base+0x63bb685 ./build-40/ps3base+0x48a58ad ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953
+I   3.344568 [3164193] stacks: thread 16777236 '[RAGE Audio] Multistream' requested 0x4000 allocated 0x4000 range 0xd0310000..0xd0314000 guard 0xd0300000..0xd0310000 (adjacent)
+I   3.344616 [3164193] ppu: _sys_ppu_thread_create '[RAGE Audio] Multistream' entry 0x01356420 arg 0x165cc4c prio 2033 stack 0x4000 flags 0x1 -> 0x1000014
+I   3.344684 [3164193] tty: [0] [IPC] '[RAGE Audio] Multistream' has TID01000014 (28160k remaining)
+I   3.344729 [3164294] ppu: thread 0x1000014 '[RAGE Audio] Multistream' start entry opd 0x01356420
+W   3.361198 [3164193] fs: open '/dev_flash/sys/external/flashMP3.pic' -> ENOENT (host '/root/.config/rpcs3/dev_flash/sys/external/flashMP3.pic')
+I   3.361269 [3164193] tty: [0] Multistream: mp3 failed to load MP3 codec (are you using the correct flash?)
+I   3.361294 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000000 -> 0x00000001 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   3.381748 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   3.382748 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000001 -> 0x00000002 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   3.407011 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   3.408327 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000002 -> 0x00000003 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   3.430840 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   3.432498 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000003 -> 0x00000004 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   3.454116 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   3.455700 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000004 -> 0x00000005 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   3.469394 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   3.471205 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000005 -> 0x00000006 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   3.496208 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   3.497617 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000006 -> 0x00000007 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   3.521247 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   3.523020 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000007 -> 0x00000008 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   3.546105 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   3.546879 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000008 -> 0x00000009 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   3.569820 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   3.570567 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000009 -> 0x0000000a by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   3.595041 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   3.595142 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x0000000a -> 0x0000000b by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   3.609597 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   3.610744 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x0000000b -> 0x0000000c by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   3.634659 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   3.635300 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x0000000c -> 0x0000000d by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   3.659245 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   3.659565 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x0000000d -> 0x0000000e by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   3.673116 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   3.676241 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x0000000e -> 0x0000000f by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   3.698266 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   3.699453 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x0000000f -> 0x00000010 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   3.724750 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   3.724830 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000010 -> 0x00000011 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   3.738880 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   3.743071 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000011 -> 0x00000012 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   3.765377 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   3.766587 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000012 -> 0x00000013 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   3.786894 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   3.792592 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000013 -> 0x00000014 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   3.813093 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   3.813853 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000014 -> 0x00000015 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   3.839540 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   3.841862 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000015 -> 0x00000016 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   3.866804 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   3.869524 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000016 -> 0x00000017 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   3.892144 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   3.894555 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000017 -> 0x00000018 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   3.914013 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   3.915667 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000018 -> 0x00000019 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   3.939403 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   3.941798 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000019 -> 0x0000001a by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   3.967434 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   3.969478 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x0000001a -> 0x0000001b by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   3.993337 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   3.994503 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x0000001b -> 0x0000001c by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.015831 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.019123 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x0000001c -> 0x0000001d by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.027585 [3164223] tty: [0] [IPC] Thread TID01000013 exited (28160k remaining)
+I   4.027772 [3164223] ppu: thread 0x100000c '[RAGE] SavePreLoadThread' sys_ppu_thread_exit(0xdeadc0de) from lr=0x30004ea4 liblv2+0x4ea4 (no lifted code)
+I   4.027779 [3164223] ppu: thread 0x100000c '[RAGE] SavePreLoadThread' exit 0xdeadc0de lr=0x30004ea4
+I   4.034902 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.036292 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x0000001d -> 0x0000001e by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.051605 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.054689 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x0000001e -> 0x0000001f by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.077215 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.078318 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x0000001f -> 0x00000020 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.101317 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.102814 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000020 -> 0x00000021 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.128356 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.128879 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000021 -> 0x00000022 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.148727 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.149738 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000022 -> 0x00000023 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.167993 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.168767 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000023 -> 0x00000024 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.192791 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.195763 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000024 -> 0x00000025 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.216221 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.216837 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000025 -> 0x00000026 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.241777 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.243199 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000026 -> 0x00000027 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.267036 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.268503 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000027 -> 0x00000028 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.294514 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.295909 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000028 -> 0x00000029 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.310271 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.310819 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000029 -> 0x0000002a by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.334197 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.336534 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x0000002a -> 0x0000002b by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.356390 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.357028 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x0000002b -> 0x0000002c by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.379607 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.381184 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x0000002c -> 0x0000002d by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.399688 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.400579 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x0000002d -> 0x0000002e by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.419038 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.419750 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x0000002e -> 0x0000002f by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.439962 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.443185 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x0000002f -> 0x00000030 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.467282 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.469071 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000030 -> 0x00000031 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.493737 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.495445 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000031 -> 0x00000032 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.509921 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.510340 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000032 -> 0x00000033 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.533455 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.534808 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000033 -> 0x00000034 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.560309 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.561638 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000034 -> 0x00000035 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.582703 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.583563 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000035 -> 0x00000036 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.606515 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.610003 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000036 -> 0x00000037 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.633222 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.634734 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000037 -> 0x00000038 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.659168 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.659881 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000038 -> 0x00000039 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.673512 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.676068 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000039 -> 0x0000003a by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.699606 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.700570 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x0000003a -> 0x0000003b by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.719501 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.720903 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x0000003b -> 0x0000003c by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.736600 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.737782 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x0000003c -> 0x0000003d by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.762443 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.763618 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x0000003d -> 0x0000003e by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.785297 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.787796 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x0000003e -> 0x0000003f by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.811728 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.813625 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x0000003f -> 0x00000040 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.837116 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.838690 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000040 -> 0x00000041 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.863133 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.863931 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000041 -> 0x00000042 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.883575 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.884000 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000042 -> 0x00000043 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.908869 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.910132 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000043 -> 0x00000044 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.934555 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.935398 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000044 -> 0x00000045 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.958184 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.958274 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000045 -> 0x00000046 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.973064 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   4.974316 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000046 -> 0x00000047 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   4.999106 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   5.000645 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000047 -> 0x00000048 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   5.024926 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   5.028643 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000048 -> 0x00000049 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   5.043080 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   5.044131 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000049 -> 0x0000004a by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   5.069814 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   5.070398 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x0000004a -> 0x0000004b by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   5.095003 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   5.096367 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x0000004b -> 0x0000004c by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   5.110073 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   5.111260 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x0000004c -> 0x0000004d by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   5.134917 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   5.137041 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x0000004d -> 0x0000004e by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   5.161587 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   5.162253 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x0000004e -> 0x0000004f by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   5.183106 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   5.184265 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x0000004f -> 0x00000050 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   5.184704 [3164220] rsx: flip 121 (buffer 0) worst 33.8 ms, >50ms 0, >100ms 0
+I   5.208841 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   5.209888 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000050 -> 0x00000051 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   5.218738 [3164220] rsx: fifo 5s: busy 1.9%, idle 20.3%, semaphore wait 77.7% (24/s), 184 idle sleeps/s, methods 78.4% (764k/s)
+I   5.218808 [3164220] rsx: fifo 5s packets: draw 0.1% (50k/s) flip 0.0% (0k/s) clear 0.0% (0k/s) bulk 0.0% (10k/s) other 78.3% (704k/s)
+I   5.234990 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   5.237943 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000051 -> 0x00000052 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   5.262174 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   5.265796 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000052 -> 0x00000053 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   5.279682 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   5.281637 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000053 -> 0x00000054 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   5.313293 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   5.315414 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000054 -> 0x00000055 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   5.351532 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   5.356962 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000055 -> 0x00000056 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   5.392462 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   5.397007 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000056 -> 0x00000057 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   5.432797 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   5.434659 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000057 -> 0x00000058 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   5.463186 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   5.465805 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000058 -> 0x00000059 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   5.494512 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   5.496749 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000059 -> 0x0000005a by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   5.529043 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   5.530059 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x0000005a -> 0x0000005b by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   5.565516 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   5.566830 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x0000005b -> 0x0000005c by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   5.595316 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   5.597252 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x0000005c -> 0x0000005d by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   5.625216 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   5.629814 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x0000005d -> 0x0000005e by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   5.663259 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   5.665952 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x0000005e -> 0x0000005f by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   5.694723 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   5.698238 [3164193] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x0000005f -> 0x00000060 by rsv::store_range | guest lr 0x00926700 rdr+0x916500 f_00000000+0x0 | thread main_thread
+I   5.733898 [3164193] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63d2b02 ./build-40/ps3base+0x48a5d5d ./build-40/ps3base+0x48a6218 ./build-40/ps3base+0x48a9916 ./build-40/ps3base+0x48d1b92 ./build-40/ps3base+0x48d3142 ./build-40/ps3base+0x48d4ebd ./build-40/ps3base+0x7fe7d38 ./build-40/ps3base+0x1aca717 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1abe40c _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x1aabb80
+I   5.864992 [3164193] sysutil: cellSysutilEnableBgmPlayback -> ENABLE
+I   5.959679 [3164193] stacks: thread 16777237 '[RAGE Audio] - Engine Thread' requested 0x10000 allocated 0x10000 range 0xd0330000..0xd0340000 guard 0xd0320000..0xd0330000 (adjacent)
+I   5.959719 [3164193] ppu: _sys_ppu_thread_create '[RAGE Audio] - Engine Thread' entry 0x01356420 arg 0x165cc4c prio 2047 stack 0x10000 flags 0x1 -> 0x1000015
+I   5.959792 [3164193] tty: [0] [IPC] '[RAGE Audio] - Engine Thread' has TID01000015 (28160k remaining)
+I   5.961410 [3164363] ppu: thread 0x1000015 '[RAGE Audio] - Engine Thread' start entry opd 0x01356420
+I   6.743935 [3164193] stacks: thread 16777238 '[RDR2] DecalUpdate' requested 0x8000 allocated 0x8000 range 0xd0350000..0xd0358000 guard 0xd0340000..0xd0350000 (adjacent)
+I   6.743968 [3164193] ppu: _sys_ppu_thread_create '[RDR2] DecalUpdate' entry 0x01356420 arg 0x165cc4c prio 2048 stack 0x8000 flags 0x1 -> 0x1000016
+I   6.744369 [3164193] tty: [0] [IPC] '[RDR2] DecalUpdate' has TID01000016 (28160k remaining)
+I   6.744856 [3164373] ppu: thread 0x1000016 '[RDR2] DecalUpdate' start entry opd 0x01356420
+I   6.749057 [3164193] rsx: context attribute 0x300 a3 0xe a4 0x2dd0011030a0000 a5 0xa00408423f4 a6 0x0
+I   7.186837 [3164220] rsx: flip 181 (buffer 0) worst 34.5 ms, >50ms 0, >100ms 0
+I   7.305313 [3164276] cellAudio: audio stats: 742 blocks, 3 late wakeups, 0 stale blocks, 0 device underruns
+I   9.188718 [3164220] rsx: flip 241 (buffer 0) worst 35.9 ms, >50ms 0, >100ms 0
+I  10.223281 [3164220] rsx: fifo 5s: busy 1.4%, idle 0.0%, semaphore wait 98.6% (30/s), 0 idle sleeps/s, methods 99.1% (521k/s)
+I  10.223343 [3164220] rsx: fifo 5s packets: draw 0.0% (33k/s) flip 0.0% (0k/s) clear 0.0% (0k/s) bulk 0.0% (9k/s) other 99.0% (479k/s)
+I  11.191119 [3164220] rsx: flip 301 (buffer 0) worst 35.5 ms, >50ms 0, >100ms 0
+I  12.307670 [3164276] cellAudio: audio stats: 938 blocks, 1 late wakeups, 0 stale blocks, 0 device underruns
+I  13.192705 [3164220] rsx: flip 361 (buffer 0) worst 34.8 ms, >50ms 0, >100ms 0
+I  13.869292 [3164193] stacks: thread 16777239 '[RAGE] Navigation Thread' requested 0x20000 allocated 0x20000 range 0xd0370000..0xd0390000 guard 0xd0360000..0xd0370000 (adjacent)
+I  13.869336 [3164193] ppu: _sys_ppu_thread_create '[RAGE] Navigation Thread' entry 0x01356420 arg 0x165cc4c prio 2050 stack 0x20000 flags 0x1 -> 0x1000017
+I  13.869447 [3164193] tty: [0] [IPC] '[RAGE] Navigation Thread' has TID01000017 (28160k remaining)
+I  13.869745 [3164600] ppu: thread 0x1000017 '[RAGE] Navigation Thread' start entry opd 0x01356420
+I  14.661894 [3164234] sysutil: cellAudioOutGetConfiguration(0): channel 2 encoder 0 downMixer 0
+I  14.661965 [3164234] tty: [0] [BINK] Using 2 speakers.
+I  14.662285 [3164234] cellAudio: port 1 open: 2 ch, 16 blocks at 0x121a0000
+I  14.662374 [3164234] stacks: thread 16777240 'Bink Audio Thread' requested 0x4000 allocated 0x4000 range 0xd03a0000..0xd03a4000 guard 0xd0390000..0xd03a0000 (adjacent)
+I  14.662383 [3164234] ppu: _sys_ppu_thread_create 'Bink Audio Thread' entry 0x0136ce60 arg 0x0 prio 649 stack 0x1000 flags 0x1 -> 0x1000018
+I  14.668062 [3164620] ppu: thread 0x1000018 'Bink Audio Thread' start entry opd 0x0136ce60
+I  15.272230 [3164220] rsx: fifo 5s: busy 0.9%, idle 4.8%, semaphore wait 94.3% (29/s), 39 idle sleeps/s, methods 94.6% (293k/s)
+I  15.272282 [3164220] rsx: fifo 5s packets: draw 0.0% (18k/s) flip 0.0% (0k/s) clear 0.0% (0k/s) bulk 0.0% (7k/s) other 94.5% (269k/s)
+I  15.272325 [3164220] rsx: flip 421 (buffer 0) worst 114.8 ms, >50ms 1, >100ms 1
+I  16.824686 [3164193] stacks: thread 16777241 '[RAGE] netConnectionManager Wor' requested 0x10000 allocated 0x10000 range 0xd03c0000..0xd03d0000 guard 0xd03b0000..0xd03c0000 (adjacent)
+I  16.829652 [3164193] ppu: _sys_ppu_thread_create '[RAGE] netConnectionManager Worker' entry 0x01356420 arg 0x165cc4c prio 2048 stack 0x10000 flags 0x1 -> 0x1000019
+I  16.829771 [3164193] tty: [0] [IPC] '[RAGE] netConnectionManager Worker' has TID01000019 (28160k remaining)
+I  16.831069 [3164662] ppu: thread 0x1000019 '[RAGE] netConnectionManager Worker' start entry opd 0x01356420
+I  16.831329 [3164193] sceNp: sceNp2Init poolsize=0x20000 pool=0x01567e08 -> 0
+I  16.831339 [3164193] sceNp: ManagerRegisterCallback opd=0x01345a80 arg=0x015605d8 -> 0x00000000
+I  16.831347 [3164193] sceNp: manager callback 0x01345a80 <- event -1 (offline), arg 0x015605d8
+I  16.831353 [3164193] sceNp: ManagerGetStatus -> -1
+I  16.831442 [3164193] sceNp: BasicRegisterContextSensitiveHandler ctx=0x015603b0 cb=0x01345a10 -> 0x00000000
+I  16.831449 [3164193] sceNp: basic handler 0x01345a10 <- END_OF_INITIAL_PRESENCE, arg 0x01560ed4
+I  16.831465 [3164193] sceNp: LookupInit -> 0x00000000
+I  16.831480 [3164193] sceNpTrophy: sceNpTrophyCreateContext -> context 0x1 (trp 'NPWR00867_00', read_only 0)
+I  16.831487 [3164193] sceNpTrophy: sceNpTrophyCreateHandle -> handle 0x1
+I  16.835408 [3164193] stacks: thread 16777242 '[RAGE] TrophyRegister' requested 0x4000 allocated 0x4000 range 0xd03e0000..0xd03e4000 guard 0xd03d0000..0xd03e0000 (adjacent)
+I  16.835434 [3164193] ppu: _sys_ppu_thread_create '[RAGE] TrophyRegister' entry 0x01356420 arg 0x165cc4c prio 2049 stack 0x4000 flags 0x1 -> 0x100001a
+I  16.835521 [3164193] tty: [0] [IPC] '[RAGE] TrophyRegister' has TID0100001A (28160k remaining)
+I  16.835551 [3164193] sceNp: ManagerGetStatus -> -1
+I  16.835660 [3164193] cellNetCtl: GetInfo(code=0x4) -> 0x80130108, 0 byte(s)
+I  16.835815 [3164193] sceNp: ManagerGetNpId -> 0x8002aa0c (OFFLINE: not signed in)
+I  16.835827 [3164193] cellNetCtl: GetInfo(code=0x10) -> 0x80130108, 0 byte(s)
+I  16.835844 [3164193] cellNetCtl: GetInfo(code=0x2) -> 0x00000000, 6 byte(s)
+I  16.836067 [3164193] stacks: thread 16777243 '[RAGE] rlAchievement Worker' requested 0x4000 allocated 0x4000 range 0xd0400000..0xd0404000 guard 0xd03f0000..0xd0400000 (adjacent)
+I  16.837007 [3164663] ppu: thread 0x100001a '[RAGE] TrophyRegister' start entry opd 0x01356420
+I  16.837352 [3164663] sceNpTrophy: sceNpTrophyGetRequiredDiskSpace -> 0x0
+I  16.838391 [3164193] ppu: _sys_ppu_thread_create '[RAGE] rlAchievement Worker' entry 0x01356420 arg 0x165cc20 prio 2047 stack 0x4000 flags 0x1 -> 0x100001b
+I  16.838486 [3164193] tty: [0] [IPC] '[RAGE] rlAchievement Worker' has TID0100001B (28160k remaining)
+I  16.840546 [3164664] ppu: thread 0x100001b '[RAGE] rlAchievement Worker' start entry opd 0x01356420
+I  16.840663 [3164193] stacks: thread 16777244 '[RAGE] rlTitleStorage Worker' requested 0x4000 allocated 0x4000 range 0xd0420000..0xd0424000 guard 0xd0410000..0xd0420000 (adjacent)
+I  16.840672 [3164193] ppu: _sys_ppu_thread_create '[RAGE] rlTitleStorage Worker' entry 0x01356420 arg 0x165cc20 prio 2047 stack 0x4000 flags 0x1 -> 0x100001c
+I  16.842585 [3164193] tty: [0] [IPC] '[RAGE] rlTitleStorage Worker' has TID0100001C (28160k remaining)
+I  16.843717 [3164665] ppu: thread 0x100001c '[RAGE] rlTitleStorage Worker' start entry opd 0x01356420
+I  16.860004 [3164193] tty: [0] [IPC] Module 9 loaded (28160k remaining)
+I  16.860078 [3164193] tty: [0] [IPC] Module 9 unloaded (28160k remaining)
+I  16.860198 [3164193] prx: load '/dev_flash/sys/external/libsysutil_game_exec.sprx' -> 0x23058600 (HLE, start 0x00000000)
+I  16.860207 [3164193] prx: started 'libsysutil_game_exec.sprx'
+I  16.860234 [3164193] tty: [0] [IPC] Module 37 loaded (28160k remaining)
+W  16.860245 [3164193] cellGameExec: cellGameGetHomeDataExportPath(0x73439174) -> CELL_GAME_ERROR_NOAPP: PlayStation Home is defunct, there is no export path to give
+I  16.868833 [3164663] sceNpTrophy: sceNpTrophyRegisterContext: 'NPWR00867_00' registered (49 trophies, status 3)
+I  16.868897 [3164663] ppu: thread 0x100001a '[RAGE] TrophyRegister' sys_ppu_thread_exit(0xdeadc0de) from lr=0x30004ea4 liblv2+0x4ea4 (no lifted code)
+I  16.868905 [3164663] ppu: thread 0x100001a '[RAGE] TrophyRegister' exit 0xdeadc0de lr=0x30004ea4
+I  17.310021 [3164276] cellAudio: audio stats: 1407 blocks, 1 late wakeups, 0 stale blocks, 0 device underruns
+I  20.531593 [3164220] rsx: fifo 5s: busy 0.1%, idle 98.7%, semaphore wait 1.2% (0/s), 868 idle sleeps/s, methods 1.2% (10k/s)
+I  20.531650 [3164220] rsx: fifo 5s packets: draw 0.0% (0k/s) flip 0.0% (0k/s) clear 0.0% (0k/s) bulk 0.0% (1k/s) other 1.2% (8k/s)
+I  20.619520 [3164193] tty: [0] [IPC] Module 9 loaded (28160k remaining)
+I  20.628617 [3164193] tty: [0] [IPC] Module 9 unloaded (28160k remaining)
+I  23.164135 [3164220] rsx: flip 481 (buffer 0) worst 383.1 ms, >50ms 38, >100ms 36
+I  25.571774 [3164220] rsx: fifo 5s: busy 0.5%, idle 76.9%, semaphore wait 22.7% (8/s), 693 idle sleeps/s, methods 23.0% (18k/s)
+I  25.571840 [3164220] rsx: fifo 5s packets: draw 0.0% (0k/s) flip 0.3% (0k/s) clear 0.0% (0k/s) bulk 0.0% (3k/s) other 22.7% (16k/s)
+I  25.773552 [3164220] rsx: flip 541 (buffer 0) worst 209.8 ms, >50ms 7, >100ms 5
+I  26.306081 [3164193] stacks: thread 16777245 'AsyncProbeMgr' requested 0x4000 allocated 0x4000 range 0xd0440000..0xd0444000 guard 0xd0430000..0xd0440000 (adjacent)
+I  26.306133 [3164193] ppu: _sys_ppu_thread_create 'AsyncProbeMgr' entry 0x01356420 arg 0x165cc20 prio 2048 stack 0x4000 flags 0x1 -> 0x100001d
+I  26.306214 [3164193] tty: [0] [IPC] 'AsyncProbeMgr' has TID0100001D (28160k remaining)
+I  26.306805 [3165051] ppu: thread 0x100001d 'AsyncProbeMgr' start entry opd 0x01356420
+I  27.314729 [3164276] cellAudio: audio stats: 1875 blocks, 10 late wakeups, 2 stale blocks, 0 device underruns
+I  28.040887 [3164220] rsx: flip 601 (buffer 0) worst 178.3 ms, >50ms 4, >100ms 2
+I  30.343212 [3164220] rsx: flip 661 (buffer 0) worst 156.5 ms, >50ms 6, >100ms 2
+I  30.743612 [3164220] rsx: fifo 5s: busy 0.3%, idle 41.1%, semaphore wait 58.5% (20/s), 373 idle sleeps/s, methods 58.6% (33k/s)
+I  30.743665 [3164220] rsx: fifo 5s packets: draw 0.0% (0k/s) flip 0.0% (0k/s) clear 0.0% (0k/s) bulk 0.0% (5k/s) other 58.6% (29k/s)
+I  30.877809 [3164620] ppu: thread 0x1000018 'Bink Audio Thread' sys_ppu_thread_exit(0x0) from lr=0x30004ea4 liblv2+0x4ea4 (no lifted code)
+I  30.877849 [3164620] ppu: thread 0x1000018 'Bink Audio Thread' exit 0x0 lr=0x30004ea4
+I  31.228740 [3164193] stacks: thread 16777246 '[RAGE] crmtScheduler[0]' requested 0x20000 allocated 0x20000 range 0xd0460000..0xd0480000 guard 0xd0450000..0xd0460000 (adjacent)
+I  31.228791 [3164193] ppu: _sys_ppu_thread_create '[RAGE] crmtScheduler[0]' entry 0x01356420 arg 0x165cc20 prio 2046 stack 0x20000 flags 0x1 -> 0x100001e
+I  31.228864 [3164193] tty: [0] [IPC] '[RAGE] crmtScheduler[0]' has TID0100001E (28160k remaining)
+I  31.229089 [3165224] ppu: thread 0x100001e '[RAGE] crmtScheduler[0]' start entry opd 0x01356420
+I  31.289530 [3164193] tty: [0] 6531k current on C++ heap, 5977k low water mark; 6101744 bytes largest block (0k/0k remaining on residuals).
+I  31.307594 [3164193] cellNetCtl: GetInfo(code=0x4) -> 0x80130108, 0 byte(s)
+I  31.307679 [3164193] sceNp: BasicGetEvent #0 -> 0x8002a66a (no event queued)
+I  31.307769 [3164193] sceNp: ManagerGetStatus -> -1
+I  31.307979 [3164193] sceNp: ManagerGetStatus -> -1
+I  31.313896 [3164193] tty: [0] [DiskCache] IsCachePrimed returns 0
+I  31.671425 [3164193] stacks: thread 16777247 '[RAGE] rlAchievement Worker' requested 0x4000 allocated 0x4000 range 0xd0490000..0xd0494000 guard 0xd0480000..0xd0490000 (adjacent)
+I  31.671469 [3164193] ppu: _sys_ppu_thread_create '[RAGE] rlAchievement Worker' entry 0x01356420 arg 0x165cc20 prio 2047 stack 0x4000 flags 0x1 -> 0x100001f
+I  31.671609 [3164193] tty: [0] [IPC] '[RAGE] rlAchievement Worker' has TID0100001F (28160k remaining)
+I  31.671818 [3165228] ppu: thread 0x100001f '[RAGE] rlAchievement Worker' start entry opd 0x01356420
+I  31.673211 [3165228] tty: [0] [IPC] Thread TID0100001A exited (28160k remaining)
+I  31.673374 [3165228] sceNpTrophy: sceNpTrophyGetGameInfo: 49 trophies, 0 unlocked
+W  31.673516 [3165228] sceNpTrophy: sceNpTrophyGetTrophyInfo(id=1) -> 0x80022913
+W  31.673583 [3165228] sceNpTrophy: sceNpTrophyGetTrophyInfo(id=2) -> 0x80022913
+W  31.673647 [3165228] sceNpTrophy: sceNpTrophyGetTrophyInfo(id=3) -> 0x80022913
+W  31.673711 [3165228] sceNpTrophy: sceNpTrophyGetTrophyInfo(id=4) -> 0x80022913
+W  31.673775 [3165228] sceNpTrophy: sceNpTrophyGetTrophyInfo(id=5) -> 0x80022913
+W  31.673838 [3165228] sceNpTrophy: sceNpTrophyGetTrophyInfo(id=6) -> 0x80022913
+W  31.673900 [3165228] sceNpTrophy: sceNpTrophyGetTrophyInfo(id=7) -> 0x80022913
+W  31.673961 [3165228] sceNpTrophy: sceNpTrophyGetTrophyInfo(id=8) -> 0x80022913
+W  31.678397 [3165228] sceNpTrophy: sceNpTrophyGetTrophyInfo(id=20) -> 0x80022913
+W  31.680436 [3165228] sceNpTrophy: sceNpTrophyGetTrophyInfo(id=29) -> 0x80022913
+W  31.680676 [3165228] sceNpTrophy: sceNpTrophyGetTrophyInfo(id=33) -> 0x80022913
+W  31.680737 [3165228] sceNpTrophy: sceNpTrophyGetTrophyInfo(id=34) -> 0x80022913
+I  31.702566 [3164193] tty: [0] 6366k current on C++ heap, 5977k low water mark; 6101744 bytes largest block (0k/0k remaining on residuals).
+I  31.703998 [3164193] sceNp: ManagerGetStatus -> -1
+I  31.715508 [3165228] ppu: thread 0x100001f '[RAGE] rlAchievement Worker' sys_ppu_thread_exit(0xdeadc0de) from lr=0x30004ea4 liblv2+0x4ea4 (no lifted code)
+I  31.715541 [3165228] ppu: thread 0x100001f '[RAGE] rlAchievement Worker' exit 0xdeadc0de lr=0x30004ea4
+I  31.715617 [3164193] tty: [0] [IPC] Thread TID0100001F exited (28160k remaining)
+I  31.718050 [3164193] tty: [0] [IPC] Module 33 loaded (28160k remaining)
+I  31.718472 [3164193] stacks: thread 16777248 '[RAGE] EnumThread' requested 0x4000 allocated 0x4000 range 0xd04b0000..0xd04b4000 guard 0xd04a0000..0xd04b0000 (adjacent)
+I  31.718483 [3164193] ppu: _sys_ppu_thread_create '[RAGE] EnumThread' entry 0x01356420 arg 0x165cc20 prio 2048 stack 0x4000 flags 0x1 -> 0x1000020
+I  31.718552 [3164193] tty: [0] [IPC] '[RAGE] EnumThread' has TID01000020 (28160k remaining)
+I  31.719311 [3165229] ppu: thread 0x1000020 '[RAGE] EnumThread' start entry opd 0x01356420
+I  31.719555 [3165229] savedata: ListAutoLoad version 0x0 errDialog 0x0 setList 0x016614c0 setBuf 0x016614d0 funcFixed 0x01356768 funcStat 0x01356770 funcFile 0x01356778 userdata 0x0
+I  31.719621 [3165229] savedata: ListAutoLoad: 0 savedata match prefix 'BLES00680' (dirListMax 16 bufSize 0x680 buf 0x7052f710), listing 0
+I  31.719629 [3165229] savedata: ListAutoLoad: funcFixed returned 1 with 0 savedata
+I  31.719667 [3165229] ppu: thread 0x1000020 '[RAGE] EnumThread' sys_ppu_thread_exit(0xdeadc0de) from lr=0x30004ea4 liblv2+0x4ea4 (no lifted code)
+I  31.719675 [3165229] ppu: thread 0x1000020 '[RAGE] EnumThread' exit 0xdeadc0de lr=0x30004ea4
+I  31.721922 [3164193] sceNp: ManagerGetStatus -> -1
+I  31.742835 [3164193] sceNp: ManagerGetStatus -> -1
+I  31.748066 [3164193] tty: [0] [IPC] Module 33 unloaded (28160k remaining)
+I  31.748146 [3164193] tty: [0] [IPC] Thread TID01000020 exited (28160k remaining)
+I  31.758343 [3164193] sceNp: ManagerGetStatus -> -1
+I  31.774308 [3164193] sceNp: ManagerGetStatus -> -1
+I  31.945501 [3164193] sceNp: ManagerGetStatus -> -1
+I  32.317863 [3164276] cellAudio: audio stats: 1606 blocks, 1 late wakeups, 0 stale blocks, 0 device underruns
+I  32.440724 [3164193] cellNetCtl: GetInfo(code=0x4) -> 0x80130108, 0 byte(s)
+I  32.440988 [3164193] sceNp: ManagerGetStatus -> -1
+I  32.473728 [3164193] sceNp: ManagerGetStatus -> -1
+I  32.489004 [3164193] sceNp: ManagerGetStatus -> -1
+I  32.507404 [3164193] sceNp: ManagerGetStatus -> -1
+I  32.523436 [3164193] sceNp: ManagerGetStatus -> -1
+I  32.538855 [3164193] sceNp: ManagerGetStatus -> -1
+I  32.553917 [3164193] sceNp: ManagerGetStatus -> -1
+I  32.569982 [3164193] sceNp: ManagerGetStatus -> -1
+I  32.585375 [3164193] sceNp: ManagerGetStatus -> -1
+I  32.600858 [3164193] sceNp: ManagerGetStatus -> -1
+I  32.616781 [3164193] sceNp: ManagerGetStatus -> -1
+I  32.632356 [3164193] sceNp: ManagerGetStatus -> -1
+I  32.650664 [3164193] sceNp: ManagerGetStatus -> -1
+I  32.666065 [3164193] sceNp: ManagerGetStatus -> -1
+I  32.682358 [3164193] sceNp: ManagerGetStatus -> -1
+I  32.697940 [3164193] sceNp: ManagerGetStatus -> -1
+I  32.713872 [3164193] sceNp: ManagerGetStatus -> -1
+I  32.730188 [3164193] sceNp: ManagerGetStatus -> -1
+I  32.746267 [3164193] sceNp: ManagerGetStatus -> -1
+I  32.761658 [3164193] sceNp: ManagerGetStatus -> -1
+I  32.777127 [3164193] sceNp: ManagerGetStatus -> -1
+I  32.792702 [3164193] sceNp: ManagerGetStatus -> -1
+I  32.808855 [3164193] sceNp: ManagerGetStatus -> -1
+I  32.824433 [3164193] sceNp: ManagerGetStatus -> -1
+I  32.843470 [3164193] sceNp: ManagerGetStatus -> -1
+I  32.859094 [3164193] sceNp: ManagerGetStatus -> -1
+I  32.873811 [3164193] sceNp: ManagerGetStatus -> -1
+I  32.879029 [3164220] rsx: flip 721 (buffer 0) worst 510.6 ms, >50ms 2, >100ms 2
+I  32.890947 [3164193] sceNp: ManagerGetStatus -> -1
+I  32.905660 [3164193] sceNp: ManagerGetStatus -> -1
+I  32.921042 [3164193] sceNp: ManagerGetStatus -> -1
+I  32.936900 [3164193] sceNp: ManagerGetStatus -> -1
+I  32.952157 [3164193] sceNp: ManagerGetStatus -> -1
+I  32.967250 [3164193] sceNp: ManagerGetStatus -> -1
+I  32.982379 [3164193] sceNp: ManagerGetStatus -> -1
+I  32.998260 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.013661 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.028689 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.044676 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.060471 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.076305 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.091610 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.106811 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.127085 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.138318 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.157293 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.169133 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.184875 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.200346 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.215625 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.231879 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.247126 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.262946 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.278429 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.294093 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.310042 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.326492 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.346279 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.361343 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.376378 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.391907 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.408585 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.423275 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.441808 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.457314 [3164193] cellNetCtl: GetInfo(code=0x4) -> 0x80130108, 0 byte(s)
+I  33.457676 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.472558 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.487692 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.503281 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.518816 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.533843 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.549155 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.564292 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.579592 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.594689 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.610053 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.625882 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.641222 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.657030 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.672761 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.688402 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.704089 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.719859 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.735168 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.750879 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.766564 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.781724 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.797507 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.813519 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.829108 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.844199 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.860142 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.875678 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.892120 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.908092 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.924007 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.938973 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.954267 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.969516 [3164193] sceNp: ManagerGetStatus -> -1
+I  33.985405 [3164193] sceNp: ManagerGetStatus -> -1
+I  34.009023 [3164193] sceNp: ManagerGetStatus -> -1
+I  34.024570 [3164193] sceNp: ManagerGetStatus -> -1
+I  34.040027 [3164193] sceNp: ManagerGetStatus -> -1
+I  34.055866 [3164193] sceNp: ManagerGetStatus -> -1
+I  34.071134 [3164193] sceNp: ManagerGetStatus -> -1
+I  34.086503 [3164193] sceNp: ManagerGetStatus -> -1
+I  34.102231 [3164193] sceNp: ManagerGetStatus -> -1
+I  34.117781 [3164193] sceNp: ManagerGetStatus -> -1
+I  34.135426 [3164193] sceNp: ManagerGetStatus -> -1
+I  34.151585 [3164193] sceNp: ManagerGetStatus -> -1
+I  34.166593 [3164193] sceNp: ManagerGetStatus -> -1
+I  34.182598 [3164193] sceNp: ManagerGetStatus -> -1
+I  34.198485 [3164193] sceNp: ManagerGetStatus -> -1
+I  34.215934 [3164193] sceNp: ManagerGetStatus -> -1
+I  34.232847 [3164193] sceNp: ManagerGetStatus -> -1
+I  34.247801 [3164193] sceNp: ManagerGetStatus -> -1
+I  34.263796 [3164193] sceNp: ManagerGetStatus -> -1
+I  34.280194 [3164193] sceNp: ManagerGetStatus -> -1
+I  34.295450 [3164193] sceNp: ManagerGetStatus -> -1
+I  34.303680 [3164193] tty: [0] [STARTUP] Time to Press Start: 34.187 seconds.
+I  34.341595 [3164193] sceNp: ManagerGetStatus -> -1
+I  34.362390 [3164363] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000060 -> 0x0000005f by rsv::store_range | guest lr 0x00927a1c rdr+0x91781c f_00000000+0x0 | thread [RAGE Audio] - Engine Thread
+I  34.405354 [3164363] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d7d87 ./build-40/ps3base+0x63c8304 ./build-40/ps3base+0x488f3c5 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x49c7221 ./build-40/ps3base+0x49c94e5 ./build-40/ps3base+0x48a9eb5 ./build-40/ps3base+0x48d46a1 ./build-40/ps3base+0x48d4cd5 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x4245d72 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x16dd3e9 _ZNSt6thread11_State_implINS_8_InvokerISt5tupleIJPFvSt10shared_ptrIN5guest6ThreadEEES6_EEEEE6_M_runEv+0x28
+I  34.408071 [3164363] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x0000005f -> 0x00000060 by rsv::store_range | guest lr 0x00924088 rdr+0x913e88 f_00000000+0x0 | thread [RAGE Audio] - Engine Thread
+I  34.408988 [3164193] sceNp: ManagerGetStatus -> -1
+I  34.445198 [3164363] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 ./build-40/ps3base+0x63d2557 ./build-40/ps3base+0x63c8325 ./build-40/ps3base+0x488f3c5 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x49c7221 ./build-40/ps3base+0x49c94e5 ./build-40/ps3base+0x48a9eb5 ./build-40/ps3base+0x48d46a1 ./build-40/ps3base+0x48d4cd5 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x4245d72 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x16dd3e9 _ZNSt6thread11_State_implINS_8_InvokerISt5tupleIJPFvSt10shared_ptrIN5guest6ThreadEEES6_EEEEE6_M_runEv+0x28
+I  34.453313 [3164363] blockwatch: WRITE +0x000 (0x0177caa0) w4 prev 0x00000060 -> 0x00000060 by rsv::store_range | guest lr 0x00926e3c rdr+0x916c3c f_00000000+0x0 | thread [RAGE Audio] - Engine Thread
+I  34.467888 [3164193] sceNp: ManagerGetStatus -> -1
+I  34.501928 [3164363] blockwatch:   host: _ZN3rsv11store_rangeEjPKhj+0x45 _ZN3ppu4st32EPhjj+0x80 ./build-40/ps3base+0x63d584e ./build-40/ps3base+0x489aa29 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x49c62e8 ./build-40/ps3base+0x49c95b3 ./build-40/ps3base+0x48a9eb5 ./build-40/ps3base+0x48d46a1 ./build-40/ps3base+0x48d4cd5 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x4245d72 _ZN3ppu13call_indirectERNS_7ContextEPhj+0x953 ./build-40/ps3base+0x16dd3e9 _ZNSt6thread11_State_implINS_8_InvokerISt5tupleIJPFvSt10shared_ptrIN5guest6ThreadEEES6_EEEEE6_M_runEv+0x28
+E  34.504606 [3164203] spu: thread 0x200 'SecondaryCellSpursKernel0' DMA GET REFUSED cmd 0x40 (unmapped) ea 0x00000000 size 0x80 lsa 0x1a100 pc 0x06428
+E  34.504649 [3164203] spu: thread 0x200 'SecondaryCellSpursKernel0' raised SPU exception 0xffffffff53505503 on queue 0x8d006100 -> 0x0
+I  34.504656 [3164203] spu: thread 0x200 'SecondaryCellSpursKernel0' stopped at 0x06428
+I  34.504665 [3164203] spu: group 0x4000200 'SecondaryCellSpursKernelGroup' stopped (cause 2 status 0)
+I  34.504815 [3164202] tty: [0] PS3 SDK INTERNAL ASSERTION FAILURE: libspurs, version 492000, file "handler.c", line 198, function "spurs_handler_entry", unexp
+I  34.504848 [3164202] tty: [0] ected value 0x0
+I  34.504934 [3164202] tty: [0] 
+SPURS Instance
+      CellSpurs address  0x01646400
+      SPURS revision     0x00000002
+      SDK version        0x00300000
+   
+I  34.504998 [3164202] tty: [0]    PRX version        0x00492000
+      number of SPUs     1
+      exit if no work    no
+      32 workloads       no
+I  34.505489 [3164202] tty: [0]   Resources:
+      PPU threads  "SecondarySpursHdlr0" (0x1000004), priority 2016
+                   "SecondarySpursHdlr1" (0x10
+I  34.505509 [3164202] tty: [0] 00003), priority 2016
+I  34.505545 [3164201] tty: [0] The SPURS is stopped due to the SPU exception.
+I  34.506217 [3164202] tty: [0]       SPU thread group  "SecondaryCellSpursKernelGroup" (0x4000200), priority 201
+I  34.506272 [3164201] tty: [0] SPU Exception(s)
+I  34.506314 [3164202] tty: [0]           SPU thread#0  "SecondaryCellSpursKernel0" (0x200)
+I  34.506404 [3164201] tty: [0] 	SPU thread: 0x00000200  NPC: 0x06428  cause: MFC storage  MFC_DAR: 0x0
+I  34.506448 [3164202] tty: [0]       EA of lwmutex  0x016471b0
+      EA of lwcond   0x016471c8
+I  34.506779 [3164201] tty: [0] 
+SPURS Instance
+      CellSpurs address  0x01646400
+      SPURS revision     0x00000002
+      SDK version        0x00300000
+   
+I  34.506857 [3164201] tty: [0]    PRX version        0x00492000
+      number of SPUs     1
+      exit if no work    no
+      32 workloads       no
+I  34.506926 [3164202] tty: [0]       event queue    0x8d006100
+      event port     0x0e006200
+      SPU port bits                0x0000000000000000
+      SPU
+I  34.506947 [3164202] tty: [0]  port for System Service  16
+I  34.507704 [3164202] tty: [0]   SPURS Handler Control:
+      dirty    1
+      waiting  0
+      exiting  0
+I  34.508104 [3164201] tty: [0]   Resources:
+      PPU threads  "SecondarySpursHdlr0" (0x1000004), priority 2016
+                   "SecondarySpursHdlr1" (0x10
+I  34.508122 [3164201] tty: [0] 00003), priority 2016
+I  34.508417 [3164202] tty: [0]   SPURS Trace:
+      mode    0x00000000
+      buffer  0x00000000
+I  34.508758 [3164201] tty: [0]       SPU thread group  "SecondaryCellSpursKernelGroup" (0x4000200), priority 201
+I  34.509072 [3164202] tty: [0]        SPU#0  0x00000000
+I  34.509316 [3164201] tty: [0]           SPU thread#0  "SecondaryCellSpursKernel0" (0x200)
+I  34.509412 [3164202] tty: [0]   System Service:
+      GUID 1b b8 41 bf 38 f8 9d 33
+      message            0xfe
+        update workload  0xfe
+        update
+I  34.509483 [3164202] tty: [0]  trace     0x00
+        terminate        0x00
+      idling             0x00
+      exit barrier       0x00
+      on SPU         
+I  34.509554 [3164202] tty: [0]     0x01
+      trace control      0x00
+      availableWorkload  0xc000ffff
+      availableModuleId  0xc0000000
+      workload c
+I  34.509564 [3164202] tty: [0] ontrol
+I  34.511256 [3164201] tty: [0]       EA of lwmutex  0x016471b0
+      EA of lwcond   0x016471c8
+I  34.511319 [3164202] tty: [0]         state    2  2  0  0  0  0  0  0  0  0  0  0  0  0  0  0
+I  34.511393 [3164201] tty: [0]       event queue    0x8d006100
+      event port     0x0e006200
+      SPU port bits                0x0000000000000000
+      SPU
+I  34.511415 [3164201] tty: [0]  port for System Service  16
+I  34.511459 [3164202] tty: [0]         status  01 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+I  34.511522 [3164201] tty: [0]   SPURS Handler Control:
+      dirty    1
+      waiting  0
+      exiting  0
+I  34.512626 [3164201] tty: [0]   SPURS Trace:
+      mode    0x00000000
+      buffer  0x00000000
+I  34.512651 [3164201] tty: [0]        SPU#0  0x00000000
+I  34.512722 [3164201] tty: [0]   System Service:
+      GUID 1b b8 41 bf 38 f8 9d 33
+      message            0xfe
+        update workload  0xfe
+        update
+I  34.512820 [3164201] tty: [0]  trace     0x00
+        terminate        0x00
+      idling             0x00
+      exit barrier       0x00
+      on SPU         
+I  34.512888 [3164201] tty: [0]     0x01
+      trace control      0x00
+      availableWorkload  0xc000ffff
+      availableModuleId  0xc0000000
+      workload c
+I  34.512898 [3164201] tty: [0] ontrol
+I  34.512940 [3164201] tty: [0]         state    2  2  0  0  0  0  0  0  0  0  0  0  0  0  0  0
+I  34.512981 [3164201] tty: [0]         status  01 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+I  34.513024 [3164201] tty: [0]         event   00 02 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+I  34.513128 [3164201] tty: [0]       system workload
+        ff ff ff ff ff ff ff ff
+I  34.513144 [3164201] tty: [0]   Workloads:
+I  34.513194 [3164202] tty: [0]         event   00 02 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+I  34.513231 [3164202] tty: [0]       system workload
+        ff ff ff ff ff ff ff ff
+I  34.513245 [3164202] tty: [0]   Workloads:
+I  34.513318 [3164202] tty: [0]       [00]  JobChain "Audio" (0x01649500)
+            state  RUNNABLE
+            scheduling params
+              priorities  {
+I  34.513384 [3164202] tty: [0]   8,  0,  0,  0,  0,  0,  0,  0 }
+              ready count        0
+              workload signal    0
+              unused SP
+I  34.513450 [3164202] tty: [0] U request 0
+              contention  current 0, max 1, min 1, pending 0
+            policy module  ea 0x3202a180, size 16000 b
+I  34.513516 [3164202] tty: [0] ytes, GUID b7 42 2b 4b ec f1 fb af
+            events
+              SPU exception        handler 0x3203195c, arg 0x01649500
+   
+I  34.513564 [3164202] tty: [0]            shutdown completion  hook 0x00000000, arg 0x00000000, semaphore 0x96004e00
+I  34.513632 [3164202] tty: [0]       [01]  taskset "*NO NAME*" (0x0177cf00)
+            state  RUNNABLE
+            scheduling params
+              priorities
+I  34.514187 [3164202] tty: [0]   {  1,  0,  0,  0,  0,  0,  0,  0 }
+              ready count        1
+              workload signal    0
+              unused
+I  34.514258 [3164202] tty: [0]  SPU request 0
+              contention  current 1, max 1, min 8, pending 0
+            policy module  ea 0x32023680, size 7744
+I  34.514985 [3164202] tty: [0]  bytes, GUID 83 6e 91 5b 2e 65 41 43
+            events
+              SPU exception        handler 0x3203167c, arg 0x0177cf00
+ 
+I  34.515036 [3164202] tty: [0]              shutdown completion  hook 0x3203176c, arg 0x0177cf00, semaphore 0x96004f00
+I  34.515225 [3164201] tty: [0]       [00]  JobChain "Audio" (0x01649500)
+            state  RUNNABLE
+            scheduling params
+              priorities  {
+I  34.516270 [3164201] tty: [0]   8,  0,  0,  0,  0,  0,  0,  0 }
+              ready count        0
+              workload signal    0
+              unused SP
+I  34.516344 [3164201] tty: [0] U request 0
+              contention  current 0, max 1, min 1, pending 0
+            policy module  ea 0x3202a180, size 16000 b
+I  34.516413 [3164201] tty: [0] ytes, GUID b7 42 2b 4b ec f1 fb af
+            events
+              SPU exception        handler 0x3203195c, arg 0x01649500
+   
+I  34.516460 [3164201] tty: [0]            shutdown completion  hook 0x00000000, arg 0x00000000, semaphore 0x96004e00
+I  34.516713 [3164202] tty: [0]       [02]  N/A
+I  34.517315 [3164201] tty: [0]       [01]  taskset "*NO NAME*" (0x0177cf00)
+            state  RUNNABLE
+            scheduling params
+              priorities
+I  34.517608 [3164201] tty: [0]   {  1,  0,  0,  0,  0,  0,  0,  0 }
+              ready count        1
+              workload signal    0
+              unused
+I  34.517923 [3164201] tty: [0]  SPU request 0
+              contention  current 1, max 1, min 8, pending 0
+            policy module  ea 0x32023680, size 7744
+I  34.518032 [3164201] tty: [0]  bytes, GUID 83 6e 91 5b 2e 65 41 43
+            events
+              SPU exception        handler 0x3203167c, arg 0x0177cf00
+ 
+I  34.518093 [3164201] tty: [0]              shutdown completion  hook 0x3203176c, arg 0x0177cf00, semaphore 0x96004f00
+I  34.518208 [3164202] tty: [0]       [03]  N/A
+I  34.518225 [3164202] tty: [0]       [04]  N/A
+I  34.518242 [3164202] tty: [0]       [05]  N/A
+I  34.518258 [3164202] tty: [0]       [06]  N/A
+I  34.518274 [3164202] tty: [0]       [07]  N/A
+I  34.518291 [3164202] tty: [0]       [08]  N/A
+I  34.518307 [3164202] tty: [0]       [09]  N/A
+I  34.518323 [3164202] tty: [0]       [10]  N/A
+I  34.518339 [3164202] tty: [0]       [11]  N/A
+I  34.518370 [3164202] tty: [0]       [12]  N/A
+I  34.518386 [3164202] tty: [0]       [13]  N/A
+I  34.518402 [3164202] tty: [0]       [14]  N/A
+I  34.518419 [3164202] tty: [0]       [15]  N/A
+I  34.518695 [3164202] tty: [0]   Global SPU Exception Event:
+      handler 0x00000000, arg 0x00000000
+I  34.518942 [3164201] tty: [0]       [02]  N/A
+I  34.518986 [3164202] tty: [0]   Event Port Multiplexer:
+      outstanding request 0x00000000
+I  34.519134 [3164201] tty: [0]       [03]  N/A
+I  34.519154 [3164201] tty: [0]       [04]  N/A
+I  34.519170 [3164201] tty: [0]       [05]  N/A
+I  34.519378 [3164201] tty: [0]       [06]  N/A
+I  34.519395 [3164201] tty: [0]       [07]  N/A
+I  34.519411 [3164201] tty: [0]       [08]  N/A
+I  34.519428 [3164201] tty: [0]       [09]  N/A
+I  34.519444 [3164201] tty: [0]       [10]  N/A
+I  34.519657 [3164202] tty: [0] 
+SPURS Kernel Context on "SecondaryCellSpursKernel0" (0x200)
+I  34.522100 [3164201] tty: [0]       [11]  N/A
+I  34.522557 [3164202] tty: [0]     kernel GUID     1d 1d fa 1d f9 32 07 59
+I  34.522584 [3164201] tty: [0]       [12]  N/A
+I  34.522629 [3164202] tty: [0]   contention      0  1  0  0  0  0  0  0  0  0  0  0  0  0  0  0
+I  34.522655 [3164201] tty: [0]       [13]  N/A
+I  34.522699 [3164202] tty: [0]   pending cont.   0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0
+I  34.522729 [3164201] tty: [0]       [14]  N/A
+I  34.522772 [3164202] tty: [0]   priority        8  1  0  0  0  0  0  0  0  0  0  0  0  0  0  0
+I  34.522792 [3164201] tty: [0]       [15]  N/A
+I  34.522823 [3164202] tty: [0]   mask           0xc0000000
+I  34.522870 [3164201] tty: [0]   Global SPU Exception Event:
+      handler 0x00000000, arg 0x00000000
+I  34.522895 [3164202] tty: [0]   SPURS instance 0x01646400
+I  34.522936 [3164201] tty: [0]   Event Port Multiplexer:
+      outstanding request 0x00000000
+I  34.522958 [3164202] tty: [0]   SPU number     0
+I  34.523011 [3164201] tty: [0] 
+SPURS Kernel Context on "SecondaryCellSpursKernel0" (0x200)
+I  34.523053 [3164202] tty: [0]   policy module  0x32023680
+I  34.523233 [3164201] tty: [0]     kernel GUID     1d 1d fa 1d f9 32 07 59
+I  34.523255 [3164202] tty: [0]   workload ID    1
+I  34.523306 [3164201] tty: [0]   contention      0  1  0  0  0  0  0  0  0  0  0  0  0  0  0  0
+I  34.523332 [3164202] tty: [0] Call Stack Trace:	0x3200cb24
+I  34.523381 [3164201] tty: [0]   pending cont.   0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0
+I  34.523421 [3164202] tty: [0]                  	0x32009754
+I  34.523463 [3164201] tty: [0]   priority        8  1  0  0  0  0  0  0  0  0  0  0  0  0  0  0
+I  34.523485 [3164202] tty: [0]                  	0x0
+I  34.523512 [3164201] tty: [0]   mask           0xc0000000
+I  34.523534 [3164202] tty: [0] The SPURS is aborted.
+I  34.523566 [3164201] tty: [0]   SPURS instance 0x01646400
+I  34.523578 [3164202] tty: [0] 
+I  34.523599 [3164201] tty: [0]   SPU number     0
+I  34.523628 [3164201] tty: [0]   policy module  0x32023680
+I  34.523653 [3164201] tty: [0]   workload ID    1
+I  34.523689 [3164201] tty: [0] 
+The SPU exception occurred on the Workload#1
+I  34.523746 [3164201] tty: [0]  *****************************************************************************************************
+I  34.523762 [3164201] tty: [0] 
+SPURS Taskset
+I  34.524177 [3164202] process: _sys_process_exit(0x8001000c)
+I  34.524522 [3164202] ppu: process exit -2147418100 from thread 0x1000004 lr=0x3000c7e8 liblv2+0xc7e8 (no lifted code)
