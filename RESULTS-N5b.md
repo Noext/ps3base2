@@ -357,3 +357,32 @@ Port 1 has none of this: it is filled by a PPU thread (Bink Audio Thread, 1000
 nonzero float stores, measurement 3b), it never goes through the SPU channel path
 that is refused, and its fill reads 16/16.
 
+
+### 6c. One run, one thread id: the port 0 writer IS the refusing thread
+
+The 6b chain used two runs (port 0 attribution in one, the refusal in another).
+Re-run with both instruments in the SAME run and compare the host thread id, which
+the log prints for both:
+
+    $ GOWA_TRAP=12190000+0x10000 GOWA_TRAP_MAX=30 PS3BASE_SPU_REFUSAL_DUMP=1 \
+      timeout 80 ./build-rdr/ps3base --no-launcher   # /tmp/n5b-both.log
+
+    $ grep 'trap 0 write' /tmp/n5b-both.log | sed -n 's/^I *[0-9.]* \[\([0-9]*\)\].*/\1/p' | sort | uniq -c
+         30 1326033
+    $ grep "thread 0x200 'SecondaryCellSpursKernel0' start" /tmp/n5b-both.log | (tid)
+    1326033
+    $ grep 'DMA GET REFUSED' /tmp/n5b-both.log
+    E  23.504104 [1326033] spu: thread 0x200 'SecondaryCellSpursKernel0' DMA GET REFUSED cmd 0x40 (unmapped) ea 0x00000000 size 0x80 lsa 0x1a100 pc 0x06428
+    $ grep '+0x060:' /tmp/n5b-both.log
+    E  23.510526 [1326033] spu:     +0x060: 00000000 00000000 70ddd000 70dec000
+
+**1326033 writes port 0. 1326033 is SPU thread 0x200 'SecondaryCellSpursKernel0'.
+1326033's DMA GET is refused, at the instruction whose descriptor's +0x60 is 0.**
+Not three facts from three runs: one thread id, one run, all three.
+
+The thread id is not the only agreement -- the log's own attribution string for
+the port 0 stores is the truncated 15-character host thread name
+(`SPU 0 Secondary`, host.cpp:391 truncates at 15, spu/thread.cpp:1824 builds
+`"SPU " + slot + " " + name`), which is why the numeric id above is the evidence
+and the string is only corroboration.
+
