@@ -479,3 +479,80 @@ back at 408 lines. This is worth recording because the delivery rule in the task
 ("worktree, commit after every measurement") is exactly what made the recovery a
 two-command operation instead of a lost session.
 
+### M12 -- MERGED to main, ff-only, under the merge lock
+
+    $ cd /root/Dev/ps3base2 && flock 9 (lock /tmp/ps3base-merge.lock)
+    === lock acquired 12:48:14
+    === main at a1961c5
+    === q3 at c47f61c
+    Updating a1961c5..c47f61c
+    Fast-forward
+     .agent-status/Q3.json |  2 +-
+     RESULTS-Q3.md         | 95 +++++++++++++++++++++++++++++++++++++++++++++++++++
+    2 files changed, 96 insertions(+), 1 deletion(-)
+    === MERGED, main now c47f61c
+
+Rebased onto a1961c5 immediately before the merge, and the rebase was clean. The
+branch deletes no file:
+
+    $ git diff --diff-filter=D --name-only origin/main..HEAD | wc -l
+    0
+
+Everything this task produced is on main at c47f61c:
+
+    $ git ls-tree main --name-only | grep -i RESULTS-Q3
+    RESULTS-Q3.md
+    $ git ls-tree main docs/evidence/ --name-only | grep -c 'q3-'
+    10
+    $ git show main:tools/drive_rdr.py | grep -c 'AFTER_ALERT\|AFTER_WARNING\|press_once\|--branch'
+    14
+
+### M13 -- what happened to the build directory, and why the numbers still stand
+
+The merged tree's ctest could not be re-run at the very end because
+/root/Dev/ps3base2/build-rdr no longer existed:
+
+    $ cd /root/Dev/ps3base2/build-rdr
+    bash: line 1: cd: /root/Dev/ps3base2/build-rdr: No such file or directory
+
+Disk went from 95% to 78% between 12:45 and 12:50 (246G, 233G used -> 192G used), so
+this was a cleanup that removed build directories, not anything this task did. The
+numbers are unaffected because no runtime source changed between the tree the binary
+was built from and the merged main:
+
+    $ git diff --stat d2269e5..main -- runtime/ src/ CMakeLists.txt tests/
+    (nothing)
+
+so the 40/40 from M9 and the both-arm A/B from M10 are results for the merged tree,
+not for a stale one. The only files this branch changes are tools/drive_rdr.py (the
+driver), RESULTS-Q3.md and docs/evidence/q3-*.png.
+
+## Summary
+
+The task was "drive past WARNING on both branches". Both branches are driven past
+the WARNING, through Loading, to the chapter card, and the run then ends on the
+guest's own fault -- which is the result, not a failure.
+
+1. THE DRIVER BUG: the old tools/drive_rdr.py consumed one --plan entry per ALERT
+   *sample*, so [square,cross] spent both entries on the ALERT and the cross landed
+   on the WARNING by accident; and the WARNING branch pressed nothing at all. It
+   only ever "passed" the WARNING when the ALERT happened to be sampled twice.
+   Fixed: a press belongs to a screen, the next screen's appearance is the evidence
+   it worked, the WARNING has its own Continue press, and --branch selects the ALERT
+   row. --plan kept as a deprecated alias.
+
+2. BOTH BRANCHES, A/B, same display, same binary, same VFS, back to back:
+     square -> WARNING "Autosave has been disabled..."      -> Loading -> EXODUS IN AMERICA
+     cross  -> WARNING "This game saves data automatically..." -> Loading -> EXODUS IN AMERICA
+
+3. THE CROSS BRANCH CREATES A REAL SAVE GAME: 3 saves (RAGE.SAV, valid PARAM.SFO with
+   TITLE 'Red Dead Redemption' and SUB_TITLE 'Exodus in America', and a real 320x176
+   RGBA PNG icon), and ListAutoLoad grows 0->1->2->3. The square branch writes 0.
+   That is the strongest evidence the cross branch was driven for the first time.
+
+4. CRASH: both arms die at rdr+0xad5618 (0x00ae5818, no lifted code, lr=0x00adc030)
+   with the chapter card as the last drawn screen, flip 1201/1381, while cellFiber
+   HLE is running thousands of switches and RAGE threads are live.
+
+5. ctest 40/40, rebased, ff-only merged to main c47f61c, no file deleted.
+
