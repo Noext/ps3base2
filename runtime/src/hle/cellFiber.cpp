@@ -398,8 +398,12 @@ HLE_FUNC(cellFiber, cellFiberPpuYield) {
     const int prev = st->current;
     st->current = -1;
     st->in_fiber = false;
+    /* The fibre's registers are saved in f.guest_ctx; the scheduler resumes on
+     * its own. Restore our own registers on the way back in, exactly as
+     * RunFibers does, so the scheduler's r1 is its own. */
+    const ppu::Context fibre_ctx = ctx;
     swapcontext(&f.host_ctx, &st->scheduler_ctx);
-    /* Resumed: our guest registers are back in the thread's context. */
+    ctx = fibre_ctx;
     st->current = prev;
     st->in_fiber = true;
     f.state = State::Running;
@@ -434,8 +438,19 @@ HLE_FUNC(cellFiber, cellFiberPpuRunFibers) {
         f.state = State::Running;
         st->current = pick;
         st->in_fiber = true;
+        /* The SCHEDULER's registers must survive the switch. This is the whole
+         * discipline of a fibre switch and getting it wrong is silent: the
+         * fibre runs on its own r1 by design, so every register the fibre
+         * changes -- above all r1 -- stays changed in the one ppu::Context the
+         * thread shares with every lifted frame. MEASURED: without this
+         * save/restore the title carried on after RunFibers with
+         * r1=0xd0033070, i.e. still on the FIBRE's stack, and faulted at
+         * guest 0x400 in its own code (ppu::lwarx, lr 0xb57ec4) because its
+         * frames had been handed a stack that was no longer its own. */
+        const ppu::Context scheduler_ctx = ctx;
         f.guest_ctx = ctx;          /* the scheduler's registers are the fibre's start */
         swapcontext(&st->scheduler_ctx, &f.host_ctx);
+        ctx = scheduler_ctx;        /* back on our own stack, with our own r1 */
         st->current = -1;
         st->in_fiber = false;
         /* A terminated fibre stops being runnable; a suspended one is retried on

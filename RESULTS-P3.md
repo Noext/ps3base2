@@ -349,3 +349,40 @@ MEASURED: no HLE run has produced the guest-0x10 fault; the longest HLE run is
 NOT CLAIMED: a crash rate. The fault is intermittent on both sides (it appeared
   in 4 of 8 LLE runs on :0 today, and in none of the 3 interleaved 160 s pairs).
   A rate would need far more runs than this session has.
+## Measurement 8 -- the switch discipline, and the second real bug in the HLE
+
+Saving the scheduler's registers across the switch is not optional, and leaving
+it out produced a plausible-looking but wrong run. MEASURED, before the fix:
+
+    I 34.744211 cellFiber: HLE CreateFiber #0 ... -> CELL_OK
+    I 34.745995 cellFiber: HLE RunFibers(0x0165d580) ran 2311 fibre switch(es) -> CELL_OK
+    I 34.746007 cellFiber: HLE JoinFiber #0 -> status 0x1, CELL_OK
+    E 34.747873 crash: signal 11 at ppu::lwarx(...)+0x3a fault ... (guest 0x400) thread main_thread
+    E 34.770377 crash:   guest lr 0xb57ec4 r1 0xd0033070 ...
+
+r1 at the fault is 0xd0033070 -- INSIDE the fibre stack (0xd0025490+0xdc70). The
+fibre had returned and the title carried on using the fibre's stack pointer,
+because the one ppu::Context every lifted frame shares still held the fibre's r1.
+The fix is to save the scheduler's context across swapcontext and restore it on
+the way back (both in RunFibers and in Yield). After it:
+
+    I 50.111248 cellFiber: HLE CreateFiber #698 ... -> CELL_OK
+    I 50.111262 cellFiber: HLE CreateFiber #699 ... -> CELL_OK
+    I 50.115567 cellFiber: HLE RunFibers(0x0165d580) ran 2358 fibre switch(es) -> CELL_OK
+    I 50.115585 cellFiber: HLE JoinFiber #699 -> status 0x1e, CELL_OK
+    I 50.115595 cellFiber: HLE JoinFiber #698 -> status 0x1e, CELL_OK
+    I 50.115604 cellFiber: HLE JoinFiber #697 -> status 0x1e, CELL_OK
+
+700 fibres created, 2358 switches, joins returning status 0x1e -- the fibre path
+is now doing REAL WORK rather than faulting, and the title got 50 s into its
+startup with it. It then hit a different abort in its own code:
+
+    F 50.203942 ppu: unknown indirect target 0x00ae5818 -- rdr+0xad5618 (no lifted code)
+      (lr=0x00adc030, thread 0x1000000)
+
+That is a jumped-to address inside the title's own image that the lifter did not
+cover -- a seed/lift coverage question, not a fibre question. It is where this
+task stops: the fibre defect is gone and the next one is a missing lift root.
+
+Two runs of the fixed build: EXIT=134 (abort, no SIGSEGV) both, at 50 s and
+50 s, where every pre-fix HLE run died at 31-35 s with a SIGSEGV.
