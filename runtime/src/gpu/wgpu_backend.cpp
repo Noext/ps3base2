@@ -104,6 +104,18 @@ struct Device {
     uint32_t height = 0;
 
     WGPUTexture color = nullptr;
+    /* T1 -- THE PERSISTENT OFFSCREEN TARGET.
+     *
+     * A canvas texture is destroyed by the browser after it is composed. Importing
+     * one in end_frame() for the NEXT frame therefore hands every draw a dead
+     * texture: measured, 91 magenta clears issued into a valid view, 0 validation
+     * errors, and a black canvas. Nothing may be kept across animation callbacks.
+     *
+     * So all rendering goes into THIS texture, which we own and which never expires,
+     * and the canvas texture is acquired, written and released inside the single
+     * callback that presents. */
+    WGPUTexture offscreen = nullptr;
+    WGPUTextureView offscreen_view = nullptr;
     WGPUTextureView color_view = nullptr;
     WGPUTexture depth = nullptr;
     WGPUTextureView depth_view = nullptr;
@@ -223,9 +235,15 @@ bool poll_until(const bool& done) {
          * draws with 0 GPU errors. On the web the device drives its own futures through
          * the browser's event loop, so wgpuDevicePoll is what pumps them. */
         if (g.instance) wgpuInstanceProcessEvents(g.instance);
-        else if (g.device) wgpuDevicePoll(g.device, false, nullptr);
+        else if (g.device) {
+            /* wait=true: the device BLOCKS until its futures have advanced. With
+             * wait=false the poll returns immediately and the sleep that follows blocks
+             * the JS thread, so the map callback never gets a task boundary -- measured:
+             * "PROBE map failed" on every attempt. */
+            wgpuDevicePoll(g.device, true, nullptr);
+        }
         if (done) return true;
-        std::this_thread::sleep_for(std::chrono::microseconds(200));
+        if (!g.device) std::this_thread::sleep_for(std::chrono::microseconds(200));
     }
     return done;
 }
@@ -294,49 +312,33 @@ void end_pass();
 
 void make_targets(uint32_t width, uint32_t height) {
 #if defined(__EMSCRIPTEN__)
-    /* The web target is the CANVAS TEXTURE, and it is re-fetched every frame.
+    /* THE PERSISTENT OFFSCREEN TARGET, not the canvas texture.
      *
-     * A canvas texture is only valid between getCurrentTexture() and the next
-     * one; it is invalidated at presentation. Measured by track X6 for the same
-     * reason: a copy issued in a later task returns zeros. So the view is rebuilt
-     * here, at the frame boundary, from whatever texture the canvas hands out
-     * now -- importing it through the bridge, which runs on the realm that owns
-     * the device (the renderer is on a pthread and cannot reach it; see
-     * web/s1-bridge.js).
+     * The canvas texture is destroyed by the browser once it has been composed, so a
+     * view imported for the next animation frame is a view of a dead texture. That is
+     * exactly what the bisection measured: 91 magenta clears issued into a view that
+     * WebGPU accepted without error, and a canvas that stayed black.
      *
-     * The depth attachment is a real, private texture: WebGPU REJECTS a pass
-     * whose depth-stencil view is stale or missing while the pipeline declares
-     * depth, and dropping the command buffer is a black frame with no error. */
-    {
-        static std::atomic<uint32_t> mt{0};
-        if (mt.fetch_add(1) < 200)
-            LOG_INFO("wgpu", "make_targets(%u,%u) called; have color_view %p", width, height, (void*)g.color_view);
-    }
-    if (s1_canvas_configure(width, height)) {
-        const uint32_t tex = s1_canvas_texture();
-        if (tex) {
-            /* A VIEW REFERENCED BY AN OPEN PASS MUST NOT BE RELEASED. The pass is
-             * closed first, and the encoder finished and submitted, so the view this
-             * frame used is no longer referenced when the next one is imported.
-             * Measured before this guard: 159 magenta clears issued, 0 validation
-             * errors, and a black canvas -- the clear was recorded against a view that
-             * had already been swapped out from under it. */
-            if (g.pass) end_pass();
-            if (g.color_view) wgpuTextureViewRelease(g.color_view);
-            /* The previous canvas texture is released by the canvas itself; only
-             * the imported handle is dropped, never destroyed. */
-            g.color = reinterpret_cast<WGPUTexture>(uintptr_t(tex));
-            g.color_view = wgpuTextureCreateView(g.color, nullptr);
-            /* T1: the imported handle and the view it produced, together. A null
-             * view here with a non-null handle means the port refused the import,
-             * not that the canvas is missing -- and that distinction is the whole
-             * difference between "fix the bridge" and "fix the device". */
-            {
-                static std::atomic<uint32_t> n{0};
-                if (n.fetch_add(1) < 4)
-                    LOG_INFO("wgpu", "canvas target: tex 0x%08x -> handle %p view %p",
-                             tex, (void*)g.color, (void*)g.color_view);
-            }
+     * Everything therefore draws into this texture, which we own and which never
+     * expires. The canvas texture is acquired, written and released inside the single
+     * callback that presents (see end_frame). */
+    if (!g.offscreen || g.width != width || g.height != height) {
+        if (g.offscreen_view) { wgpuTextureViewRelease(g.offscreen_view); g.offscreen_view = nullptr; }
+        if (g.offscreen) { wgpuTextureRelease(g.offscreen); g.offscreen = nullptr; }
+        WGPUTextureDescriptor td = WGPU_TEXTURE_DESCRIPTOR_INIT;
+        td.usage = WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_CopySrc | WGPUTextureUsage_CopyDst;
+        td.dimension = WGPUTextureDimension_2D;
+        td.size = {width, height, 1};
+        td.format = g.color_format;
+        td.mipLevelCount = 1;
+        td.sampleCount = 1;
+        g.offscreen = wgpuDeviceCreateTexture(g.device, &td);
+        if (g.offscreen) g.offscreen_view = wgpuTextureCreateView(g.offscreen, nullptr);
+        {
+            static std::atomic<uint32_t> n{0};
+            if (n.fetch_add(1) < 4)
+                LOG_INFO("wgpu", "offscreen target %ux%u tex %p view %p", width, height,
+                         (void*)g.offscreen, (void*)g.offscreen_view);
         }
     }
     if (!g.depth || g.width != width || g.height != height) {
@@ -442,7 +444,7 @@ void begin_pass() {
     if (g.pass) return;
     if (!g.encoder) g.encoder = wgpuDeviceCreateCommandEncoder(g.device, nullptr);
     WGPURenderPassColorAttachment ca = WGPU_RENDER_PASS_COLOR_ATTACHMENT_INIT;
-    ca.view = g.color_view;
+    ca.view = g.offscreen_view;
     ca.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
     /* On the web this is a fresh canvas texture every frame: WebGPU requires the
      * attachment to be CLEARED, because a canvas texture's contents at
@@ -1565,10 +1567,17 @@ bool init(uint32_t width_hint, uint32_t height_hint) {
         std::fprintf(stderr, "wgpu: web: bind layouts failed\n");
         return false;
     }
+    /* THE CANVAS MUST STILL BE CONFIGURED, even though nothing draws into it until
+     * presentation: getCurrentTexture() returns an error on an unconfigured canvas.
+     * The configuration is what binds the canvas to this device and format. */
+    if (!s1_canvas_configure(width_hint, height_hint)) {
+        std::fprintf(stderr, "wgpu: web: canvas configure failed\n");
+        return false;
+    }
     make_targets(width_hint, height_hint);
-    std::fprintf(stderr, "wgpu: web: adopted device %p queue %p colourFormat %d target %ux%u view %p\n",
+    std::fprintf(stderr, "wgpu: web: adopted device %p queue %p colourFormat %d offscreen %ux%u view %p\n",
                  (void*)g.device, (void*)g.queue, int(g.color_format),
-                 g.width, g.height, (void*)g.color_view);
+                 g.width, g.height, (void*)g.offscreen_view);
     return true;
 }
 #else
@@ -2012,7 +2021,7 @@ void self_test() {
 
     WGPUCommandEncoder enc = wgpuDeviceCreateCommandEncoder(g.device, nullptr);
     WGPURenderPassColorAttachment ca = WGPU_RENDER_PASS_COLOR_ATTACHMENT_INIT;
-    ca.view = g.color_view;
+    ca.view = g.offscreen_view;
     ca.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
     ca.loadOp = WGPULoadOp_Clear;
     ca.storeOp = WGPUStoreOp_Store;
@@ -2195,7 +2204,7 @@ void draw(const DrawInputs& in) {
      * owns the frame, before begin_pass() opens the pass that references the view,
      * and s1_canvas_texture() is proxied so the import runs on the realm that owns
      * the device. */
-    if (!g.color_view) {
+    if (!g.offscreen_view) {
         /* end_frame() imports the next canvas texture right after each submit, so a
          * null view here means the import failed, not that this is a new frame. The
          * refusal is counted so it cannot be mistaken for "the draw never arrived". */
@@ -2379,15 +2388,15 @@ void clear(uint32_t mask, const float color[4], float depth, uint32_t) {
      * clear body ran FOUR times, so nothing was ever recorded into a frame. The
      * cycle (clear needs a view, the view is made at the end of a frame, a frame
      * needs a clear) is broken by importing the target here when it is missing. */
-    if (!g.color_view) make_targets(g.width, g.height);
-    if (!g.color_view) return;
+    if (!g.offscreen_view) make_targets(g.width, g.height);
+    if (!g.offscreen_view) return;
     end_pass();
     /* Keep the frame's encoder: it already holds the draws before this
      * clear, and releasing it would discard them. A clear is just another
      * render pass in the same encoder, which WebGPU allows. */
     if (!g.encoder) g.encoder = wgpuDeviceCreateCommandEncoder(g.device, nullptr);
     WGPURenderPassColorAttachment ca = WGPU_RENDER_PASS_COLOR_ATTACHMENT_INIT;
-    ca.view = g.color_view;
+    ca.view = g.offscreen_view;
     ca.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
     /* The RSX mask says WHICH attachments to clear: bits 0xF0 are colour, 0x3
      * depth and stencil. Clearing colour on a depth-only clear erased every
@@ -2519,164 +2528,144 @@ bool readback(std::vector<uint8_t>& out, uint32_t& width, uint32_t& height) {
 void end_frame() {
     if (!on_owner_thread("end_frame")) return;
     if (!g.ready) return;
-    /* A VALIDATION SCOPE AROUND EVERY FRAME, so "0 errors" is a measurement and not
-     * an absence of instrumentation. The callback records the first message it sees;
-     * the count is reported by the page. */
     wgpuDevicePushErrorScope(g.device, WGPUErrorFilter_Validation);
     const uint32_t dbg = g_debug_mode.load();
     end_pass();
-    /* MODE 1+: A MAGENTA CLEAR ON EVERY FLIP, issued by us.
-     *
-     * Relying on the game's own clear was wrong: this title emits FOUR clear
-     * records against 161 flips, so 157 frames would have had no clear at all and
-     * mode 1 would have measured nothing. The diagnostic owns the frame in these
-     * modes, so it clears the frame itself. */
-    if (dbg >= 1) {
-        if (!g.encoder) g.encoder = wgpuDeviceCreateCommandEncoder(g.device, nullptr);
-        WGPURenderPassColorAttachment ca = WGPU_RENDER_PASS_COLOR_ATTACHMENT_INIT;
-        ca.view = g.color_view;
-        ca.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
-        ca.loadOp = WGPULoadOp_Clear;
-        ca.storeOp = WGPUStoreOp_Store;
-        ca.clearValue = {1.0, 0.0, 1.0, 1.0};   /* magenta */
-        WGPURenderPassDescriptor rp = WGPU_RENDER_PASS_DESCRIPTOR_INIT;
-        rp.colorAttachmentCount = 1;
-        rp.colorAttachments = &ca;
-        WGPURenderPassEncoder cp = wgpuCommandEncoderBeginRenderPass(g.encoder, &rp);
-        if (cp) {
-            wgpuRenderPassEncoderEnd(cp);
-            wgpuRenderPassEncoderRelease(cp);
-            static uint32_t ncl = 0;
-            if (ncl++ < 200) std::fprintf(stderr, "wgpu: diag mode %u magenta clear issued\n", dbg);
-        }
-    }
 
-    if (!g.encoder) {
-        /* Nothing was recorded this frame (a present with no clear and no draw).
-         * Submitting an empty frame would still cost a command buffer and would
-         * re-clear the canvas to black, so it is skipped.
-         *
-         * BUT THE CANVAS VIEW IS STILL RE-IMPORTED, and skipping that was a real
-         * defect: make_targets ran 6 times in a run with 156 flips, so after the
-         * first few frames g.color_view pointed at a texture the canvas had already
-         * presented and invalidated. Every later clear and draw went into a dead
-         * texture -- a black canvas with no GPU error, which is exactly what mode 1
-         * measured (a forced magenta clear that produced a black PNG). */
-        if (g.web) {
-            if (g.color_view) wgpuTextureViewRelease(g.color_view);
-            g.color_view = nullptr;
-            g.color = nullptr;
-            make_targets(g.width, g.height);
-        }
-        return;
-    }
-    /* MODES 2..6: our own full-screen triangle, on top of the magenta clear.
+    /* ===================================================================
+     * THE CANVAS CYCLE, ALL INSIDE THIS ONE CALLBACK.
      *
-     * Mode 2 has no culling, no depth and no blending -- it proves the pass, the
-     * pipeline and the submit and nothing else. Modes 4/5/6 turn culling, depth and
-     * blending on one at a time, so the first state that makes the red triangle
-     * disappear is the culprit. */
-    if (dbg >= 2 && dbg <= 6) {
-        WGPURenderPipeline dp = diag_pipeline(dbg >= 4, dbg >= 5, dbg >= 6);
-        if (!dp) {
-            LOG_ERROR("wgpu", "diag: pipeline creation failed in mode %u", dbg);
-        } else {
+     * Order, with no await and no asynchronous callback between the steps:
+     *     getCurrentTexture() -> view -> render pass(es) -> submit -> release
+     *
+     * Nothing is kept across animation callbacks. The browser destroys a canvas
+     * texture once it has been composed, so a view imported for the NEXT frame is a
+     * view of a dead texture -- which is exactly what the previous design did, and
+     * why 91 magenta clears into a view WebGPU accepted produced a black canvas.
+     *
+     * The game's own rendering still goes to g.offscreen (a frame can span several
+     * callbacks); at presentation the offscreen is copied into the canvas texture
+     * acquired here. In the diagnostic modes there is no offscreen at all: the
+     * magenta clear and the test triangle are drawn straight into the canvas. */
+    if (g.web) {
+        const uint32_t canvas_tex = s1_canvas_texture();
+        if (!canvas_tex) {
+            static std::atomic<uint32_t> nf{0};
+            if (nf.fetch_add(1) < 5) LOG_ERROR("wgpu", "end_frame: s1_canvas_texture returned 0");
+            wgpuDevicePopErrorScope(g.device, WGPU_POP_ERROR_SCOPE_CALLBACK_INFO_INIT);
+            return;
+        }
+        WGPUTexture ct = reinterpret_cast<WGPUTexture>(uintptr_t(canvas_tex));
+        WGPUTextureView cv = wgpuTextureCreateView(ct, nullptr);
+        if (!cv) {
+            LOG_ERROR("wgpu", "end_frame: canvas view creation failed");
+            wgpuTextureRelease(ct);
+            wgpuDevicePopErrorScope(g.device, WGPU_POP_ERROR_SCOPE_CALLBACK_INFO_INIT);
+            return;
+        }
+
+        WGPUCommandEncoder enc = wgpuDeviceCreateCommandEncoder(g.device, nullptr);
+        if (!enc) {
+            wgpuTextureViewRelease(cv);
+            wgpuTextureRelease(ct);
+            wgpuDevicePopErrorScope(g.device, WGPU_POP_ERROR_SCOPE_CALLBACK_INFO_INIT);
+            return;
+        }
+
+        if (dbg >= 1) {
+            /* MODE 1: a magenta clear straight into the canvas texture. */
             WGPURenderPassColorAttachment ca = WGPU_RENDER_PASS_COLOR_ATTACHMENT_INIT;
-            ca.view = g.color_view;
+            ca.view = cv;
             ca.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
             ca.loadOp = WGPULoadOp_Clear;
             ca.storeOp = WGPUStoreOp_Store;
-            ca.clearValue = {1.0, 0.0, 1.0, 1.0};   /* magenta: the clear is visible */
-            WGPURenderPassDepthStencilAttachment da = WGPU_RENDER_PASS_DEPTH_STENCIL_ATTACHMENT_INIT;
-            da.view = g.depth_view;
-            da.depthLoadOp = WGPULoadOp_Clear;
-            da.depthStoreOp = WGPUStoreOp_Store;
-            da.depthClearValue = 1.0f;
-            da.stencilLoadOp = WGPULoadOp_Clear;
-            da.stencilStoreOp = WGPUStoreOp_Store;
-            da.stencilClearValue = 0;
+            ca.clearValue = {1.0, 0.0, 1.0, 1.0};
             WGPURenderPassDescriptor rp = WGPU_RENDER_PASS_DESCRIPTOR_INIT;
             rp.colorAttachmentCount = 1;
             rp.colorAttachments = &ca;
-            rp.depthStencilAttachment = (dbg >= 5 && g.depth_view) ? &da : nullptr;
-            WGPURenderPassEncoder dp_pass = wgpuCommandEncoderBeginRenderPass(g.encoder, &rp);
-            if (dp_pass) {
-                wgpuRenderPassEncoderSetPipeline(dp_pass, dp);
-                wgpuRenderPassEncoderDraw(dp_pass, 3, 1, 0, 0);
-                wgpuRenderPassEncoderEnd(dp_pass);
-                wgpuRenderPassEncoderRelease(dp_pass);
-                static uint32_t nrep = 0;
-                if (nrep++ < 3) std::fprintf(stderr, "wgpu: diag mode %u drew a full-screen triangle\n", dbg);
+            WGPURenderPassEncoder cp = wgpuCommandEncoderBeginRenderPass(enc, &rp);
+            if (cp) {
+                if (dbg >= 2 && dbg <= 6) {
+                    /* MODE 2..6: our own full-screen triangle over the clear. */
+                    WGPURenderPipeline dp = diag_pipeline(dbg >= 4, false, dbg >= 6);
+                    if (dp) {
+                        wgpuRenderPassEncoderSetPipeline(cp, dp);
+                        wgpuRenderPassEncoderDraw(cp, 3, 1, 0, 0);
+                        wgpuRenderPipelineRelease(dp);
+                    }
+                }
+                wgpuRenderPassEncoderEnd(cp);
+                wgpuRenderPassEncoderRelease(cp);
+                static uint32_t ncl = 0;
+                if (ncl++ < 200) std::fprintf(stderr, "wgpu: diag mode %u drew into the CANVAS texture\n", dbg);
             }
-            wgpuRenderPipelineRelease(dp);
+        } else if (g.offscreen) {
+            /* MODE 0: copy the frame the game rendered into the canvas. */
+            WGPUTexelCopyTextureInfo src = WGPU_TEXEL_COPY_TEXTURE_INFO_INIT;
+            src.texture = g.offscreen;
+            src.mipLevel = 0;
+            src.aspect = WGPUTextureAspect_All;
+            WGPUTexelCopyTextureInfo dst = WGPU_TEXEL_COPY_TEXTURE_INFO_INIT;
+            dst.texture = ct;
+            dst.mipLevel = 0;
+            dst.aspect = WGPUTextureAspect_All;
+            WGPUExtent3D sz = {g.width, g.height, 1};
+            wgpuCommandEncoderCopyTextureToTexture(enc, &src, &dst, &sz);
         }
+
+        WGPUCommandBuffer cb = wgpuCommandEncoderFinish(enc, nullptr);
+        wgpuCommandEncoderRelease(enc);
+        if (cb) {
+            wgpuQueueSubmit(g.queue, 1, &cb);
+            wgpuCommandBufferRelease(cb);
+            static std::atomic<uint32_t> np{0};
+            if (np.fetch_add(1) < 200)
+                std::fprintf(stderr, "wgpu: presented frame %u (canvas tex 0x%08x)\n",
+                             np.load(), canvas_tex);
+        }
+        /* Release the VIEW, but NOT the canvas texture.
+         *
+         * The canvas texture belongs to the canvas, not to us: the browser presents
+         * it after this callback returns. wgpuTextureRelease on it calls destroy(),
+         * which kills the very texture that is about to be composed -- measured: 30
+         * frames rendered straight into the canvas texture, 0 validation errors, and a
+         * canvas of srgba(0,0,0,0) on every shot. The spec says the application must
+         * not destroy a canvas texture; the canvas handles its lifetime. */
+        wgpuTextureViewRelease(cv);
+        release_frame_buffers();
+        {
+            struct ScopeOut { std::atomic<uint32_t>* count; char* msg; size_t cap; };
+            static char scope_msg[512] = {0};
+            static ScopeOut out{&g_scope_errors, scope_msg, sizeof scope_msg};
+            WGPUPopErrorScopeCallbackInfo pci = WGPU_POP_ERROR_SCOPE_CALLBACK_INFO_INIT;
+            pci.mode = WGPUCallbackMode_AllowProcessEvents;
+            pci.callback = [](WGPUPopErrorScopeStatus status, WGPUErrorType type, WGPUStringView msg, void* u1, void*) {
+                auto* o = static_cast<ScopeOut*>(u1);
+                if (status == WGPUPopErrorScopeStatus_Success && type != WGPUErrorType_NoError) {
+                    const uint32_t n = o->count->fetch_add(1);
+                    if (n < 5 && msg.data) {
+                        const size_t len = msg.length < (o->cap - 1) ? msg.length : (o->cap - 1);
+                        std::memcpy(o->msg, msg.data, len);
+                        o->msg[len] = 0;
+                        std::fprintf(stderr, "wgpu: FRAME VALIDATION ERROR: %s\n", o->msg);
+                    }
+                }
+            };
+            pci.userdata1 = &out;
+            wgpuDevicePopErrorScope(g.device, pci);
+            wgpuDevicePoll(g.device, false, nullptr);
+        }
+        return;
     }
+
+    /* Native path. */
+    if (!g.encoder) { wgpuDevicePopErrorScope(g.device, WGPU_POP_ERROR_SCOPE_CALLBACK_INFO_INIT); return; }
     WGPUCommandBuffer cb = wgpuCommandEncoderFinish(g.encoder, nullptr);
     wgpuCommandEncoderRelease(g.encoder);
     g.encoder = nullptr;
-    if (!cb) return;
-    wgpuQueueSubmit(g.queue, 1, &cb);
-    wgpuCommandBufferRelease(cb);
-    /* Pop the validation scope: the callback is where a rejected command buffer
-     * shows up, and it is the only place that can say so. */
-    {
-        struct ScopeOut { std::atomic<uint32_t>* count; char* msg; size_t cap; };
-        static char scope_msg[512] = {0};
-        static ScopeOut out{&g_scope_errors, scope_msg, sizeof scope_msg};
-        WGPUPopErrorScopeCallbackInfo pci = WGPU_POP_ERROR_SCOPE_CALLBACK_INFO_INIT;
-        pci.mode = WGPUCallbackMode_AllowProcessEvents;
-        pci.callback = [](WGPUPopErrorScopeStatus status, WGPUErrorType type, WGPUStringView msg, void* u1, void*) {
-            auto* o = static_cast<ScopeOut*>(u1);
-            if (status == WGPUPopErrorScopeStatus_Success && type != WGPUErrorType_NoError) {
-                const uint32_t n = o->count->fetch_add(1);
-                if (n < 3 && msg.data) {
-                    const size_t len = msg.length < (o->cap - 1) ? msg.length : (o->cap - 1);
-                    std::memcpy(o->msg, msg.data, len);
-                    o->msg[len] = 0;
-                    std::fprintf(stderr, "wgpu: FRAME VALIDATION ERROR: %s\n", o->msg);
-                }
-            }
-        };
-        pci.userdata1 = &out;
-        wgpuDevicePopErrorScope(g.device, pci);
-        wgpuDevicePoll(g.device, false, nullptr);
-    }
+    if (cb) { wgpuQueueSubmit(g.queue, 1, &cb); wgpuCommandBufferRelease(cb); }
     release_frame_buffers();
-    /* The next frame writes into a NEW canvas texture, so the view this frame used
-     * is released and the next one is IMPORTED HERE, in the same task, right after
-     * the submit that presents it.
-     *
-     * Why here and not lazily at the next draw: importing inside draw() was tried
-     * and it STALLED the FIFO thread. getCurrentTexture() is a proxied sync call
-     * that runs on the main realm and blocks the caller; doing it from the middle
-     * of a draw, while the render pass for the previous texture was still open,
-     * left the FIFO spinning at "busy 99.9%" with "methods 0.1% (0k/s)" and
-     * n_method frozen at 378. Doing it at the frame boundary instead keeps the
-     * import off the draw path entirely: measured 42 379 draws and 503 327 methods
-     * with the import disabled, and the import itself now happens once per frame.
-     *
-     * A canvas texture is only valid between getCurrentTexture() and the next
-     * presentation, so importing immediately after the submit is also the earliest
-     * legal moment for the next frame's target. */
-    if (g.web) {
-        /* HOLDING THE VIEW WAS WRONG, and it is why the canvas stayed black.
-         *
-         * A canvas texture is invalidated at presentation: the browser hands out a
-         * NEW texture at the next getCurrentTexture(), and the one this frame drew
-         * into is gone. Holding the view across frames therefore made every frame
-         * draw into a stale texture that was never presented -- measured: 1514 draws
-         * replayed, 0 GPU errors, and a readback of exactly one colour.
-         *
-         * So the view is released and a fresh one imported HERE, in the same task,
-         * right after the submit that presents the frame. Doing it at the frame
-         * boundary (not inside draw()) is what keeps it off the FIFO's hot path:
-         * getCurrentTexture() is a proxied sync call, and calling it from the middle
-         * of a draw stalled the FIFO at n_method=378. */
-        if (g.color_view) { wgpuTextureViewRelease(g.color_view); }
-        g.color_view = nullptr;
-        g.color = nullptr;
-        make_targets(g.width, g.height);
-    }
+    wgpuDevicePopErrorScope(g.device, WGPU_POP_ERROR_SCOPE_CALLBACK_INFO_INIT);
 }
 
 /* T1 -- capture the CURRENT TARGET into a buffer the PAGE can read.

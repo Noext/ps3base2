@@ -55,10 +55,18 @@ addToLibrary({
     /* configure() is idempotent; calling it every frame is what the WebGPU spec
      * expects when the target size changes, and the renderer resizes on a
      * surface change. */
+    /* COPY_DST IS REQUIRED, and its absence is why the canvas stayed blank.
+     *
+     * The replay renders into its own offscreen texture and copies that into the
+     * canvas texture at presentation. A canvas configured without `usage` defaults to
+     * RENDER_ATTACHMENT only, so copyTextureToTexture into it is invalid -- and the
+     * failure is silent: 30 frames presented, 0 validation errors, and a canvas of
+     * srgba(0,0,0,0). Measured exactly that before this line existed. */
     ctx.configure({
       device: Module.s1Device,
       format: navigator.gpu.getPreferredCanvasFormat(),
       alphaMode: 'opaque',
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_DST,
     });
     Module.s1CanvasContext = ctx;
     Module.s1CanvasFormat = navigator.gpu.getPreferredCanvasFormat();
