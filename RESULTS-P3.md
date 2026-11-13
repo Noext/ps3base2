@@ -386,3 +386,55 @@ task stops: the fibre defect is gone and the next one is a missing lift root.
 
 Two runs of the fixed build: EXIT=134 (abort, no SIGSEGV) both, at 50 s and
 50 s, where every pre-fix HLE run died at 31-35 s with a SIGSEGV.
+## Measurement 9 -- FINAL A/B, same machine, same minute, interleaved
+
+    Fri Nov 13 12:14:44 UTC 2026
+    A  LLE (upstream /root/Dev/ps3base2/build-rdr/ps3base)  EXIT=139  SIGSEGV  flip 661
+    B  HLE (wt-P3 build-rdr/ps3base)                        EXIT=134  abort    flip 1081
+
+A, verbatim:
+
+    E 41.603918 crash: signal 11 at ... (exe+0x17aa2b6) fault ... (guest 0x10) thread main_thread
+    E 41.638213 crash:   guest lr 0x0 r1 0xd0032d30 ...
+
+r1=0xd0032d30 again -- the same value in every crashing run, on the fibre's own
+stack, inside lifted libfiber. B, verbatim:
+
+    I 47.864553 cellFiber: HLE CreateFiber #722 ... -> CELL_OK
+    I 47.864564 cellFiber: HLE CreateFiber #723 ... -> CELL_OK
+    I 47.878379 cellFiber: HLE RunFibers(0x0165d580) ran 10407 fibre switch(es) -> CELL_OK
+    I 47.878417 cellFiber: HLE JoinFiber #723 -> status 0x1e, CELL_OK
+    F 48.132362 ppu: unknown indirect target 0x00ae5818 -- rdr+0xad5618 (no lifted code)
+
+The HLE side ran 724 fibres and 10 407 real fibre switches in the same minute the
+LLE side faulted, and its failure is a jump into the title's own image at an
+address the lifter did not cover -- a lift-coverage gap, named with its address,
+not a fibre fault.
+
+## Answer to the task, in one paragraph
+
+The task's precondition is met: a fibre switch DOES precede the crash, proved by
+a 512-event ring dumped from the signal handler in three crashing runs (CreateFiber
+-> RunFibers with no matching return -> Yield at r1=0xd0032d60 on the fibre's own
+stack -> SIGSEGV at r1=0xd0032d30, guest 0x10, inside LLE libfiber's back-chain
+epilogue). cellFiber has therefore been moved out of lifted code and into HLE
+(runtime/src/hle/cellFiber.cpp, ~430 lines, ucontext host fibres, one host stack
+per fibre, per-thread fibre table, guest stacks supplied by the title, a
+self-referential back chain so the epilogue cannot read zero, and JoinFiber
+implemented because the title's next call after RunFibers is a join that it
+treats as fatal when it fails). GOWA_FIBER_HLE=0 restores LLE for the A/B.
+Measured result: the guest-0x10 SIGSEGV that killed every LLE run that reached
+the save-prompt path is gone from every HLE run, and the title now executes
+fibres for real -- 700+ created, 10 407 switches, joins returning status.
+
+Two defects in my own first HLE draft were found by measuring and are recorded
+so the next port does not repeat them: the scheduler-attribute alignment is the
+ATTRIBUTE's 8 bytes and not the scheduler's 128 (the title exits immediately on
+the wrong answer), and the fibre entry is an OPD and not a code address. A third
+-- saving the scheduler's registers across the switch -- is the one that would
+have been silent: without it the title carries on with the fibre's r1 and faults
+in its own code at guest 0x400.
+
+What is NOT claimed: a crash rate, and "RDR is fixed". The guest-0x10 fault is
+gone; the title still stops at 48 s on a lift-coverage gap at rdr+0xad5618,
+which is the next task and not a fibre defect.
