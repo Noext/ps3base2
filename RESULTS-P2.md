@@ -417,3 +417,14 @@ The fault reproduces on every run at the same point with the same signature:
 Runs observed: /tmp/P2-census-run2.log (56.11 s), and the gdb runs at 15-19 s
 under the debugger (faster because gdb stops at the texture-watch faults and the
 timing shifts). The guest-0x10 fault is identical in all of them.
+
+## FINAL
+Status: done. Branch explore/p2, rebased on main (up to date), head c78430a.
+ctest with the census compiled in: 100% tests passed, 0 failed out of 40.
+
+Files touched (source changes are the measurement instrumentation; they are
+additive and do not change behaviour unless the crash handler runs):
+  runtime/include/runtime/thread.h   + tls_census declaration
+  runtime/src/thread.cpp             + tls_census implementation
+  runtime/src/crash_posix.cpp        + one call to it from the crash reporter
+RESULTS-P2.md carries every measurement and the raw bytes.
