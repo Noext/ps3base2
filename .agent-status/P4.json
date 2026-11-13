@@ -1,12 +1,28 @@
 {
   "agent": "P4",
-  "status": "running",
-  "task": "closed-loop driving of the RDR ALERT dialogue; capture the screen that follows it",
-  "result": "DONE. The screen that follows the ALERT dialogue is a SECOND RED PANEL headed WARNING. Two branches, both measured: (a) square = Continue Without Saving -> WARNING 'Autosave has been disabled. You may enable autosave in the options menu.' with a Continue [X] row; (b) cross = Create A New Save Game -> WARNING 'This game saves data automatically at certain points. Do not switch off the power when the HDD access indicator is flashing. Autosave may be turned off at any time in the options menu.' with the three ALERT rows still drawn under it. Either branch then reaches the RDR key-art 'Loading...' screen and dies in the known null+0x10 SIGSEGV at guest 0x10 inside f_0053338c (exit -11).",
-  "key_finding": "The ALERT was unreachable because the tree's default VFS carries THREE RDR saves: with them ListAutoLoad matches 3 and the title loads a save and drives into the world (the SIGSEGV). With dev_hdd0/home/00000001/savedata EMPTY, ListAutoLoad matches 0, the title draws its own ALERT and waits indefinitely -- no crash at all while it waits. One env var, PS3BASE_VFS_DIR, is the whole difference.",
-  "key_finding_2": "Both prior 'fixes' (dev_flash and RoundGuard) were necessary but neither is sufficient to reach the ALERT: the save state is the gate I was missing, and it is a test-harness condition, not a runtime defect.",
-  "buttons": "Read from the pixels, not assumed: Continue Without Saving = SQUARE, Create A New Save Game = CROSS, Retry = CIRCLE. Cross is NOT the first row.",
-  "deliverable": "docs/evidence/rdr-p4-warning.png, docs/evidence/rdr-p4-warning-new-save.png, docs/evidence/rdr-p4-warning-tool.png, docs/evidence/rdr-p4-postalert-loading.png",
-  "tool": "tools/drive_rdr.py -- closed-loop driver committed; verified end to end on the committed version",
-  "at": "2026-11-13T10:40Z"
+  "status": "done",
+  "task": "closed-loop driving of the RDR ALERT dialogue: read the screen, choose Continue Without Saving, then Create A New Save Game, capture every screen. Deliverable: the capture of the screen that follows the ALERT dialogue.",
+  "result": "The screen that follows the ALERT dialogue is a SECOND RED PANEL HEADED WARNING. Both branches measured: square (Continue Without Saving) -> WARNING 'Autosave has been disabled. You may enable autosave in the options menu.' with a Continue [X] row; cross (Create A New Save Game) -> WARNING 'This game saves data automatically at certain points. Do not switch off the power when the HDD access indicator is flashing. Autosave may be turned off at any time in the options menu.' with the three ALERT rows still drawn under it. Either branch is then followed by the RDR key-art 'Loading...' screen, and the run dies in the known null+0x10 SIGSEGV at guest 0x10 inside f_0053338c (exit -11).",
+  "why_the_alert_was_unreachable": {
+    "cause": "the tree's default VFS carries three RDR saves, so ListAutoLoad matches 3 and the title loads a save and drives into the world instead of prompting",
+    "measured": "default vfs: 'ListAutoLoad: 3 savedata match prefix BLES00680 ... listing 3'; clean vfs: 'ListAutoLoad: 0 savedata ... listing 0'",
+    "fix": "PS3BASE_VFS_DIR pointing at a VFS whose dev_hdd0/home/00000001/savedata is EMPTY. With it the ALERT appears and waits indefinitely -- no crash at all while it waits (45 s of continuous ALERT samples).",
+    "note": "This is a test-harness condition, not a runtime defect. dev_flash and RoundGuard were both necessary but neither is sufficient; the save state is the third gate."
+  },
+  "buttons_read_from_pixels": "Continue Without Saving = SQUARE, Create A New Save Game = CROSS, Retry = CIRCLE. Cross is NOT the first row; pressing cross first skips the branch the task asks for first.",
+  "deliverable_evidence": [
+    "docs/evidence/rdr-p4-warning.png -- the WARNING that follows Continue Without Saving",
+    "docs/evidence/rdr-p4-warning-new-save.png -- the WARNING that follows Create A New Save Game",
+    "docs/evidence/rdr-p4-warning-tool.png -- the same, produced by the committed tool",
+    "docs/evidence/rdr-p4-alert.png, rdr-p4-postalert-loading.png, plus the menu/title frames"
+  ],
+  "tool": "tools/drive_rdr.py, committed and verified end to end: OCR two bands (centre first, because the menu rows show through the dialogue), classify, press; ALERT and WARNING are distinct states; it REFUSES to run against a non-empty savedata, which caught that my own earlier runs had written saves back.",
+  "regress_defect_for_the_lead": "tools/regress.sh never sets GOWA_FLASH_DIR, so its rdr arm cannot reach the ALERT. Same binary, same display, same minute: without the variable flips=661 exit=12 and 'SPURS aborted at 29.31 s' with flashMP3 ENOENT; with it flips=781 exit=124 and the codec opens. Its own recorded rdr output shows exactly this (flips 601/541/481/601, 'miss' on every screen attempt). NOT fixed by me: regress.sh is every agent's merge check and a silent edit would change what everyone's PASS means.",
+  "merge_queue": {
+    "rebased_on": "origin/main 01c5e16",
+    "deletions": "none (git diff --name-status origin/main..HEAD is all A)",
+    "ctest": "40/40 pass on the rebased tree (build-rdr)",
+    "note": "build/ and build-gta/ fail ctest only because their executables are from Nov 10-11 and predate tests added since; build-rdr is current and green."
+  },
+  "at": "2026-11-13T10:45Z"
 }
