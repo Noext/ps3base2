@@ -297,3 +297,63 @@ consumer is an independent thread that blocks on the queue's condition variable
 (The probe logs 'failed 0' on every interval, which is the counter that would
 have moved if the delivery had been dropped because a consumer was not draining.)
 
+
+## Measurement 6 -- port 0's silence, decomposed: the SPU writes ZERO bytes and only ONE of the 8 blocks
+
+Measurement 3 established that port 0's only writer is the SPU and every byte it
+writes is zero. This run says how much it writes and where.
+
+    $ GOWA_TRAP=12190000+0x10000 GOWA_TRAP_MAX=100000 timeout 22 ./build-rdr/ps3base --no-launcher
+    $ grep 'trap 0 write' /tmp/n5b-p0rate.log | (timestamps) -> events 1698, span 19.65 s, rate 86.3/s
+    $ (histogram of the byte offset / 0x2000)
+    blocks: [(6, 1698)]
+
+Two numbers that decide the 0/8:
+
+1. **All 1698 stores are into block 6 (0x1219c000) only.** Port 0 has 8 blocks;
+   the SPU job writes one of them, 1698 times. The other seven blocks are never
+   touched by anyone, so the best possible fill reading for this port is 1/8, not
+   8/8 -- and that is only if the block it does write were nonzero.
+2. **All 1698 stores carry 0x00000000.** The fill counter counts a block as
+   filled when any of its bytes is nonzero (cellAudio.cpp:294-298), so 0/8 is the
+   correct reading of a buffer of zeroes.
+
+Rate: 86.3 stores/s against 187.4 periods/s. The SPU mixer is not publishing one
+block per 5.33 ms period; it publishes roughly one store per 11.6 ms. It is also
+the only thread that ever touches port 0 (measurement 3a: 1455 writes, all
+`by SPU 0 Secondary`, 0 reads).
+
+### 6b. The refusal in the same run, and why it is upstream of the silence
+
+    $ ... PS3BASE_SPU_REFUSAL_DUMP=1 timeout 45 ...
+    E  30.551513 spu: thread 0x200 'SecondaryCellSpursKernel0' DMA GET REFUSED cmd 0x40 (unmapped) ea 0x00000000 size 0x80 lsa 0x1a100 pc 0x06428
+    E  30.552126 spu:     -1: ch19 <- 0x00000080 at pc 0x06410
+    E  30.552126 spu:     -2: ch18 <- 0x00000000 at pc 0x06408
+    E  30.553421 spu:     +0x050: 00000008 00000000 12190000 00000008
+    E  30.553431 spu:     +0x060: 00000000 00000000 70dcd000 70ddc000
+
+The refusing thread is **thread 0x200 'SecondaryCellSpursKernel0'**, and it is the
+same thread that writes port 0: its host tid 1321794 is the only tid in the port 0
+trap records, and it is the tid the log gives for `thread 0x200 'SecondaryCellSpursKernel0' start`.
+
+The 0x90-byte object at LS 0x36200 carries the port address at +0x58
+(0x12190000, correct) and **0 at +0x60**, which `0x6b24 lqr r53,0x36260` reads;
+`rotqbyi r4,r53,4` then makes r4 = 0, `wrch ch18,r4` publishes EA 0, and the GET is
+refused. The same instruction at 0x68e8 writes 0x70c95400, a valid address, so the
+zero is selected by a branch and not by a missing value.
+
+Chain, stated as one sequence with the evidence for each link:
+
+  * the mixer thread's period clock runs (937/1875/2813 in measurement 1);
+  * the index it publishes advances and is read (measurement 2);
+  * port 0's buffer is written by exactly one thread, the SPU at 0x200, with
+    zeroes only (measurements 3a, 6);
+  * that same thread is the one whose DMA GET is refused because its descriptor's
+    +0x60 is 0 (6b);
+  * so the SPU mix job never transfers anything into port 0, which is why the
+    fill counter reads 0/8 -- consistent with, and downstream of, the refusal.
+
+Port 1 has none of this: it is filled by a PPU thread (Bink Audio Thread, 1000
+nonzero float stores, measurement 3b), it never goes through the SPU channel path
+that is refused, and its fill reads 16/16.
+
