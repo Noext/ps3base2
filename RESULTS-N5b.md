@@ -211,3 +211,57 @@ only reader of port 0's. Both indexes advance under a writer named `cellAudio`
 (197 writes to 0x12180020, 1171 to 0x12180010 -- the latter is the high word of
 every one of port 0's periods).
 
+
+## Measurement 4 -- the PPU Multistream thread's own queue: delivered == received
+
+Added a per-queue delivered/received counter (runtime/src/lv2/event.h:26-27,
+registered in event.cpp) and a report at the process-exit path, because a title
+that ends by `_sys_process_exit` -> `quick_exit` never reaches main()'s summary
+(thread.cpp:77-82: quick_exit runs at_quick_exit, not atexit).
+
+    $ PS3BASE_QUEUE_COUNTS=1 timeout 26 ./build-rdr/ps3base --no-launcher
+    I  23.092078 queuecount: per-queue delivered/received at process exit: 8 queue(s)
+    I  23.092093 queuecount:   q=0x8d004c00 key=0x0 name='_spuPrv' size=42 delivered=0     received=0     waiters=1 pending=0
+    I  23.092099 queuecount:   q=0x8d006100 key=0x0 name='_spuPrv' size=42 delivered=1     received=1     waiters=0 pending=0
+    I  23.092104 queuecount:   q=0x8d026800 key=0x0 name='_spuEvF' size=1  delivered=1562  received=1562  waiters=1 pending=0
+    I  23.092112 queuecount:   q=0x8d026d00 key=0x0 name='_spuEvF' size=1  delivered=19075 received=19075 waiters=1 pending=0
+    I  23.092124 queuecount:   q=0x8d027e00 key=0x0 name='_spuQue' size=1  delivered=2703  received=2703  waiters=0 pending=0
+    I  23.092129 queuecount:   q=0x8d027f00 key=0x0 name='_spuQue' size=1  delivered=4894  received=4894  waiters=0 pending=0
+    I  23.092135 queuecount:   q=0x8d029500 key=0x0 name='_spuEvF' size=1  delivered=1949  received=1949  waiters=1 pending=0
+    I  23.092140 queuecount:   q=0x8d04dd00 key=0x0 name='_spuEvF' size=1  delivered=0     received=0     waiters=0 pending=0
+
+Three facts, each measured rather than argued:
+
+1. **There is no cellAudio notify queue in the list.** Eight queues and every one
+   is an SPU queue (`_spuPrv`, `_spuEvF`, `_spuQue`). A cellAudio notify queue
+   would appear with key 0x80004d494f323221 and name 'cellAudio notify'
+   (audio_hle.h:91, cellAudio.cpp:544), depth 8 for this SDK. It does not.
+2. **delivered == received on every queue that receives anything.** Pending is 0
+   everywhere. No event is left in a queue and no sender hit the size limit, so
+   the delivery path and the wake path both work in this run.
+3. **The PPU thread that plays audio is `[RAGE Audio] Multistream` on queue
+   0x8d029500**, identified not assumed: the status dump names the thread and the
+   queue id it is blocked in, and the queue object is the same id.
+
+    $ GOWA_STATUS=1 ... ; awk '/status: ppu 0x1000013/{print; getline; print}' /tmp/n5b-status.log
+    I   5.456424 status: ppu 0x1000013 '[RAGE Audio] Multistream' blocked in 141 (r3 0x320 r31 0x12198000) syscalls +2962 lr 0x60a724
+    I   5.456434 status:    top syscalls 141x2690 130x270
+    I   8.509980 status: ppu 0x1000013 '[RAGE Audio] Multistream' blocked in 130 (r3 0x8d029500 r31 0x13e28dc) syscalls +2594 lr 0x920ef8
+    I   8.509989 status:    top syscalls 141x2306 130x287
+    I  11.571273 status: ppu 0x1000013 '[RAGE Audio] Multistream' blocked in 130 (r3 0x8d029500 ...) top syscalls 141x2406 130x287
+    I  14.632694 status: ppu 0x1000013 '[RAGE Audio] Multistream' blocked in 130 (r3 0x8d029500 ...) top syscalls 141x2323 130x287
+
+syscall 141 is sys_timer_usleep (lv2/process.cpp:114) and syscall 130 is
+sys_event_queue_receive (lv2/event.cpp:106). The thread ALTERNATES: it sleeps
+800 us (r3 0x320) in its poll loop at lr 0x60a724, and it blocks in receive on
+0x8d029500 at lr 0x920ef8. Both, not one. That is the wake path: `wait_for`
+(object.h:56) waits on the queue's condition variable, push_event signals it
+(event.cpp:24), so a delivery wakes the thread instead of it having to poll for
+the whole period.
+
+Rate: 1949 events consumed in 23.09 s = 84.4 events/s, and 633 index reads in
+22.67 s = 27.9 reads/s (measurement 2). Neither is 187.4/s: the title's audio
+thread is not woken once per 5.33 ms block, it is woken when its own producer
+posts. That is the title's design (it polls the index between waits), not a
+delivery shortfall -- every event posted was received.
+

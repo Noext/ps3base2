@@ -7,6 +7,7 @@
 #include "runtime/log.h"
 #include "runtime/memory.h"
 #include "ppu/ops.h"
+#include "lv2/event.h"
 
 #include <cstring>
 #include <map>
@@ -79,6 +80,7 @@ void body(std::shared_ptr<Thread> t) {
          * stopping (which is most of them) reports nothing. */
         lv2::lwmutex_probe_report("process exit");
         lv2::syscall_error_report("process exit");
+        lv2::queue_counts_report("process exit");
         std::fflush(nullptr);
         std::quick_exit(e.status);
     }

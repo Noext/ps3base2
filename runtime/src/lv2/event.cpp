@@ -1,5 +1,8 @@
 #include "event.h"
 
+#include <cstdlib>
+#include <map>
+
 namespace lv2 {
 
 namespace {
@@ -14,6 +17,17 @@ struct EventPort : Object {
 std::mutex g_keys_lock;
 std::map<uint64_t, uint32_t> g_keys;
 
+/* N5b: every queue ever created, by guest id, so the exit report can state
+ * delivered-vs-received per queue instead of leaving "did the consumer wake" to
+ * be inferred. Weak, because destroy removes the object. */
+std::mutex g_report_lock;
+std::map<uint32_t, std::weak_ptr<EventQueue>> g_report;
+
+void register_for_report(uint32_t id, const std::shared_ptr<EventQueue>& q) {
+    std::lock_guard lk(g_report_lock);
+    g_report[id] = q;
+}
+
 }
 
 int64_t push_event(const std::shared_ptr<EventQueue>& q, const Event& e) {
@@ -21,6 +35,7 @@ int64_t push_event(const std::shared_ptr<EventQueue>& q, const Event& e) {
     if (q->destroyed) return CELL_ESRCH;
     if (q->events.size() >= q->size) return CELL_EBUSY;
     q->events.push_back(e);
+    q->delivered++;
     q->cv.notify_all();
     return CELL_OK;
 }
@@ -29,6 +44,25 @@ std::shared_ptr<EventQueue> queue_by_key(uint64_t key) {
     std::lock_guard lk(g_keys_lock);
     auto it = g_keys.find(key);
     return it == g_keys.end() ? nullptr : get<EventQueue>(it->second);
+}
+
+void queue_counts_report(const char* where) {
+    if (!std::getenv("PS3BASE_QUEUE_COUNTS")) return;
+    std::lock_guard lk(g_report_lock);
+    LOG_INFO("queuecount", "per-queue delivered/received at %s: %zu queue(s)", where, g_report.size());
+    for (auto& [id, weak] : g_report) {
+        auto q = weak.lock();
+        if (!q) {
+            LOG_INFO("queuecount", "  q=0x%x destroyed", id);
+            continue;
+        }
+        std::lock_guard ql(q->m);
+        LOG_INFO("queuecount", "  q=0x%x key=0x%llx name='%s' size=%u delivered=%llu received=%llu waiters=%u pending=%zu",
+                 id, static_cast<unsigned long long>(q->key), q->name.c_str(), q->size,
+                 static_cast<unsigned long long>(q->delivered),
+                 static_cast<unsigned long long>(q->received),
+                 q->waiters, q->events.size());
+    }
 }
 
 uint32_t create_queue_by_key(uint64_t key, uint32_t size, const char* name) {
@@ -45,6 +79,7 @@ uint32_t create_queue_by_key(uint64_t key, uint32_t size, const char* name) {
         }
         g_keys[key] = id;
     }
+    register_for_report(id, q);
     LOG_DEBUG("event", "queue '%s' key 0x%llx size %u -> 0x%x (HLE)", q->name.c_str(),
               static_cast<unsigned long long>(key), q->size, id);
     return id;
@@ -80,6 +115,7 @@ LV2_SYSCALL(128, sys_event_queue_create) {
         g_keys[key] = id;
     }
     vm::write32(out, id);
+    register_for_report(id, q);
     LOG_DEBUG("event", "sys_event_queue_create '%s' key 0x%llx size %d -> 0x%x", q->name.c_str(), static_cast<unsigned long long>(key), size, id);
     return CELL_OK;
 }
@@ -126,6 +162,7 @@ LV2_SYSCALL(130, sys_event_queue_receive) {
     if (!ok) return CELL_ETIMEDOUT;
     Event e = q->events.front();
     q->events.pop_front();
+    q->received++;
     if (std::getenv("PS3BASE_QUEUE_TRACE") && qid == 0x8d009600u) {
         const guest::Thread* t = guest::current();
         LOG_INFO("spursrecv", "thread=%s(0x%x) lr=0x%08x source=0x%llx data1=0x%llx data2=0x%llx data3=0x%llx",
@@ -157,6 +194,7 @@ LV2_SYSCALL(131, sys_event_queue_tryreceive) {
         vm::write64(arr + n * 32 + 16, e.data2);
         vm::write64(arr + n * 32 + 24, e.data3);
         q->events.pop_front();
+        q->received++;
         n++;
     }
     vm::write32(number, static_cast<uint32_t>(n));

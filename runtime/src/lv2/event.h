@@ -22,6 +22,13 @@ struct EventQueue : Object {
     uint64_t key = 0;
     bool destroyed = false;
     uint32_t waiters = 0;
+    /* N5b: how many events were pushed into this queue and how many were taken
+     * out of it by a receive. A push without a matching receive leaves the queue
+     * full and the sender's later sends return CELL_EBUSY; a receive count below
+     * the push count is the difference between "the producer sent" and "the
+     * consumer woke". Read only by the PS3BASE_QUEUE_COUNTS report. */
+    uint64_t delivered = 0;
+    uint64_t received = 0;
 };
 
 int64_t push_event(const std::shared_ptr<EventQueue>& q, const Event& e);
@@ -39,5 +46,13 @@ uint32_t create_queue_by_key(uint64_t key, uint32_t size, const char* name);
  * that key, which is lv2_event_queue::find returning null in RPCS3
  * (refs/.../Modules/cellVoice.cpp:252, :693, :754). */
 bool send_event_by_key(uint64_t key, uint64_t source, uint64_t data1, uint64_t data2, uint64_t data3);
+
+/* N5b: PS3BASE_QUEUE_COUNTS dumps, per queue, how many events were pushed into
+ * it and how many a receive took out (runtime/src/lv2/event.cpp). A push count
+ * above the receive count is the difference between "the producer sent an event"
+ * and "the consumer woke and took it", which is the question a notification
+ * queue exists to answer. Called from the process-exit path, because a title
+ * that ends by stopping never reaches main()'s summary. */
+void queue_counts_report(const char* where);
 
 }
