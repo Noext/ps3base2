@@ -319,6 +319,34 @@ async function main() {
   }
 
 
+  /* ==================================================================
+   * A PAGE-OWNED PROBE: magenta straight into the canvas, no wasm involved.
+   *
+   * If this paints and the C++ path does not, the difference is in how the port
+   * hands out the canvas texture, not in the canvas, the device or the presentation.
+   * It runs once, at ?probe=1, and logs the centre pixel it read back.
+   */
+  if (new URLSearchParams(location.search).get('probe') === '1') {
+    /* DELAYED: the module configures the canvas during its own boot, so probing
+     * immediately reports 'context is not configured' -- which is a measurement of
+     * the ORDER, not of the canvas. Wait until the replay has run some frames. */
+    await new Promise((r) => setTimeout(r, 4000));
+    try {
+      const enc = device.createCommandEncoder();
+      const tex = canvasCtx.getCurrentTexture();
+      const view = tex.createView();
+      const pass = enc.beginRenderPass({
+        colorAttachments: [{ view: view, loadOp: 'clear', storeOp: 'store',
+                             clearValue: { r: 1.0, g: 0.0, b: 1.0, a: 1.0 } }],
+      });
+      pass.end();
+      device.queue.submit([enc.finish()]);
+      console.log('T1PROBE page drew magenta straight into the canvas');
+    } catch (e) {
+      console.log('T1PROBE page draw threw: ' + (e && e.message || e));
+    }
+  }
+
   window.__S1.ready = true;
   /* The renderer's OWN counters, not a narrative. g_stats.draws is the number of
    * draws that reached a pipeline; g_skip_lines says, by source line, how many
