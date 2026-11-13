@@ -110,3 +110,24 @@ directory, exclude it in `CMakeLists.txt` -- do not satisfy the symbol twice.
 this and exits non-zero when one reappears. Run it after touching
 `gowa_stubs.cpp`.
 
+
+## 13. Nettoyage des worktrees : tools/wt_gc.py uniquement
+
+**Il est interdit d'ecrire sa propre boucle de suppression de worktrees.** Le 13/11, le lead a fait
+exactement cela (`git worktree remove --force` dans une boucle `for`) pour liberer du disque, et a
+detruit `wt-Q1`, `wt-Q3`, `wt-Q4` pendant que trois agents travaillaient dedans. Les branches avaient
+ete poussees, donc le travail etait recuperable — mais par chance, pas par methode.
+
+Le script `tools/wt_gc.py` existe et porte sept garde-fous (etat termine, aucun claim vivant, branche
+fusionnee, arbre propre, aucun processus dedans, aucune activite recente, aucun commit non fusionne).
+
+Regles :
+1. `--dry-run` par defaut ; `--apply` seulement apres avoir **lu** le tableau et verifie qu'aucun
+   candidat n'est une piste en cours ;
+2. **avant toute suppression en masse** : `git worktree list` puis, pour chacun, `git -C <wt> status
+   --porcelain` et `git log <main>..<branche> --oneline`. Un worktree qui porte des commits non
+   fusionnes n'est jamais supprimable ;
+3. **pousser les branches dans le depot principal AVANT de supprimer** : `git worktree list` ne
+   partage pas les branches, donc une branche d'un worktree supprime sans avoir ete referencee est
+   perdue avec son repertoire ;
+4. si un doute subsiste, ne pas supprimer. Le disque s'achete, un agent bloque ne se rachete pas.
