@@ -123,21 +123,24 @@ extern uint32_t g_audio_ring_frames;
 }
 
 struct Output {
-    gpu::AudioRing ring{g_audio_ring_memory, g_audio_ring_frames ? g_audio_ring_frames : 1};
-    bool attached = false;
+    /* NO AUDIO OUTPUT IN THE WASM BUILD. Deliberate, not a bug fix.
+     *
+     * Under Node there is no AudioWorklet, so writes were counted and dropped and
+     * the module ran; in Chromium the worklet exists, and a run died around 13 s
+     * on an audio abort (MSSAsync). The task is the IMAGE: audio must never be
+     * able to stop the game. This backend therefore consumes and discards every
+     * sample, never attaches a ring, and never blocks on a consumer.
+     *
+     * g_audio_ring_memory / g_audio_ring_frames stay declared: the page still
+     * publishes them, and the guest's block/offset protocol is device-free, so
+     * nothing upstream changes. Only the destination is gone. */
     uint64_t underruns = 0;
     uint64_t silent_frames = 0;
 
-    bool open() {
-        attached = g_audio_ring_memory != nullptr && g_audio_ring_frames != 0;
-        return attached;
-    }
+    bool open() { return false; }
+    bool attached = false;
 
-    void write(const float* stereo, uint32_t n) {
-        if (!attached) { silent_frames += n; return; }
-        const uint32_t put = ring.write(stereo, n);
-        if (put < n) underruns++;          /* the worklet is behind, or absent */
-    }
+    void write(const float* /*stereo*/, uint32_t n) { silent_frames += n; }
 };
 #else
 struct Output {
