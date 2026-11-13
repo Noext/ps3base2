@@ -318,6 +318,7 @@ void end_pass();
 /* T1 -- what the PAGE needs to present: the id of the texture the C++ rendered
  * into, and how many frames it has finished. The page reads the JS texture with
  * WebGPU.getJsObject(id) and copies it into the canvas itself. */
+std::atomic<uint32_t> g_debug_mode{0};
 std::atomic<uint32_t> g_exported_texture_id{0};
 std::atomic<uint64_t> g_frames_done{0};
 
@@ -518,6 +519,49 @@ void end_pass() {
 }
 
 WGPURenderPipeline pipeline_for(const DrawInputs& in) {
+    /* MODE 3: the game's vertex program with OUR fixed-red fragment shader.
+     *
+     * This isolates the vertex stage. If the triangle appears, the positions the
+     * game's vertex shader produced are on screen and the vertex path is correct; if
+     * it does not, the problem is in those positions (transform constants, viewport,
+     * scissor, clip-space depth) and not in the fragment program or the textures. */
+    const uint32_t dbg_mode = g_debug_mode.load();
+    if (dbg_mode == 3 && !in.vs_wgsl.empty()) {
+        static WGPURenderPipeline red_pipe = nullptr;
+        static uint64_t red_vp = 0;
+        if (!red_pipe || red_vp != in.vp_hash) {
+            red_vp = in.vp_hash;
+            WGPUShaderModule vs = module_from_wgsl(in.vs_wgsl);
+            WGPUShaderModule fs = module_from_wgsl(
+                "@fragment fn fs() -> @location(0) vec4f { return vec4f(1.0, 0.0, 0.0, 1.0); }");
+            if (vs && fs) {
+                WGPURenderPipelineDescriptor pd = WGPU_RENDER_PIPELINE_DESCRIPTOR_INIT;
+                WGPUPipelineLayoutDescriptor pld = WGPU_PIPELINE_LAYOUT_DESCRIPTOR_INIT;
+                pld.bindGroupLayoutCount = 0;
+                pd.layout = wgpuDeviceCreatePipelineLayout(g.device, &pld);
+                pd.vertex.module = vs;
+                pd.vertex.entryPoint = {"vs", 2};
+                pd.primitive.topology = WGPUPrimitiveTopology_TriangleList;
+                pd.primitive.cullMode = WGPUCullMode_None;
+                pd.primitive.frontFace = WGPUFrontFace_CCW;
+                pd.multisample.count = 1;
+                WGPUFragmentState fsn = WGPU_FRAGMENT_STATE_INIT;
+                fsn.module = fs;
+                fsn.entryPoint = {"fs", 2};
+                WGPUColorTargetState ct = WGPU_COLOR_TARGET_STATE_INIT;
+                ct.format = g.color_format;
+                ct.writeMask = WGPUColorWriteMask_All;
+                fsn.targetCount = 1;
+                fsn.targets = &ct;
+                pd.fragment = &fsn;
+                red_pipe = wgpuDeviceCreateRenderPipeline(g.device, &pd);
+                static uint32_t nrep = 0;
+                if (nrep++ < 3) std::fprintf(stderr, "wgpu: MODE3 pipeline %s (vp %016llx)\n",
+                                             red_pipe ? "built" : "FAILED", (unsigned long long)in.vp_hash);
+            }
+        }
+        if (red_pipe) return red_pipe;
+    }
     Device::PipeKey k;
     k.vs = in.vp_hash;
     k.fs = in.fp_hash;
@@ -1426,7 +1470,6 @@ std::atomic<uint64_t> g_off_thread_refused{0};
  *
  * Set from the page with ?dbg=N; the page passes it to t1_set_debug_mode().
  */
-std::atomic<uint32_t> g_debug_mode{0};
 
 std::atomic<uint32_t> g_scope_errors{0};
 
@@ -2227,7 +2270,10 @@ void draw(const DrawInputs& in) {
     /* THE BISECTION MODES OWN THE FRAME. In modes 1..6 the diagnostic renderer
      * draws instead of the game, so the game's draws must not also run. */
     const uint32_t dbg = g_debug_mode.load();
-    if (dbg >= 1 && dbg <= 6) return;
+    /* Mode 3 lets the GAME's draws through, with our fixed-red fragment shader
+     * substituted in pipeline_for. Modes 1, 2 and 4..6 are the diagnostic renderer's
+     * alone. */
+    if (dbg >= 1 && dbg <= 6 && dbg != 3) return;
     /* T1 BISECT: the renderer counted 30 204 draws and the backend reported none.
      * These three counters say WHICH early return ate them, so "the draw never
      * arrived" is distinguishable from "it arrived and the pipeline was refused". */
@@ -2619,7 +2665,10 @@ void end_frame() {
         rp.colorAttachments = &ca;
         WGPURenderPassEncoder cp = wgpuCommandEncoderBeginRenderPass(g.encoder, &rp);
         if (cp) {
-            if (dbg >= 2 && dbg <= 6) {
+            /* Mode 3 is the GAME's triangle, drawn by the game's own draw() path with
+             * our fixed-red fragment shader substituted. It must not use the diag
+             * triangle, or its red would be step 2's red and would prove nothing. */
+            if ((dbg >= 2 && dbg <= 6) && dbg != 3) {
                 WGPURenderPipeline dp = diag_pipeline(dbg >= 4, false, dbg >= 6);
                 if (dp) {
                     wgpuRenderPassEncoderSetPipeline(cp, dp);
