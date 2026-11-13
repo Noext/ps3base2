@@ -82,6 +82,8 @@ struct TextureRecord {
     uint32_t seq;       /* producer sequence, for the page's log */
     uint32_t chunks;    /* how many kTexture records this object is split into */
     uint32_t hash;      /* CONTENT fingerprint over the WHOLE source image */
+    uint32_t src_total; /* WHOLE source size: the object's identity with hash */
+    uint32_t chunk;     /* 0-based index of this chunk within the object */
 };
 
 struct ShaderRecord {

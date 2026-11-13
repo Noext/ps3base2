@@ -34,36 +34,42 @@ uint32_t CommandRing::free_space() const {
  */
 bool CommandRing::push(uint32_t kind, const void* payload, uint32_t payload_size) {
     const uint32_t need = align_up(static_cast<uint32_t>(sizeof(CommandRecord)) + payload_size);
-    if (need > capacity_ - 1) return false;     /* never fits */
+    /* An upper bound that keeps the INVARIANT below representable. A record bigger
+     * than capacity-with-marker cannot be placed without leaving an unrepresentable
+     * tail gap, so it is refused by name rather than corrupting the stream. */
+    if (need > capacity_ - static_cast<uint32_t>(sizeof(CommandRecord))) return false;
 
     const uint32_t head = head_.load(std::memory_order_relaxed);
-    const uint32_t tail = tail_.load(std::memory_order_acquire);
     const uint32_t used = used_.load(std::memory_order_acquire);
-    const uint32_t tail_room = capacity_ - head;
 
-    /* If the record does not fit before the end, a padding marker consumes the
-     * rest and the record starts at 0. */
+    /* THE INVARIANT: head is always 0, or a position from which a record plus a
+     * possible wrap marker still fits before the end. That is what makes the dead
+     * space at the end always representable as a padding RECORD, which needs
+     * sizeof(CommandRecord) bytes of its own.
+     *
+     * The previous version did not hold this. When the room left at the end was
+     * smaller than a marker it wrote the marker anyway -- 8 bytes past the end of
+     * the buffer -- and the consumer saw a 4-byte "padding" that advanced its tail
+     * into the middle of the next record. Measured on the S2 page: consumer stalled,
+     * used pinned at capacity-16, producer refusing forever with refused=117568. */
+    constexpr uint32_t kMarker = static_cast<uint32_t>(sizeof(CommandRecord));
+    const uint32_t tail_room = capacity_ - head;
     uint32_t start = head;
     uint32_t pad = 0;
     uint32_t cost = need;
-    if (need > tail_room) {
+    if (head != 0 && head + need > capacity_ - kMarker) {
+        /* Wrap: the room left cannot hold this record AND a trailing marker. By the
+         * invariant tail_room >= kMarker, so the marker itself always fits. */
         pad = tail_room;
         cost = need + pad;
         start = 0;
-        if (used != 0) {
-            /* Wrapping while data is outstanding is legal: the padding makes the
-             * consumer jump to 0 and the data behind it is still contiguous from
-             * the tail. But the bytes at [head, capacity_) must not hold unread
-             * data, which they cannot: unread data lies AFTER the tail, and the
-             * tail is at or before the head only in the wrapped case. Clear the
-             * case where the tail is inside the gap by demanding room up to the
-             * tail, handled by the counter check below. */
-        }
     }
+
     /* RESERVE atomically, never load-then-store: the consumer moves used_ too, and
      * a plain store here silently threw away its subtraction (measured: used_
-     * wrapped past capacity on the S2 page). reserved_ holds the in-flight bytes so
-     * two pushes cannot both pass the check against the same free space. */
+     * wrapped past capacity on the S2 page, peak used 4294965544 on a 16 MB ring).
+     * reserved_ holds the in-flight bytes so two pushes cannot both pass the check
+     * against the same free space. */
     const uint32_t already = reserved_.fetch_add(cost, std::memory_order_acq_rel);
     /* Free space = capacity-1 - (readable used_ + in-flight reserved_). Reading used_
      * here can only be STALE LOW (the consumer only ever subtracts), so a race makes
@@ -96,8 +102,6 @@ bool CommandRing::push(uint32_t kind, const void* payload, uint32_t payload_size
     head_.store(new_head, std::memory_order_release);
     pushed_.fetch_add(1, std::memory_order_relaxed);
     reserved_.fetch_sub(cost, std::memory_order_acq_rel);
-    (void)used;
-    (void)tail;
     return true;
 }
 

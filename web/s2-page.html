@@ -48,6 +48,7 @@ const push = (t) => { log.push(String(t)); if (log.length > 6000) log.shift(); }
           wrapped:M._rsx_ring_control(3), capacity:M._rsx_ring_capacity(),
           peakUsedBytes:peak, peakAtSeconds:+peakT.toFixed(1),
           consumerRecords:ring.stats.records, consumerBytes:ring.stats.bytes,
+          dedup:ring.payloadReport(),
           heapBytes:(M.HEAPU8 && M.HEAPU8.length) || 0 };
         window.__s2.stats = snap;
         if (Math.floor(snap.t) % 5 === 0) window.__s2.samples.push(snap);

@@ -44,15 +44,62 @@ static bool fake_describe(const uint32_t regs[9], uint32_t* w, uint32_t* h,
 /* NODRAIN=1 replays the same stream with NO consumer at all: that is the exact
  * configuration R3 measured refused=1160458 in, and the one the S2 objective is
  * stated against. */
+/* CONSUMER-SIDE DUPLICATE DETECTOR.
+ *
+ * The claim is "no object is sent twice". The producer's counters say how many
+ * refs it emitted, but that is the producer grading its own work. This reads the
+ * actual records and counts, per (kind, fingerprint, length), how many of them
+ * arrived WITH the payload. Any count above 1 is an object that crossed twice. */
+#include <map>
+struct FpKey {
+    uint32_t kind, hash, len;
+    bool operator<(const FpKey& o) const {
+        if (kind != o.kind) return kind < o.kind;
+        if (hash != o.hash) return hash < o.hash;
+        return len < o.len;
+    }
+};
+static std::map<FpKey, uint32_t> g_payload_sends;
+static uint32_t g_max_payload_sends = 0;
+static uint64_t g_ref_records = 0;
+
+static void note_payload(uint32_t kind, uint32_t hash, uint32_t len) {
+    FpKey k{kind, hash, len};
+    const uint32_t n = ++g_payload_sends[k];
+    if (n > g_max_payload_sends) g_max_payload_sends = n;
+}
+
 static bool g_drain = true;
 static uint32_t g_peak_used = 0;
 static void drain_all() {
     if (!g_drain) return;
+    const uint8_t* data = poll_bytes();
     for (;;) {
         const uint32_t u = control_word(0);
         if (u > g_peak_used) g_peak_used = u;
-        const uint32_t k = poll();
-        if (!k) break;
+        const uint32_t kind = poll();
+        if (!kind) break;
+        switch (kind) {
+        case kBuffer: {
+            BufferRecord h{}; std::memcpy(&h, data, sizeof h);
+            note_payload(kBuffer, h.hash, h.len);
+            break;
+        }
+        case kTexture: {
+            TextureRecord h{}; std::memcpy(&h, data, sizeof h);
+            /* A texture is split into chunks; the object's identity is (hash, whole
+             * source size). Only its FIRST chunk counts as the payload send. */
+            if (h.chunk == 0) note_payload(kTexture, h.hash, h.src_total);
+            break;
+        }
+        case kShader: {
+            ShaderRecord h{}; std::memcpy(&h, data, sizeof h);
+            note_payload(kShader, h.hash, h.words * 4u);
+            break;
+        }
+        case kRef: g_ref_records++; break;
+        default: break;
+        }
     }
 }
 
@@ -121,6 +168,18 @@ int main() {
     std::printf("bytes_per_draw %.1f\n", s.draws ? double(s.bytes) / double(s.draws) : 0.0);
     std::printf("bytes_per_frame %.1f\n", double(s.bytes) / double(kFrames));
     std::printf("ring_capacity %u\n", capacity);
+    std::printf("distinct_fingerprints_with_payload %zu\n", g_payload_sends.size());
+    std::printf("max_payload_sends_for_one_fingerprint %u\n", g_max_payload_sends);
+    std::printf("ref_records_seen %llu\n", (unsigned long long)g_ref_records);
+    {
+        uint64_t total_payload = 0;
+        for (auto& kv : g_payload_sends) total_payload += kv.second;
+        std::printf("payload_records_total %llu\n", (unsigned long long)total_payload);
+        for (auto& kv : g_payload_sends) {
+            std::printf("fp kind=%u hash=%08x len=%u sends=%u\n",
+                        kv.first.kind, kv.first.hash, kv.first.len, kv.second);
+        }
+    }
     std::printf("peak_ring_used %u\n", g_peak_used);
     std::printf("peak_pct_of_capacity %.1f\n",
                 capacity ? 100.0 * double(g_peak_used) / double(capacity) : 0.0);

@@ -316,8 +316,6 @@ void push_vertex_shader_if_changed() {
         return;
     }
     g_vp_hash = hash;
-    g_c.distinct_objects.fetch_add(1, std::memory_order_relaxed);
-    seen_add(kRefShaderVp + 1u, hash, sizeof g_vp);
     ShaderRecord hdr{};
     hdr.stage = 0;
     hdr.words = 1024;
@@ -326,8 +324,14 @@ void push_vertex_shader_if_changed() {
     std::memcpy(g_scratch, &hdr, sizeof hdr);
     std::memcpy(g_scratch + sizeof hdr, g_vp, sizeof g_vp);
     if (push_record(Kind::kShader, g_scratch, sizeof hdr + sizeof g_vp)) {
+        seen_add(kRefShaderVp + 1u, hash, sizeof g_vp);
+        g_c.distinct_objects.fetch_add(1, std::memory_order_relaxed);
         g_c.shader_objects.fetch_add(1, std::memory_order_relaxed);
         g_c.shader_bytes.fetch_add(sizeof g_vp, std::memory_order_relaxed);
+    } else {
+        /* Not remembered: the page never got the ucode, so the next draw must carry
+         * it. g_vp_hash stays set because it tracks the REGISTER contents, which is a
+         * different question from "the page has this program". */
     }
 }
 
@@ -363,8 +367,6 @@ uint32_t push_vertex_array(uint32_t slot, uint32_t count, DrawRecord& draw) {
         push_ref(kRefVertex, slot, hash, len);
         return len;
     }
-    seen_add(kRefVertex + 1u, hash, len);
-    g_c.distinct_objects.fetch_add(1, std::memory_order_relaxed);
     BufferRecord hdr{};
     hdr.type = kVertex;
     hdr.slot = slot;
@@ -374,7 +376,16 @@ uint32_t push_vertex_array(uint32_t slot, uint32_t count, DrawRecord& draw) {
     hdr.hash = hash;
     std::memcpy(g_scratch, &hdr, sizeof hdr);
     std::memcpy(g_scratch + sizeof hdr, src, len);
-    if (!push_record(Kind::kBuffer, g_scratch, sizeof hdr + len)) return 0;
+    if (!push_record(Kind::kBuffer, g_scratch, sizeof hdr + len)) {
+        /* REFUSED. The object is NOT remembered as sent: the page never received
+         * these bytes, so the next draw must carry them again. Remembering it here
+         * measured a run where 7750 objects were "already sent" while the ring was
+         * refusing: the page would have bound fingerprints it had never seen. */
+        draw.array_len[slot] = 0;
+        return 0;
+    }
+    seen_add(kRefVertex + 1u, hash, len);
+    g_c.distinct_objects.fetch_add(1, std::memory_order_relaxed);
     g_c.vtx_bytes.fetch_add(len, std::memory_order_relaxed);
     return len;
 }
@@ -391,8 +402,6 @@ void push_inline_vertices() {
         g_inline_n = 0;
         return;
     }
-    seen_add(kRefInline + 1u, hash, len);
-    g_c.distinct_objects.fetch_add(1, std::memory_order_relaxed);
     BufferRecord hdr{};
     hdr.type = kInlineVertex;
     hdr.slot = 0;
@@ -402,10 +411,16 @@ void push_inline_vertices() {
     hdr.hash = hash;
     std::memcpy(g_scratch, &hdr, sizeof hdr);
     std::memcpy(g_scratch + sizeof hdr, g_inline, len);
-    if (push_record(Kind::kBuffer, g_scratch, sizeof hdr + len))
+    if (push_record(Kind::kBuffer, g_scratch, sizeof hdr + len)) {
+        seen_add(kRefInline + 1u, hash, len);
+        g_c.distinct_objects.fetch_add(1, std::memory_order_relaxed);
         g_c.vtx_bytes.fetch_add(len, std::memory_order_relaxed);
-    g_inline_hash = hash;
-    g_inline_len = len;
+        g_inline_hash = hash;
+        g_inline_len = len;
+    } else {
+        g_inline_hash = 0;
+        g_inline_len = 0;
+    }
     g_inline_n = 0;
 }
 
@@ -429,8 +444,6 @@ void push_index_buffer(uint32_t first, uint32_t count) {
         push_ref(kRefIndex, 0, hash, len);
         return;
     }
-    seen_add(kRefIndex + 1u, hash, len);
-    g_c.distinct_objects.fetch_add(1, std::memory_order_relaxed);
     BufferRecord hdr{};
     hdr.type = kIndex;
     hdr.slot = 0;
@@ -440,8 +453,14 @@ void push_index_buffer(uint32_t first, uint32_t count) {
     hdr.hash = hash;
     std::memcpy(g_scratch, &hdr, sizeof hdr);
     std::memcpy(g_scratch + sizeof hdr, src, len);
-    if (push_record(Kind::kBuffer, g_scratch, sizeof hdr + len))
+    if (push_record(Kind::kBuffer, g_scratch, sizeof hdr + len)) {
+        seen_add(kRefIndex + 1u, hash, len);
+        g_c.distinct_objects.fetch_add(1, std::memory_order_relaxed);
         g_c.idx_bytes.fetch_add(len, std::memory_order_relaxed);
+    } else {
+        g_index_hash = 0;
+        g_index_len = 0;
+    }
 }
 
 void push_draw(uint32_t arg, uint32_t indexed) {
@@ -522,8 +541,6 @@ void push_texture(uint32_t unit) {
             g_tex_seq++;
             return;
         }
-        seen_add(kRefTexture + 1u, hash, src_size);
-        g_c.distinct_objects.fetch_add(1, std::memory_order_relaxed);
     }
     /* Chunked so a 4 MB source cannot monopolise the ring; the page reassembles
      * by (unit, seq, ea). */
@@ -545,6 +562,8 @@ void push_texture(uint32_t unit) {
         hdr.seq = g_tex_seq;
         hdr.chunks = chunks;
         hdr.hash = hash;
+        hdr.src_total = src_size;
+        hdr.chunk = sent / kChunk;
         std::memcpy(g_scratch, &hdr, sizeof hdr);
         std::memcpy(g_scratch + sizeof hdr, src + sent, n);
         if (!push_record(Kind::kTexture, g_scratch, sizeof hdr + n)) break;
@@ -552,7 +571,15 @@ void push_texture(uint32_t unit) {
         sent += n;
     }
     if (sent) {
-        g_c.tex_objects.fetch_add(1, std::memory_order_relaxed);
+        /* Only a COMPLETE image is remembered. A partially-sent texture must not be
+         * announced by fingerprint later: the page would bind a truncated image. */
+        if (sent == src_size) {
+            seen_add(kRefTexture + 1u, hash, src_size);
+            g_c.distinct_objects.fetch_add(1, std::memory_order_relaxed);
+            g_c.tex_objects.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            g_c.texture_refused.fetch_add(1, std::memory_order_relaxed);
+        }
         g_tex_seq++;
     }
 }
@@ -575,8 +602,6 @@ void push_fragment_shader(uint32_t ea) {
     }
     g_fp_hash = hash;
     g_fp_ea = ea;
-    g_c.distinct_objects.fetch_add(1, std::memory_order_relaxed);
-    seen_add(kRefShaderFp + 1u, hash, sizeof g_fp);
     ShaderRecord hdr{};
     hdr.stage = 1;
     hdr.words = 512;
@@ -585,6 +610,8 @@ void push_fragment_shader(uint32_t ea) {
     std::memcpy(g_scratch, &hdr, sizeof hdr);
     std::memcpy(g_scratch + sizeof hdr, g_fp, sizeof g_fp);
     if (push_record(Kind::kShader, g_scratch, sizeof hdr + sizeof g_fp)) {
+        seen_add(kRefShaderFp + 1u, hash, sizeof g_fp);
+        g_c.distinct_objects.fetch_add(1, std::memory_order_relaxed);
         g_c.shader_objects.fetch_add(1, std::memory_order_relaxed);
         g_c.shader_bytes.fetch_add(sizeof g_fp, std::memory_order_relaxed);
     }
