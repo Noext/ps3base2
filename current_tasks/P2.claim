@@ -1,5 +1,0 @@
-agent: P2
-branch: explore/p2
-worktree: /root/Dev/wt-P2
-task: TLS block table per thread at the RDR crash; thread count; ps3recomp #253 vs #68
-started: 2026-11-13T09:55Z
