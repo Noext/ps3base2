@@ -69,3 +69,18 @@ Minecraft is the opposite: 170 generated SPU translation units, 24737 compiled
 blocks, 5 SPURS kernel threads started, and 43 DFA / 54 DFS / 83 DFM / 40 DFMS /
 12 FRDS / 24 FESD sites in the generated code, all of which go through the
 RoundGuard.
+## Measurement 2 -- GTA pair 1
+
+    === gta  A=nearest(pre-fix) B=truncate(fix)  1 pair(s) x 120s  12:42:34
+    -- pair 1  12:42:34  load=14.50
+      gta-A1                 exit=124  flips=6361   crashes=0   spu_threads=0
+      gta-B1                 exit=124  flips=5641   crashes=0   spu_threads=0
+
+Both alive at the 120 s budget (exit 124 = timeout, the title still running),
+zero crashes, and **zero SPU threads started** on both sides -- which is the
+prediction from Measurement 1 confirmed by the run itself: GTA never reaches the
+SPU interpreter, so the rounding mode cannot affect it.
+
+The 6361 vs 5641 gap is 11.3%, inside the 17% spread this machine shows between
+two runs of the SAME code (docs/regress-baseline.md). More pairs are needed
+before it can be called anything.
