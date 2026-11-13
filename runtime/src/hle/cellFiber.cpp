@@ -342,21 +342,79 @@ HLE_FUNC(cellFiber, cellFiberPpuDeleteFiber) {
     ret(ctx, CELL_FIBER_ERROR_INVAL);
 }
 
-/* cellFiberPpuJoinFiber(fiber, status) -- refs/rpcs3/.../cellFiber.cpp:202.
+/* Run one round-robin pass of the scheduler: run every Ready or Suspended
+ * fibre until it yields or terminates. Returns the number of switches.
  *
- * MEASURED why this cannot refuse: with RunFibers running the fibre for real,
- * the title's next call is JoinFiber, and the title treats an error as fatal:
+ * This is the body RunFibers and JoinFiber share. The real library's JoinFiber
+ * does exactly this while it waits (see below), so the two must not drift. */
+static uint32_t run_runnable_fibers(ThreadState* st, ppu::Context& ctx, bool& stopped_at_guard) {
+    uint32_t ran = 0;
+    stopped_at_guard = false;
+    for (;;) {
+        int pick = -1;
+        {
+            std::lock_guard lk(g_lock);
+            for (size_t i = 0; i < st->fibers.size(); i++) {
+                if (st->fibers[i].state == State::Ready || st->fibers[i].state == State::Suspended) {
+                    pick = static_cast<int>(i);
+                    break;
+                }
+            }
+        }
+        if (pick < 0) break;
+        Fiber& f = st->fibers[static_cast<size_t>(pick)];
+        f.state = State::Running;
+        st->current = pick;
+        st->in_fiber = true;
+        /* The SCHEDULER's registers must survive the switch. MEASURED: without
+         * this save/restore the title carried on after RunFibers with
+         * r1=0xd0033070, i.e. still on the FIBRE's stack, and faulted at guest
+         * 0x400 in its own code. */
+        const ppu::Context scheduler_ctx = ctx;
+        f.guest_ctx = ctx;
+        swapcontext(&st->scheduler_ctx, &f.host_ctx);
+        ctx = scheduler_ctx;
+        st->current = -1;
+        st->in_fiber = false;
+        if (f.state != State::Terminated) f.state = State::Suspended;
+        ran++;
+        if (ran > 100000) {
+            stopped_at_guard = true;
+            break;
+        }
+    }
+    return ran;
+}
+
+/* cellFiberPpuJoinFiber(fiber, status) -- the real library's behaviour, read
+ * from the LIFTED code, not from memory.
  *
- *   cellFiber: HLE CreateFiber #0 ... -> CELL_OK
- *   cellFiber: HLE RunFibers(0x0165d580) ran 932 fibre switch(es) -> CELL_OK
- *   tty: [FATAL] cellFiberPpuJoinFiber(g_Fibers->m_Fiber, &exitCode) failed, code 80760002
- *   process: _sys_process_exit(0x1)
+ * The export's stub is 0x3600e940, an .opd whose first word is the code address
+ * 0x36003574 (out-rdr/ppu/libfiber_000.cpp, f_36003574_body). That body is not a
+ * validate-and-return: it polls the fibre's state word at +772 in a loop
+ * (L_36003704), and only when that word says terminated does it read the exit
+ * status from +792 and store it to the caller's *status:
  *
- * So JoinFiber is on the path this game actually walks. RPCS3 validates and
- * returns CELL_OK; the console's fibre has finished by the time the scheduler
- * returns (RunFibers above ran it to completion), so the join is a status
- * report and not a wait. Same shape here: validate, write the exit status,
- * return CELL_OK. */
+ *     L_36003704:
+ *         lwz   r0, 772(r30)        ; the fibre's state
+ *         cmpwi r0, 0
+ *         beq   L_36003a34          ; terminated -> fall out of the loop
+ *         ...
+ *         b     L_36003704          ; otherwise run and poll again
+ *     L_36003854:
+ *         lwz   r0, 792(r30)        ; the real exit status
+ *         stw   r0, 0(r31)          ; *status = it
+ *         stw   r9, 0(r30)          ; clear the fibre's state
+ *
+ * So the console BLOCKS here, running the other fibres while it waits. Our
+ * previous version returned CELL_OK immediately with f.exit_status even when the
+ * fibre had never run -- the log said so 20 times in three 900 s runs
+ * ("JoinFiber #N: still in state 3 (not yet terminated)"), and the title then
+ * proceeded as if the work were done.
+ *
+ * The wait is bounded by the same guard RunFibers uses, so a fibre that never
+ * terminates cannot hang the process; when the guard trips we say so and return
+ * the status we have, which is the honest answer at that point. */
 HLE_FUNC(cellFiber, cellFiberPpuJoinFiber) {
     const uint32_t fiber_ea = a32(ctx, 0);
     const uint32_t status_ea = a32(ctx, 1);
@@ -364,19 +422,48 @@ HLE_FUNC(cellFiber, cellFiberPpuJoinFiber) {
     if (fiber_ea & (SCHEDULER_ALIGN - 1)) return ret(ctx, CELL_FIBER_ERROR_ALIGN);
     ThreadState* st = state_for_self();
     if (st) {
-        std::lock_guard lk(g_lock);
-        /* The handle is what CreateFiber wrote into the CellFiberPpu object. */
-        const uint32_t handle = vm::range_mapped(fiber_ea, 4) ? vm::read32(fiber_ea) : 0;
-        if (valid_handle(*st, handle) && st->fibers[handle].state != State::Free) {
-            const Fiber& f = st->fibers[handle];
-            /* A fibre that has not finished is not joinable yet; the console
-             * would block, but this title has already run it to completion. */
-            if (f.state != State::Terminated) {
-                LOG_WARN("cellFiber", "JoinFiber #%u: still in state %u (not yet terminated)", handle,
-                         static_cast<unsigned>(f.state));
+        uint32_t handle = 0;
+        {
+            std::lock_guard lk(g_lock);
+            handle = vm::range_mapped(fiber_ea, 4) ? vm::read32(fiber_ea) : 0;
+            if (!valid_handle(*st, handle) || st->fibers[handle].state == State::Free) handle = 0xFFFFFFFFu;
+        }
+        if (handle != 0xFFFFFFFFu) {
+            /* Wait the way the real code waits: run the other fibres, re-check. */
+            uint32_t passes = 0;
+            bool guard = false;
+            for (;;) {
+                {
+                    std::lock_guard lk(g_lock);
+                    if (st->fibers[handle].state == State::Terminated) break;
+                }
+                st->live_ctx = &ctx;
+                run_runnable_fibers(st, ctx, guard);
+                passes++;
+                if (guard) {
+                    LOG_WARN("cellFiber",
+                             "JoinFiber #%u: the fibre did not terminate after %u passes; "
+                             "returning the status it has", handle, passes);
+                    break;
+                }
+                bool any_runnable = false;
+                {
+                    std::lock_guard lk(g_lock);
+                    for (const Fiber& f : st->fibers) {
+                        if (f.state == State::Ready || f.state == State::Suspended) { any_runnable = true; break; }
+                    }
+                }
+                /* Nothing left that could ever terminate it: stop rather than spin. */
+                if (!any_runnable) break;
             }
-            if (vm::range_mapped(status_ea, 4)) vm::write32(status_ea, f.exit_status);
-            LOG_INFO("cellFiber", "HLE JoinFiber #%u -> status 0x%x, CELL_OK", handle, f.exit_status);
+            uint32_t status = 0;
+            {
+                std::lock_guard lk(g_lock);
+                status = st->fibers[handle].exit_status;
+            }
+            if (vm::range_mapped(status_ea, 4)) vm::write32(status_ea, status);
+            LOG_INFO("cellFiber", "HLE JoinFiber #%u -> status 0x%x after %u pass(es), CELL_OK",
+                     handle, status, passes);
             return ret(ctx, 0);
         }
     }
@@ -385,13 +472,32 @@ HLE_FUNC(cellFiber, cellFiberPpuJoinFiber) {
     ret(ctx, CELL_FIBER_ERROR_INVAL);
 }
 
-/* cellFiberPpuYield: inside a fibre, give the CPU back to the scheduler; outside
- * one, PERM. The PERM arm is not a guess -- it is what LLE libfiber returned on
- * all 24 439 calls the title made before any fibre existed, so the title already
- * handles it. */
+/* cellFiberPpuYield: inside a fibre, give the CPU back to the scheduler.
+ *
+ * The two refusals are DIFFERENT and the real library distinguishes them. Read
+ * from the lifted code (stub 0x3600e930 -> code 0x360033dc,
+ * out-rdr/ppu/libfiber_000.cpp f_360033dc_body):
+ *
+ *     lwz  r11, -32712(r2)      ; the per-thread fibre context
+ *     lwz  r9,  0(r11)          ; its current fibre, -1 when there is none
+ *     cmpwi r9, -1
+ *     addi r0, r10, 32
+ *     beq  ...                  ; -> returns 0x80760020 NOSYSINIT
+ *     ...
+ *     li   r3, 0x80760009       ; PERM, when the derived pointer is zero
+ *
+ * So "no scheduler on this thread" is NOSYSINIT (0x80760020) and "scheduler, but
+ * this thread is not in a fibre" is PERM (0x80760009). Our previous version
+ * returned PERM for both, which is a false report of state: the title cannot
+ * tell a torn-down scheduler from a plain yield outside a fibre.
+ *
+ * The PERM arm is not a guess about the title's expectations -- it is what LLE
+ * libfiber returned on all 24 439 calls the title made before any fibre
+ * existed, so the title already handles it. */
 HLE_FUNC(cellFiber, cellFiberPpuYield) {
     ThreadState* st = state_for_self();
-    if (!st || !st->initialized || st->current < 0) return ret(ctx, CELL_FIBER_ERROR_PERM);
+    if (!st || !st->initialized) return ret(ctx, CELL_FIBER_ERROR_NOSYSINIT);
+    if (st->current < 0) return ret(ctx, CELL_FIBER_ERROR_PERM);
     Fiber& f = st->fibers[static_cast<size_t>(st->current)];
     f.state = State::Suspended;
     suspend_guest(f);
@@ -421,46 +527,10 @@ HLE_FUNC(cellFiber, cellFiberPpuRunFibers) {
     st->initialized = true;
     st->live_ctx = &ctx;
 
-    uint32_t ran = 0;
-    for (;;) {
-        int pick = -1;
-        {
-            std::lock_guard lk(g_lock);
-            for (size_t i = 0; i < st->fibers.size(); i++) {
-                if (st->fibers[i].state == State::Ready || st->fibers[i].state == State::Suspended) {
-                    pick = static_cast<int>(i);
-                    break;
-                }
-            }
-        }
-        if (pick < 0) break;
-        Fiber& f = st->fibers[static_cast<size_t>(pick)];
-        f.state = State::Running;
-        st->current = pick;
-        st->in_fiber = true;
-        /* The SCHEDULER's registers must survive the switch. This is the whole
-         * discipline of a fibre switch and getting it wrong is silent: the
-         * fibre runs on its own r1 by design, so every register the fibre
-         * changes -- above all r1 -- stays changed in the one ppu::Context the
-         * thread shares with every lifted frame. MEASURED: without this
-         * save/restore the title carried on after RunFibers with
-         * r1=0xd0033070, i.e. still on the FIBRE's stack, and faulted at
-         * guest 0x400 in its own code (ppu::lwarx, lr 0xb57ec4) because its
-         * frames had been handed a stack that was no longer its own. */
-        const ppu::Context scheduler_ctx = ctx;
-        f.guest_ctx = ctx;          /* the scheduler's registers are the fibre's start */
-        swapcontext(&st->scheduler_ctx, &f.host_ctx);
-        ctx = scheduler_ctx;        /* back on our own stack, with our own r1 */
-        st->current = -1;
-        st->in_fiber = false;
-        /* A terminated fibre stops being runnable; a suspended one is retried on
-         * the next pass, which is what a round-robin scheduler does. */
-        if (f.state != State::Terminated) f.state = State::Suspended;
-        ran++;
-        if (ran > 100000) {
-            LOG_WARN("cellFiber", "RunFibers: 100000 switches without finishing; stopping");
-            break;
-        }
+    bool guard = false;
+    const uint32_t ran = run_runnable_fibers(st, ctx, guard);
+    if (guard) {
+        LOG_WARN("cellFiber", "RunFibers: 100000 switches without finishing; stopping");
     }
     LOG_INFO("cellFiber", "HLE RunFibers(0x%08x) ran %u fibre switch(es) -> CELL_OK", scheduler, ran);
     ret(ctx, 0);
@@ -500,15 +570,29 @@ HLE_FUNC(cellFiber, cellFiberPpuSetPriority) {
     ret(ctx, 0);
 }
 
-HLE_FUNC(cellFiber, cellFiberPpuCheckStackLimit) { ret(ctx, 0); }
+/* These four used to be a bare `ret(ctx, 0)`, which is the fake success
+ * AGENTS.md forbids: CELL_OK from something that did not run tells the caller its
+ * state was created when it was not. RDR does not call any of them in the three
+ * measured 900 s runs, so an explicit refusal costs nothing and is honest. */
+HLE_FUNC(cellFiber, cellFiberPpuCheckStackLimit) {
+    LOG_WARN("cellFiber", "CheckStackLimit is not implemented");
+    ret(ctx, CELL_FIBER_ERROR_INVAL);
+}
 
-HLE_FUNC(cellFiber, cellFiberPpuSendSignal) { ret(ctx, 0); }
-HLE_FUNC(cellFiber, cellFiberPpuWaitSignal) { ret(ctx, 0); }
+HLE_FUNC(cellFiber, cellFiberPpuSendSignal) {
+    LOG_WARN("cellFiber", "SendSignal is not implemented");
+    ret(ctx, CELL_FIBER_ERROR_INVAL);
+}
+HLE_FUNC(cellFiber, cellFiberPpuWaitSignal) {
+    LOG_WARN("cellFiber", "WaitSignal is not implemented");
+    ret(ctx, CELL_FIBER_ERROR_INVAL);
+}
 
 HLE_FUNC(cellFiber, cellFiberPpuWaitFlag) {
     const uint32_t flag = a32(ctx, 0);
     if (!flag) return ret(ctx, CELL_FIBER_ERROR_NULL_POINTER);
-    ret(ctx, 0);
+    LOG_WARN("cellFiber", "WaitFlag is not implemented");
+    ret(ctx, CELL_FIBER_ERROR_INVAL);
 }
 
 /* The context-scheduler surface. These are the entries the title never called in
@@ -530,9 +614,18 @@ HLE_FUNC(cellFiber, cellFiberPpuContextSwitch) {
     LOG_WARN("cellFiber", "ContextSwitch is not implemented");
     ret(ctx, CELL_FIBER_ERROR_INVAL);
 }
-HLE_FUNC(cellFiber, cellFiberPpuContextSelf) { ret(ctx, 0); }
-HLE_FUNC(cellFiber, cellFiberPpuContextReturnToThread) { ret(ctx, 0); }
-HLE_FUNC(cellFiber, cellFiberPpuContextCheckStackLimit) { ret(ctx, 0); }
+HLE_FUNC(cellFiber, cellFiberPpuContextSelf) {
+    LOG_WARN("cellFiber", "ContextSelf is not implemented");
+    ret(ctx, CELL_FIBER_ERROR_INVAL);
+}
+HLE_FUNC(cellFiber, cellFiberPpuContextReturnToThread) {
+    LOG_WARN("cellFiber", "ContextReturnToThread is not implemented");
+    ret(ctx, CELL_FIBER_ERROR_INVAL);
+}
+HLE_FUNC(cellFiber, cellFiberPpuContextCheckStackLimit) {
+    LOG_WARN("cellFiber", "ContextCheckStackLimit is not implemented");
+    ret(ctx, CELL_FIBER_ERROR_INVAL);
+}
 HLE_FUNC(cellFiber, cellFiberPpuContextRunScheduler) {
     LOG_WARN("cellFiber", "ContextRunScheduler is not implemented");
     ret(ctx, CELL_FIBER_ERROR_INVAL);

@@ -66,6 +66,20 @@ if(NOT EXISTS "${PS3BASE_GENERATED_DIR}/table.cpp")
         "  python3 tools/setup.py --steps ppu --elf <decrypted title.elf>\n"
         "See docs/setup.md for the full sequence.")
 endif()
+# Say WHICH seeds the generated code was lifted from, and warn when an input is
+# newer than the lift. A lift is a pure function of (ELF, seeds, switch tables,
+# images.json); if one of those changed and the generated code did not, the
+# binary describes a different title than the one on disk. That happened on
+# 2026-11-13: out-rdr/ppu had no f_00b58430 (the cellFiber entry the title calls)
+# and nothing in the build said so.
+execute_process(
+    COMMAND python3 "${CMAKE_SOURCE_DIR}/tools/lift_stamp.py" "${CMAKE_SOURCE_DIR}"
+    OUTPUT_VARIABLE PS3BASE_LIFT_STAMP
+    ERROR_QUIET)
+if(PS3BASE_LIFT_STAMP)
+    string(STRIP "${PS3BASE_LIFT_STAMP}" PS3BASE_LIFT_STAMP)
+    message(STATUS "${PS3BASE_LIFT_STAMP}")
+endif()
 if(NOT EXISTS "${PS3BASE_SPU_NATIVE_GEN_DIR}/generated.txt")
     message(FATAL_ERROR
         "No generated SPU natives in ${PS3BASE_SPU_NATIVE_GEN_DIR}.\n"
@@ -308,6 +322,24 @@ add_executable(hook_flags tests/hook_flags.cpp)
 target_include_directories(hook_flags PRIVATE runtime/include)
 target_compile_options(hook_flags PRIVATE ${PS3BASE_ARCH_FLAGS})
 add_test(NAME hook_flags COMMAND hook_flags)
+
+# cellfiber_contract: the cellFiber HLE against the REAL library's behaviour,
+# read from the lifted firmware code. Pins three things that were wrong and are
+# each a silent false report rather than an error:
+#   - Yield returned PERM where the real code returns NOSYSINIT (no scheduler);
+#   - JoinFiber returned CELL_OK with a status for a fibre that never ran, where
+#     the real code waits on the fibre's state word at +772;
+#   - four unimplemented exports returned a bare CELL_OK, which AGENTS.md
+#     forbids.
+# It drives the handlers through hle::find, so it cannot drift from the code.
+add_executable(cellfiber_contract tests/cellfiber_contract.cpp
+               runtime/src/hle/cellFiber.cpp runtime/src/log.cpp runtime/src/host.cpp
+               runtime/src/memory.cpp runtime/src/regions.cpp runtime/src/mem.cpp
+               runtime/src/reservation.cpp runtime/src/codewatch.cpp
+               runtime/src/backtrace_port.cpp)
+target_include_directories(cellfiber_contract PRIVATE runtime/include runtime/src)
+target_compile_options(cellfiber_contract PRIVATE ${PS3BASE_ARCH_FLAGS})
+add_test(NAME cellfiber_contract COMMAND cellfiber_contract)
 
 # ppu_dispatch_table: the lifter's shared-table bctr detector, on synthetic
 # words. Pins the two shape rules that cost a session on Red Dead Redemption:

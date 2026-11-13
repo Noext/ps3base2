@@ -118,6 +118,70 @@ def step_reloc(args):
     run(["tools/prx_relocate.py", layout, args.fw, reloc], quiet=False)
 
 
+def newest_mtime(paths):
+    """The newest mtime among the paths that exist, or 0."""
+    best = 0.0
+    for p in paths:
+        try:
+            best = max(best, os.path.getmtime(p))
+        except OSError:
+            pass
+    return best
+
+
+def lift_is_stale(out, gen_root):
+    """True when a lift INPUT is newer than the generated code.
+
+    Why this exists: on 2026-11-13 the lift output was newer than the seed file,
+    so a timestamp check would NOT have caught that run -- but the same class of
+    bug was live: `out-rdr/ppu` was built from a seed set that did not contain a
+    function the title calls (0x00b58430, the cellFiber entry), and nothing in
+    the build said so. The lift is a pure function of (ELF, seeds, switch tables,
+    images.json); if any of those is newer than table.cpp, the generated code is
+    describing a different binary than the one on disk.
+
+    The check is deliberately conservative: it can only say "stale, relift", not
+    "fresh, skip". A lift is expensive but a stale lift is a wrong measurement.
+    """
+    generated = os.path.join(out, "table.cpp")
+    if not os.path.exists(generated):
+        return True
+    gen_mtime = os.path.getmtime(generated)
+    seeds_dir = os.path.join(gen_root, "seeds")
+    inputs = [os.path.join(gen_root, "switch_tables.toml")]
+    if os.path.isdir(seeds_dir):
+        inputs += [os.path.join(seeds_dir, n) for n in os.listdir(seeds_dir)]
+    inputs.append(os.path.join(gen_root, "lle_layout.json"))
+    newest = newest_mtime(inputs)
+    if newest > gen_mtime:
+        return True
+    return False
+
+
+def seed_fingerprint(gen_root):
+    """sha256 of every seed file, so a build can say WHICH seeds it used.
+
+    A lift is only reproducible if the inputs are named. The fingerprint goes
+    into the log and into a stamp beside the generated code, so a later reader
+    can tell whether two lifts that produced different function counts were
+    reading the same seeds.
+    """
+    seeds_dir = os.path.join(gen_root, "seeds")
+    h = hashlib.sha256()
+    if os.path.isdir(seeds_dir):
+        for name in sorted(os.listdir(seeds_dir)):
+            p = os.path.join(seeds_dir, name)
+            if not os.path.isfile(p):
+                continue
+            h.update(name.encode())
+            h.update(b"\0")
+            with open(p, "rb") as f:
+                for chunk in iter(lambda: f.read(1 << 20), b""):
+                    h.update(chunk)
+            h.update(b"\0")
+    return h.hexdigest()
+
+
 def step_ppu(args):
     out = os.path.join(args.out_root, "ppu")
     if not os.path.exists(args.nid_db):
@@ -135,6 +199,16 @@ def step_ppu(args):
             continue
         dst = os.path.join(seeds_dir, spec["name"] + ".txt")
         r = run(["tools/static_seeds.py", "--elf", elf, "--name", spec["name"], "--out", dst], quiet=False)
+    # Say which seeds this lift is about to use, and refuse to leave a lift that
+    # no longer matches its inputs. The fingerprint is the answer to "did these
+    # two runs read the same seeds", which a function count alone cannot give.
+    fp = seed_fingerprint(args.gen_root)
+    log("seed fingerprint %s (sha256 over %s)" % (fp, os.path.join(args.gen_root, "seeds")))
+    if lift_is_stale(out, args.gen_root):
+        log("PPU lift is STALE: an input is newer than %s; relifting" % os.path.join(out, "table.cpp"))
+    else:
+        log("PPU lift inputs are older than %s; lifting anyway (this step always lifts)"
+            % os.path.join(out, "table.cpp"))
     log("PPU recompilation into %s from %s" % (out, args.images))
     if not try_ppu(args, out, use_static_seeds=True):
         # One image's static seeds can produce code that does not compile (a
