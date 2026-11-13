@@ -192,6 +192,95 @@ int main() {
     check(t5.last_clear_color == 0x11223344u, "the clear carried the colour register");
     check(t5.flips == 1, "GCM_FLIP_COMMAND produced exactly one flip record");
 
+    /* ---- 5b. EVERY OBJECT IS SENT ONCE, by content fingerprint -----------
+     * The claim of S2: a payload crosses the ring once and every later draw that
+     * needs it crosses as a reference. Measured here on the two cases the logo
+     * actually exhibits: the same vertex block re-used by several draws, and the
+     * same ucode re-selected after a different one ran. */
+    reset_for_test();
+    {
+        Totals td;
+        Stats b{}, a{};
+        stats(&b);
+        const uint32_t fmt = (12u << 8) | (3u << 4);   /* stride 12, size 3 */
+        for (uint32_t k = 0; k < 3; k++) {
+            on_method(0x1740, fmt, 0x1000);
+            on_method(0x1680, 0x100u, 0x1008);   /* same offset -> same source bytes */
+            on_method(0x1808, 8u, 0x1010);
+            on_method(0x1814, 8u << 24, 0x1018);
+            on_method(0x1808, 0u, 0x1020);
+        }
+        on_drain_end();
+        stats(&a);
+        const uint64_t vtx_bytes = a.vtx_bytes - b.vtx_bytes;
+        const uint64_t refs = a.refs - b.refs;
+        drain(td);
+        check(vtx_bytes == 12u * 8u, "the same vertex block crossed the ring ONCE for 3 draws");
+        check(refs == 2, "the 2nd and 3rd draws announced it by fingerprint");
+    }
+    /* ---- 5c. a shader that alternates is not re-sent --------------------- */
+    reset_for_test();
+    {
+        Stats b{}, a{};
+        stats(&b);
+        for (uint32_t i = 0; i < 1024; i++) on_method(0x0B80u + 4u * (i & 3u), 0xAAAAAAAAu + i, 0);
+        on_method(0x1E9C, 0, 0);
+        on_method(0x1808, 4u, 0); on_method(0x1814, 3u << 24, 0);
+        for (uint32_t i = 0; i < 1024; i++) on_method(0x0B80u + 4u * (i & 3u), 0xBBBBBBBBu + i, 0);
+        on_method(0x1E9C, 0, 0);
+        on_method(0x1808, 4u, 0); on_method(0x1814, 3u << 24, 0);
+        for (uint32_t i = 0; i < 1024; i++) on_method(0x0B80u + 4u * (i & 3u), 0xAAAAAAAAu + i, 0);
+        on_method(0x1E9C, 0, 0);
+        on_method(0x1808, 4u, 0); on_method(0x1814, 3u << 24, 0);
+        on_drain_end();
+        stats(&a);
+        check(a.shader_objects - b.shader_objects == 2, "two distinct programs crossed, not three");
+        check(a.shader_alternations - b.shader_alternations == 1, "the alternating program came back as a reference");
+        Totals ts; drain(ts);
+    }
+    /* ---- 5d. the same TEXTURE image twice is one payload ------------------ */
+    reset_for_test();
+    {
+        Stats b{}, a{};
+        stats(&b);
+        for (uint32_t k = 0; k < 3; k++) {
+            on_method(0x1A00, 0, 0);
+            on_method(0x1A04, 0x81u, 0);
+            on_method(0x1A18, (64u << 16) | 64u, 0);
+            on_method(0x1A08, 0x200u, 0);   /* address write completes the unit */
+        }
+        on_drain_end();
+        stats(&a);
+        check(a.tex_bytes - b.tex_bytes == 64u * 4u * 64u, "the same image crossed the ring ONCE for 3 unit writes");
+        check(a.refs - b.refs == 2, "the repeats were announced by fingerprint");
+        Totals tt; drain(tt);
+    }
+    /* ---- 5e. the draw record NAMES the fingerprints ---------------------- */
+    reset_for_test();
+    {
+        on_method(0x1740, (12u << 8) | (3u << 4), 0x1000);
+        on_method(0x1680, 0x100u, 0x1008);
+        on_method(0x1808, 8u, 0x1010);
+        on_method(0x1814, 8u << 24, 0x1018);
+        on_method(0x1808, 0u, 0x1020);
+        on_drain_end();
+        uint32_t draw_hash = 0, draw_len = 0, mask = 0;
+        const uint8_t* data = poll_bytes();
+        for (;;) {
+            const uint32_t kind = poll();
+            if (!kind) break;
+            if (kind == kDraw) {
+                DrawRecord d{};
+                std::memcpy(&d, static_cast<const void*>(data), sizeof d);
+                draw_hash = d.array_hash[0];
+                draw_len = d.array_len[0];
+                mask = d.array_mask;
+            }
+        }
+        check(draw_hash != 0 && draw_len == 12u * 8u, "the draw record carries the array fingerprint, not a copy");
+        check((mask & 1u) != 0, "the draw array mask still names which slot it binds");
+    }
+
     /* ---- 6. the ring never half-writes and never blocks ------------------- */
     reset_for_test();
     /* The producer's counters are cumulative over the process, so the delta across

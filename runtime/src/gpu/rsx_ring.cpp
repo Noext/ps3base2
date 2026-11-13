@@ -76,6 +76,8 @@ struct Counters {
     std::atomic<uint64_t> geometry_unmapped{0}, texture_refused{0};
     std::atomic<uint64_t> shader_refused{0};
     std::atomic<uint64_t> tex_unchanged{0};
+    std::atomic<uint64_t> refs{0}, distinct_objects{0}, bytes_saved{0};
+    std::atomic<uint64_t> shader_alternations{0};
     /* WHICH THREADS produce. The ownership claim for milestone 4 is that the page
      * thread is the only one that ever touches the WebGPU device and that the
      * emulation worker alone produces RSX records. The second half of that is
@@ -107,11 +109,9 @@ uint32_t g_clear_zstencil = 0;
 /* [unit][offset fmt address ctrl0 ctrl1 filter rect ctrl3 border] */
 uint32_t g_tex_regs[16][9] = {};
 uint32_t g_tex_seq = 0;
-/* Last pushed texture per unit, by CONTENT key (address, format, rect). A title
- * re-writes the whole unit register file per draw; pushing on every address write
- * measured 1485 uploads of 24.6 MB in 75 s and filled the ring (55 685 refused
- * records, 1.28 GB refused). The page only needs a texture when it CHANGES. */
-uint32_t g_tex_key[16] = {};
+uint32_t g_tex_hash[16] = {};   /* content fingerprint of the last image on that unit */
+/* Last pushed texture per unit. The page only needs a texture when its CONTENT
+ * changes; see the fingerprint at the push site. */
 
 uint32_t g_vp[1024] = {};          /* vertex program, load-position addressed */
 uint32_t g_vp_load = 0;
@@ -123,6 +123,10 @@ uint32_t g_fp_ea = 0;
 
 uint32_t g_index_offset = 0;
 bool g_index_16bit = false;
+/* Fingerprints of the LAST index block and inline block carried, so the draw record
+ * can name them. Zero means "this draw has none". */
+uint32_t g_index_hash = 0, g_index_len = 0;
+uint32_t g_inline_hash = 0, g_inline_len = 0;
 
 uint32_t g_inline[4096];
 uint32_t g_inline_n = 0;
@@ -148,21 +152,96 @@ struct Tee {
     uint64_t state = 0, buffers = 0, textures = 0, shaders = 0;
     uint64_t draws = 0, clears = 0, flips = 0;
     uint64_t vtx = 0, idx = 0, tex_bytes = 0, shader_bytes = 0;
+    uint64_t refs = 0, ref_bytes = 0;
 } g_tee;
 
 // (poll()/poll_size()/poll_bytes() are declared in the header and defined below.)
 
-uint32_t fnv1a(const uint32_t* w, uint32_t n) {
+uint32_t fnv1a_bytes(const void* data, uint32_t n) {
+    const uint8_t* p = static_cast<const uint8_t*>(data);
     uint32_t h = 2166136261u;
     for (uint32_t i = 0; i < n; i++) {
-        const uint8_t* p = reinterpret_cast<const uint8_t*>(&w[i]);
-        for (int b = 0; b < 4; b++) {
-            h ^= p[b];
-            h *= 16777619u;
-        }
+        h ^= p[i];
+        h *= 16777619u;
     }
     return h;
 }
+
+uint32_t fnv1a(const uint32_t* w, uint32_t n) { return fnv1a_bytes(w, n * 4u); }
+
+/* ---- CONTENT FINGERPRINTS: every object is sent ONCE ---------------------
+ *
+ * The ring used to re-send a vertex array, an index block, a texture or a ucode
+ * every time a draw referred to it. Measured on the logo: 26 draws with
+t * 16.4 MB of textures, and the 16 MB ring overflowing (refused=1160458 with no
+ * page consumer draining). That is not a ring size problem first, it is a
+ * DUPLICATION problem: the same bytes were crossing thousands of times.
+ *
+ * So each payload is fingerprinted by CONTENT (32-bit FNV-1a over its bytes) and
+ * the set of fingerprints already sent is kept here. A repeat is announced with a
+ * 16-byte RefRecord naming the fingerprint, never with the payload again. The
+ * draw record then carries fingerprints instead of bytes, and the page binds by
+ * fingerprint.
+ *
+ * Collision safety: a hit requires kind, hash AND length to match, so two
+ * different payloads must collide on all three. With a few thousand live objects
+ * the birthday bound on 32 bits is ~1e-4; it is stated here rather than hidden,
+ * and the length term narrows it further. The fingerprint is what the page keys
+ * its stores by, so producer and consumer agree by construction.
+ *
+ * The table is a fixed open-addressed set: no allocation on the hot path, and a
+ * full table degrades to "no dedup for the newcomer", never to a wrong answer. */
+namespace {
+struct SeenKey {
+    uint32_t tag;   /* kind + 1; 0 means empty */
+    uint32_t hash;
+    uint32_t len;
+};
+constexpr uint32_t kSeenSlots = 1u << 15;   /* 32768 live objects, 384 KB */
+SeenKey g_seen[kSeenSlots];
+uint32_t g_seen_used = 0;
+
+inline uint32_t seen_slot(uint32_t tag, uint32_t hash, uint32_t len) {
+    return (hash ^ (len * 2654435761u) ^ (tag * 40503u)) & (kSeenSlots - 1u);
+}
+
+/* A/B switch for the measurement in docs/explore/S2/RESULTS.md: compiled with
+ * -DPS3BASE_RSX_NODEDUP=1 this build has the SAME ring accounting as the dedup
+ * build and NO deduplication, which is the only way to attribute a change in
+ * refused/bytes to the dedup rather than to the ring fix. Not a runtime flag:
+ * the comparison must not depend on the page calling a setter at the right time. */
+bool seen_has(uint32_t tag, uint32_t hash, uint32_t len) {
+#if defined(PS3BASE_RSX_NODEDUP) && PS3BASE_RSX_NODEDUP
+    (void)tag; (void)hash; (void)len;
+    return false;
+#endif
+    uint32_t i = seen_slot(tag, hash, len);
+    for (uint32_t n = 0; n < kSeenSlots; n++) {
+        const SeenKey& e = g_seen[i];
+        if (!e.tag) return false;
+        if (e.tag == tag && e.hash == hash && e.len == len) return true;
+        i = (i + 1) & (kSeenSlots - 1u);
+    }
+    return false;
+}
+
+void seen_add(uint32_t tag, uint32_t hash, uint32_t len) {
+    if (g_seen_used == kSeenSlots) return;
+    uint32_t i = seen_slot(tag, hash, len);
+    for (uint32_t n = 0; n < kSeenSlots; n++) {
+        SeenKey& e = g_seen[i];
+        if (!e.tag) {
+            e.tag = tag;
+            e.hash = hash;
+            e.len = len;
+            g_seen_used++;
+            return;
+        }
+        if (e.tag == tag && e.hash == hash && e.len == len) return;
+        i = (i + 1) & (kSeenSlots - 1u);
+    }
+}
+}  // namespace
 
 void note_producer_thread() {
     uint64_t id = 0;
@@ -197,6 +276,17 @@ bool push_record(uint32_t kind, const void* payload, uint32_t size) {
     return false;
 }
 
+/* Announce an object the page already has, by fingerprint. Returns true when the
+ * ref record crossed; a ring that is full counts it as refused like any other
+ * record, never as a silent skip. */
+bool push_ref(uint32_t type, uint32_t slot, uint32_t hash, uint32_t len) {
+    RefRecord rec{type, slot, hash, len};
+    if (!push_record(Kind::kRef, &rec, sizeof rec)) return false;
+    g_c.refs.fetch_add(1, std::memory_order_relaxed);
+    g_c.bytes_saved.fetch_add(len, std::memory_order_relaxed);
+    return true;
+}
+
 void flush_state() {
     if (!g_state_n) return;
     const uint32_t bytes = g_state_n * sizeof(StateWord);
@@ -216,7 +306,18 @@ void add_state(uint32_t method, uint32_t arg) {
 void push_vertex_shader_if_changed() {
     const uint32_t hash = fnv1a(g_vp, 1024);
     if (hash == g_vp_hash) return;
+    /* A DIFFERENT program than last time is not necessarily a NEW one: a title
+     * that alternates between two shaders re-sends both on every switch. Measured
+     * on the logo: 27 shader objects for what is a handful of programs. */
+    if (seen_has(kRefShaderVp + 1u, hash, sizeof g_vp)) {
+        g_vp_hash = hash;
+        g_c.shader_alternations.fetch_add(1, std::memory_order_relaxed);
+        push_ref(kRefShaderVp, 0, hash, sizeof g_vp);
+        return;
+    }
     g_vp_hash = hash;
+    g_c.distinct_objects.fetch_add(1, std::memory_order_relaxed);
+    seen_add(kRefShaderVp + 1u, hash, sizeof g_vp);
     ShaderRecord hdr{};
     hdr.stage = 0;
     hdr.words = 1024;
@@ -250,38 +351,61 @@ uint32_t push_vertex_array(uint32_t slot, uint32_t count, DrawRecord& draw) {
         return 0;
     }
     if (sizeof(BufferRecord) + len > kScratchCapacity) return 0;
+    /* CONTENT fingerprint, not address: a title re-points the same vertex block at
+     * a different io offset routinely, and an address-keyed cache would miss it. */
+    const uint32_t hash = fnv1a_bytes(src, len);
+    draw.array_hash[slot] = hash;
+    draw.array_len[slot] = len;
+    draw.array_count[slot] = count;
+    draw.array_stride[slot] = stride;
+    draw.array_format[slot] = fmt;
+    if (seen_has(kRefVertex + 1u, hash, len)) {
+        push_ref(kRefVertex, slot, hash, len);
+        return len;
+    }
+    seen_add(kRefVertex + 1u, hash, len);
+    g_c.distinct_objects.fetch_add(1, std::memory_order_relaxed);
     BufferRecord hdr{};
     hdr.type = kVertex;
     hdr.slot = slot;
     hdr.ea = ea;
     hdr.len = len;
     hdr.stride = stride;
+    hdr.hash = hash;
     std::memcpy(g_scratch, &hdr, sizeof hdr);
     std::memcpy(g_scratch + sizeof hdr, src, len);
     if (!push_record(Kind::kBuffer, g_scratch, sizeof hdr + len)) return 0;
     g_c.vtx_bytes.fetch_add(len, std::memory_order_relaxed);
-    draw.array_len[slot] = len;
-    draw.array_count[slot] = count;
-    draw.array_stride[slot] = stride;
-    draw.array_format[slot] = fmt;
     return len;
 }
 
 void push_inline_vertices() {
     if (!g_inline_n) return;
     const uint32_t len = g_inline_n * 4;
+    if (sizeof(BufferRecord) + len > kScratchCapacity) { g_inline_n = 0; return; }
+    const uint32_t hash = fnv1a_bytes(g_inline, len);
+    if (seen_has(kRefInline + 1u, hash, len)) {
+        push_ref(kRefInline, 0, hash, len);
+        g_inline_hash = hash;
+        g_inline_len = len;
+        g_inline_n = 0;
+        return;
+    }
+    seen_add(kRefInline + 1u, hash, len);
+    g_c.distinct_objects.fetch_add(1, std::memory_order_relaxed);
     BufferRecord hdr{};
     hdr.type = kInlineVertex;
     hdr.slot = 0;
     hdr.ea = 0;
     hdr.len = len;
     hdr.stride = 0;
-    if (sizeof hdr + len <= kScratchCapacity) {
-        std::memcpy(g_scratch, &hdr, sizeof hdr);
-        std::memcpy(g_scratch + sizeof hdr, g_inline, len);
-        if (push_record(Kind::kBuffer, g_scratch, sizeof hdr + len))
-            g_c.vtx_bytes.fetch_add(len, std::memory_order_relaxed);
-    }
+    hdr.hash = hash;
+    std::memcpy(g_scratch, &hdr, sizeof hdr);
+    std::memcpy(g_scratch + sizeof hdr, g_inline, len);
+    if (push_record(Kind::kBuffer, g_scratch, sizeof hdr + len))
+        g_c.vtx_bytes.fetch_add(len, std::memory_order_relaxed);
+    g_inline_hash = hash;
+    g_inline_len = len;
     g_inline_n = 0;
 }
 
@@ -298,12 +422,22 @@ void push_index_buffer(uint32_t first, uint32_t count) {
     if (!src || !count || len == 0) return;
     if (len > 256u * 1024u) len = 256u * 1024u;
     if (sizeof(BufferRecord) + len > kScratchCapacity) return;
+    const uint32_t hash = fnv1a_bytes(src, len);
+    g_index_hash = hash;
+    g_index_len = len;
+    if (seen_has(kRefIndex + 1u, hash, len)) {
+        push_ref(kRefIndex, 0, hash, len);
+        return;
+    }
+    seen_add(kRefIndex + 1u, hash, len);
+    g_c.distinct_objects.fetch_add(1, std::memory_order_relaxed);
     BufferRecord hdr{};
     hdr.type = kIndex;
     hdr.slot = 0;
     hdr.ea = ea;
     hdr.len = len;
     hdr.stride = sz;
+    hdr.hash = hash;
     std::memcpy(g_scratch, &hdr, sizeof hdr);
     std::memcpy(g_scratch + sizeof hdr, src, len);
     if (push_record(Kind::kBuffer, g_scratch, sizeof hdr + len))
@@ -313,6 +447,8 @@ void push_index_buffer(uint32_t first, uint32_t count) {
 void push_draw(uint32_t arg, uint32_t indexed) {
     flush_state();
     push_vertex_shader_if_changed();
+    g_inline_hash = 0;
+    g_inline_len = 0;
     push_inline_vertices();
     DrawRecord draw{};
     draw.primitive = g_primitive;
@@ -321,7 +457,15 @@ void push_draw(uint32_t arg, uint32_t indexed) {
     draw.indexed = indexed;
     draw.shader_hash[0] = g_vp_hash;
     draw.shader_hash[1] = g_fp_hash;
-    if (indexed) push_index_buffer(draw.first, draw.count);
+    /* The draw names the index block and the inline block by fingerprint; a zero
+     * means the draw has none of that kind, which is also what the page tests. */
+    draw.index_hash = 0;
+    if (indexed) {
+        g_index_hash = 0;
+        g_index_len = 0;
+        push_index_buffer(draw.first, draw.count);
+        draw.index_hash = g_index_hash;
+    }
     for (uint32_t i = 0; i < 16; i++) {
         if (!((g_array_format[i] >> 4) & 0xFu)) continue;
         /* An indexed draw's vertex count is the index count, not the vertex
@@ -330,6 +474,12 @@ void push_draw(uint32_t arg, uint32_t indexed) {
         uint32_t n = draw.count ? draw.count : 0;
         if (n > 2048) n = 2048;
         if (push_vertex_array(i, n, draw)) draw.array_mask |= (1u << i);
+    }
+    /* An immediate-mode draw carries its vertices inline: name them too. */
+    if (!indexed && g_inline_len) {
+        draw.array_mask |= 0x80000000u;   /* bit 31: array_hash[0] is the inline block */
+        draw.array_hash[0] = g_inline_hash;
+        draw.array_len[0] = g_inline_len;
     }
     if (push_record(Kind::kDraw, &draw, sizeof draw))
         g_c.draws.fetch_add(1, std::memory_order_relaxed);
@@ -356,18 +506,30 @@ void push_texture(uint32_t unit) {
         return;
     }
     {
-        /* Content key: address, format and rect. Same key twice in a row means the
-         * page already has these bytes. */
-        const uint32_t key = ea ^ (regs[1] * 2654435761u) ^ (regs[6] * 40503u);
-        if (key == g_tex_key[unit]) {
-            g_c.tex_unchanged.fetch_add(1, std::memory_order_relaxed);
+        /* CONTENT fingerprint over the whole source image, not an address key.
+         *
+         * The previous key was (ea, format, rect), which is a DIFFERENT question:
+         * it answered "did the unit's registers change?". A title that re-uploads
+         * the same artwork at a new address, or rewrites the register file per draw
+         * with the same bytes, defeated it. Measured on the logo: 85 texture
+         * objects, 16.4 MB, with the same handful of images behind them.
+         * Hashing costs one pass over the source (512 KB typical) and buys the
+         * whole payload back when the bytes repeat. */
+        g_tex_hash[unit] = fnv1a_bytes(src, src_size);
+        const uint32_t hash = g_tex_hash[unit];
+        if (seen_has(kRefTexture + 1u, hash, src_size)) {
+            push_ref(kRefTexture, unit, hash, src_size);
+            g_tex_seq++;
             return;
         }
-        g_tex_key[unit] = key;
+        seen_add(kRefTexture + 1u, hash, src_size);
+        g_c.distinct_objects.fetch_add(1, std::memory_order_relaxed);
     }
     /* Chunked so a 4 MB source cannot monopolise the ring; the page reassembles
      * by (unit, seq, ea). */
     constexpr uint32_t kChunk = 512u * 1024u;
+    const uint32_t chunks = (src_size + kChunk - 1u) / kChunk;
+    const uint32_t hash = g_tex_hash[unit];
     uint32_t sent = 0;
     while (sent < src_size) {
         uint32_t n = src_size - sent;
@@ -381,6 +543,8 @@ void push_texture(uint32_t unit) {
         hdr.pitch = pitch;
         hdr.src_size = n;
         hdr.seq = g_tex_seq;
+        hdr.chunks = chunks;
+        hdr.hash = hash;
         std::memcpy(g_scratch, &hdr, sizeof hdr);
         std::memcpy(g_scratch + sizeof hdr, src + sent, n);
         if (!push_record(Kind::kTexture, g_scratch, sizeof hdr + n)) break;
@@ -402,8 +566,17 @@ void push_fragment_shader(uint32_t ea) {
     std::memcpy(g_fp, src, sizeof g_fp);
     const uint32_t hash = fnv1a(g_fp, 512);
     if (hash == g_fp_hash) return;
+    if (seen_has(kRefShaderFp + 1u, hash, sizeof g_fp)) {
+        g_fp_hash = hash;
+        g_fp_ea = ea;
+        g_c.shader_alternations.fetch_add(1, std::memory_order_relaxed);
+        push_ref(kRefShaderFp, 0, hash, sizeof g_fp);
+        return;
+    }
     g_fp_hash = hash;
     g_fp_ea = ea;
+    g_c.distinct_objects.fetch_add(1, std::memory_order_relaxed);
+    seen_add(kRefShaderFp + 1u, hash, sizeof g_fp);
     ShaderRecord hdr{};
     hdr.stage = 1;
     hdr.words = 512;
@@ -482,6 +655,7 @@ void tee_drain() {
         case Kind::kDraw: g_tee.draws++; break;
         case Kind::kClear: g_tee.clears++; break;
         case Kind::kFlip: g_tee.flips++; break;
+        case Kind::kRef: g_tee.refs++; g_tee.ref_bytes += w[3]; break;
         default: break;
         }
     }
@@ -497,7 +671,11 @@ void reset_for_test() {
     std::memset(g_array_format, 0, sizeof g_array_format);
     std::memset(g_array_offset, 0, sizeof g_array_offset);
     std::memset(g_tex_regs, 0, sizeof g_tex_regs);
-    std::memset(g_tex_key, 0, sizeof g_tex_key);
+    std::memset(g_tex_hash, 0, sizeof g_tex_hash);
+    std::memset(g_seen, 0, sizeof g_seen);
+    g_seen_used = 0;
+    g_index_hash = g_index_len = 0;
+    g_inline_hash = g_inline_len = 0;
     std::memset(g_vp, 0, sizeof g_vp);
     std::memset(g_fp, 0, sizeof g_fp);
 }
@@ -703,6 +881,10 @@ void stats(Stats* out) {
     out->texture_refused = g_c.texture_refused.load(std::memory_order_relaxed);
     out->producer_threads = g_c.producer_threads.load(std::memory_order_relaxed);
     out->tex_unchanged = g_c.tex_unchanged.load(std::memory_order_relaxed);
+    out->refs = g_c.refs.load(std::memory_order_relaxed);
+    out->distinct_objects = g_c.distinct_objects.load(std::memory_order_relaxed);
+    out->bytes_saved = g_c.bytes_saved.load(std::memory_order_relaxed);
+    out->shader_alternations = g_c.shader_alternations.load(std::memory_order_relaxed);
 }
 
 void report_stats() {
@@ -716,7 +898,8 @@ void report_stats() {
              "pushed=%llu bytes=%llu state_methods=%llu state_bytes=%llu vtx_bytes=%llu "
              "idx_bytes=%llu tex_bytes=%llu tex_objects=%llu shader_bytes=%llu "
              "shader_objects=%llu draws=%llu clears=%llu flips=%llu refused=%llu "
-             "refused_bytes=%llu geom_unmapped=%llu tex_refused=%llu tex_unchanged=%llu threads=%llu used=%u",
+             "refused_bytes=%llu geom_unmapped=%llu tex_refused=%llu tex_unchanged=%llu "
+             "refs=%llu distinct=%llu bytes_saved=%llu shader_alt=%llu threads=%llu used=%u",
              (unsigned long long)s.records, (unsigned long long)s.bytes,
              (unsigned long long)s.state_methods, (unsigned long long)s.state_bytes,
              (unsigned long long)s.vtx_bytes, (unsigned long long)s.idx_bytes,
@@ -726,6 +909,8 @@ void report_stats() {
              (unsigned long long)s.flips, (unsigned long long)s.refused,
              (unsigned long long)s.refused_bytes, (unsigned long long)s.geometry_unmapped,
              (unsigned long long)s.texture_refused, (unsigned long long)s.tex_unchanged,
+             (unsigned long long)s.refs, (unsigned long long)s.distinct_objects,
+             (unsigned long long)s.bytes_saved, (unsigned long long)s.shader_alternations,
              (unsigned long long)g_c.producer_threads.load(std::memory_order_relaxed), ring().used());
     if (g_tee.enabled) {
         LOG_INFO("rsxring",
@@ -802,6 +987,10 @@ uint32_t rsx_ring_stat(uint32_t which) {
     case 16: return static_cast<uint32_t>(s.texture_refused);
     case 17: return static_cast<uint32_t>(s.producer_threads);
     case 18: return static_cast<uint32_t>(s.tex_unchanged);
+    case 19: return static_cast<uint32_t>(s.refs);
+    case 20: return static_cast<uint32_t>(s.distinct_objects);
+    case 21: return static_cast<uint32_t>(s.bytes_saved);
+    case 22: return static_cast<uint32_t>(s.shader_alternations);
     default: return 0;
     }
 }

@@ -60,7 +60,20 @@ bool CommandRing::push(uint32_t kind, const void* payload, uint32_t payload_size
              * tail, handled by the counter check below. */
         }
     }
-    if (used + cost > capacity_ - 1) return false;   /* full: caller drains */
+    /* RESERVE atomically, never load-then-store: the consumer moves used_ too, and
+     * a plain store here silently threw away its subtraction (measured: used_
+     * wrapped past capacity on the S2 page). reserved_ holds the in-flight bytes so
+     * two pushes cannot both pass the check against the same free space. */
+    const uint32_t already = reserved_.fetch_add(cost, std::memory_order_acq_rel);
+    /* Free space = capacity-1 - (readable used_ + in-flight reserved_). Reading used_
+     * here can only be STALE LOW (the consumer only ever subtracts), so a race makes
+     * this check refuse a record that would have fit -- never accept one that does
+     * not. That is the safe direction: a false refusal is counted and recovered, an
+     * over-commit corrupts the stream. */
+    if (used + already + cost > capacity_ - 1) {
+        reserved_.fetch_sub(cost, std::memory_order_acq_rel);
+        return false;   /* full: caller drains */
+    }
 
     if (pad) {
         CommandRecord ph{pad, kCommandPad};
@@ -77,9 +90,14 @@ bool CommandRing::push(uint32_t kind, const void* payload, uint32_t payload_size
 
     uint32_t new_head = start + need;
     if (new_head >= capacity_) new_head = 0;
-    used_.store(used + cost, std::memory_order_release);
+    /* Publish: the bytes are in place, so the size becomes readable. Release pairs
+     * with the consumer's acquire load of used_. */
+    used_.fetch_add(cost, std::memory_order_release);
     head_.store(new_head, std::memory_order_release);
     pushed_.fetch_add(1, std::memory_order_relaxed);
+    reserved_.fetch_sub(cost, std::memory_order_acq_rel);
+    (void)used;
+    (void)tail;
     return true;
 }
 

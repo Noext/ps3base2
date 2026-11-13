@@ -8,11 +8,9 @@
  * uniform blocks -- is plain CPU code with no Vulkan in it, and that is the half
  * the web port needs.
  *
- * So this is not a fake renderer and it does not claim to be one. It makes
- * submission a no-op and says so: a build linked with this file draws nothing by
- * itself. What it yields is the renderer's own STATE at every draw, in host
- * memory, which the WebGPU producer serialises into the command ring for the page
- * to replay. The page is what draws.
+ * So this is not a fake renderer and it does not claim to be one: submission is a
+ * no-op and says so. What it yields is the renderer's own STATE at every draw, in
+ * host memory, which the page then draws with WebGPU.
  *
  * Signatures are GENERATED from third_party/Vulkan-Headers/include/vulkan/
  * vulkan_core.h (the PFN_vk* typedefs), not written by hand: a hand-written stub
@@ -20,13 +18,19 @@
  * stack. Every create returns VK_SUCCESS and writes a non-null sentinel handle,
  * because a null handle makes init_objects() fail and the whole decode path is
  * skipped -- which would turn "no Vulkan" into "no measurement".
+ *
+ * ONE capability is emulated rather than stubbed, because the decode path cannot
+ * work without it: host-visible memory (vkCreateBuffer + vkMapMemory), where
+ * gpu/ring.cpp puts every decoded vertex. See vkMapMemory below.
  */
 #if defined(__EMSCRIPTEN__)
 
 #include "vk_context.h"
 
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <map>
 
 namespace gpu {
 
@@ -34,6 +38,17 @@ static uint64_t g_serial = 0;
 
 void* fake_handle(uint32_t kind, uint64_t id) {
     return reinterpret_cast<void*>(static_cast<uintptr_t>(0x10000u + (uint64_t(kind) << 20) + id));
+}
+
+/* Allocation sizes, keyed by the handle this file handed out. vkCreateBuffer is the
+ * only place a size is known and vkGetBufferMemoryRequirements the only place it is
+ * asked for, so it has to be remembered between the two. */
+struct HostBuffer {
+    uint64_t size = 0;
+};
+std::map<uint64_t, HostBuffer>& host_buffers() {
+    static std::map<uint64_t, HostBuffer> m;
+    return m;
 }
 
 static VkCtx g_null_ctx{};
@@ -221,8 +236,6 @@ static VKAPI_ATTR void VKAPI_CALL r3_null_vkCmdPushDescriptorSetKHR(VkCommandBuf
     (void)set;
     (void)descriptorWriteCount;
     (void)pDescriptorWrites;
-
-    (void)0;
 }
 
 static VKAPI_ATTR void VKAPI_CALL r3_null_vkCmdResetQueryPool(VkCommandBuffer commandBuffer, VkQueryPool queryPool, uint32_t firstQuery, uint32_t queryCount) {
@@ -348,10 +361,14 @@ static VKAPI_ATTR void VKAPI_CALL r3_null_vkCmdSetViewport(VkCommandBuffer comma
 
 static VKAPI_ATTR VkResult VKAPI_CALL r3_null_vkCreateBuffer(VkDevice device, const VkBufferCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkBuffer* pBuffer) {
     (void)device;
-    (void)pCreateInfo;
     (void)pAllocator;
-    (void)pBuffer;
-    if (pBuffer) *pBuffer = reinterpret_cast<VkBuffer>(gpu::fake_handle(9, ++gpu::g_serial));
+    if (pBuffer) {
+        *pBuffer = reinterpret_cast<VkBuffer>(gpu::fake_handle(9, ++gpu::g_serial));
+        /* The ONLY place the allocation size is known. gpu/ring.cpp asks for its
+         * 256 MB vertex/index/uniform ring here and then maps it; without this the
+         * mapped range has no size and decoded vertices go nowhere. */
+        if (pCreateInfo) gpu::host_buffers()[uint64_t(*pBuffer)].size = pCreateInfo->size;
+    }
     return VK_SUCCESS;
 }
 
@@ -458,8 +475,11 @@ static VKAPI_ATTR void VKAPI_CALL r3_null_vkFreeMemory(VkDevice device, VkDevice
 
 static VKAPI_ATTR void VKAPI_CALL r3_null_vkGetBufferMemoryRequirements(VkDevice device, VkBuffer buffer, VkMemoryRequirements* pMemoryRequirements) {
     (void)device;
-    (void)buffer;
-    (void)pMemoryRequirements;
+    if (!pMemoryRequirements) return;
+    auto it = gpu::host_buffers().find(uint64_t(buffer));
+    pMemoryRequirements->size = it == gpu::host_buffers().end() ? 0 : it->second.size;
+    pMemoryRequirements->alignment = 16;
+    pMemoryRequirements->memoryTypeBits = 1;
 }
 
 static VKAPI_ATTR void VKAPI_CALL r3_null_vkGetImageMemoryRequirements(VkDevice device, VkImage image, VkMemoryRequirements* pMemoryRequirements) {
@@ -494,18 +514,22 @@ static VKAPI_ATTR VkResult VKAPI_CALL r3_null_vkMapMemory(VkDevice device, VkDev
     (void)device;
     (void)memory;
     (void)offset;
-    (void)size;
     (void)flags;
-    (void)ppData;
-    if (ppData) *ppData = nullptr;
+    if (!ppData) return VK_SUCCESS;
+    /* HOST-VISIBLE MEMORY, EMULATED -- not optional. gpu/ring.cpp does
+     * vkCreateBuffer + vkMapMemory and then writes every decoded vertex through the
+     * returned pointer. A stub that returned VK_SUCCESS without writing ppData left
+     * g_ptr null, so ring.cpp computed out.ptr = null + offset -- a small integer that
+     * is a VALID wasm address (the module's data and stack live low). The renderer
+     * wrote its decoded vertices over its own memory.
+     * Measured: "memory access out of bounds" then "Aborted()" after 43 draws had
+     * been decoded correctly. The draws were real; the storage was not.
+     * The whole range is mapped because ring.cpp maps RING_SIZE*RING_SLOTS at offset 0
+     * and then indexes by a frame-bumped base. */
+    void* p = std::calloc(1, size_t(size ? size : 1));
+    *ppData = p;
     return VK_SUCCESS;
 }
-
-/* volk declares every vk* name as a FUNCTION POINTER (volk.h: "extern PFN_vkXxx
- * vkXxx;"), so the null backend replaces the POINTER, not the symbol: defining
- * vkCmdDrawIndexed as a function is a redefinition of a different kind and does not
- * compile. Each pointer names its stub explicitly here, so the 58 are visible in
- * one list. */
 
 PFN_vkAllocateMemory vkAllocateMemory = r3_null_vkAllocateMemory;
 PFN_vkBindBufferMemory vkBindBufferMemory = r3_null_vkBindBufferMemory;

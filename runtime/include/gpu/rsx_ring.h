@@ -48,6 +48,7 @@ enum Kind : uint32_t {
     kDraw = 5,        /* DrawRecord: state snapshot at the draw */
     kClear = 6,       /* ClearRecord */
     kFlip = 7,        /* FlipRecord */
+    kRef = 8,         /* RefRecord: an object the page ALREADY has, by fingerprint */
 };
 
 /* 128 pairs = 1 KB per record. Measured state traffic is ~1.27 M methods/s, so
@@ -67,6 +68,7 @@ struct BufferRecord {
     uint32_t ea;      /* guest EA the bytes came from, 0 for inline */
     uint32_t len;     /* payload bytes that follow */
     uint32_t stride;  /* per-vertex stride, 0 when not applicable */
+    uint32_t hash;    /* CONTENT fingerprint of the payload (FNV-1a over the bytes) */
 };
 
 struct TextureRecord {
@@ -78,6 +80,8 @@ struct TextureRecord {
     uint32_t pitch;
     uint32_t src_size;  /* payload bytes that follow */
     uint32_t seq;       /* producer sequence, for the page's log */
+    uint32_t chunks;    /* how many kTexture records this object is split into */
+    uint32_t hash;      /* CONTENT fingerprint over the WHOLE source image */
 };
 
 struct ShaderRecord {
@@ -87,6 +91,14 @@ struct ShaderRecord {
     uint32_t ea;
 };
 
+/* A DRAW CARRIES REFERENCES, NOT BYTES.
+ *
+ * Every array, index block and shader the draw needs has already been sent once,
+ * under the fingerprint (content hash) in the fields below. The draw record names
+ * those fingerprints; the page looks them up in its own by-fingerprint store.
+ * `array_len` is kept because it is what the page sizes its bind range from, and
+ * it is 0 for an array that was never sent (array_mask bit clear).
+ */
 struct DrawRecord {
     uint32_t primitive;
     uint32_t first;
@@ -98,6 +110,29 @@ struct DrawRecord {
     uint32_t array_stride[16];
     uint32_t array_format[16];
     uint32_t array_len[16];   /* bytes carried for that array, 0 if none */
+    uint32_t array_hash[16];  /* CONTENT fingerprint the page binds by */
+    uint32_t index_hash;      /* CONTENT fingerprint of the index block, 0 if none */
+};
+
+/* An object the page already has. Sent INSTEAD of the payload when the content
+ * fingerprint was seen before, so a title that re-issues the same vertex block,
+ * index block, texture or ucode every frame costs 16 bytes per announcement
+ * instead of the payload. The `hash` is the same value a full send carries in
+ * its own record header, which is what makes the two interchangeable. */
+struct RefRecord {
+    uint32_t type;    /* BufferType for kBuffer refs; kRefShader/kRefTexture below */
+    uint32_t slot;    /* array slot, unit, or 0 */
+    uint32_t hash;    /* content fingerprint */
+    uint32_t len;     /* bytes the page already holds for it */
+};
+
+enum RefType : uint32_t {
+    kRefVertex = 0,
+    kRefIndex = 1,
+    kRefInline = 2,
+    kRefTexture = 3,
+    kRefShaderVp = 4,
+    kRefShaderFp = 5,
 };
 
 struct ClearRecord {
@@ -157,6 +192,10 @@ struct Stats {
     uint64_t texture_refused;
     uint64_t producer_threads;   /* distinct threads that called on_method: must be 1 */
     uint64_t tex_unchanged;      /* texture writes skipped: content already sent */
+    uint64_t refs;               /* objects announced by fingerprint only */
+    uint64_t distinct_objects;   /* fingerprints sent with a full payload */
+    uint64_t bytes_saved;        /* payload bytes NOT sent because of a ref */
+    uint64_t shader_alternations;/* shader switches whose ucode was already sent */
 };
 void stats(Stats* out);
 void report_stats();

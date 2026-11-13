@@ -87,6 +87,14 @@ private:
      * after a wrap head can equal tail while the ring is full, which every
      * position-only version of this code got wrong. */
     std::atomic<uint32_t> used_{0};
+    /* Bytes the producer has COMMITTED to but not yet published as readable.
+     * Without it the free-space check is a load-then-store on used_, which races
+     * the consumer's own subtraction: measured on the S2 page, used_ wrapped to
+     * 4 294 966 960 (> capacity) and the ring then reported itself permanently
+     * full while the consumer had already advanced. used_ is now only ever moved
+     * by an atomic RMW on both sides, and reserved_ is the producer's private
+     * reservation so it can never over-commit while a push is in flight. */
+    std::atomic<uint32_t> reserved_{0};
     std::atomic<uint64_t> pushed_{0};
     std::atomic<uint64_t> popped_{0};
     std::atomic<uint64_t> wrapped_{0};
