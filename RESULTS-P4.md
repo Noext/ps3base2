@@ -212,3 +212,34 @@ regress arms were running):
 The same four screens in the same order, with 15 s of extra start-up because
 the machine was three times as loaded. The start time moved; the sequence did
 not. Captures: /tmp/p4drive_loopD/caps/OTHER-*.png, LOADING-*.png.
+### M7 -- the OTHER arm: Create A New Save Game (cross) reaches a different WARNING
+
+PLAN [cross, cross, cross] -- cross is row 2, Create A New Save Game:
+
+     57.37 STATE TITLE     Press START
+     66.06 STATE MENU      Online Multiplayer / Downloadable Content / Single Player
+     95.10 STATE ALERT     A Red Dead Redemption single player save could not be found.
+     95.10 -> cross (alert action 1)
+    100.51 STATE OTHER     This game saves data automatically at certain points. Do not
+                            switch off the power when the HDD access indicator is flashing.
+                            Autosave may be turned off at any time in the options menu.
+    114.53 STATE LOADING   Loading...
+     exit -11 elapsed 114.8
+
+So BOTH branches of the ALERT continue into a WARNING dialogue in the same red
+frame, with different body text:
+
+  Continue Without Saving -> WARNING 'Autosave has been disabled. You may enable
+                             autosave in the options menu.'          [Continue X]
+  Create A New Save Game  -> WARNING 'This game saves data automatically at certain
+                             points. Do not switch off the power when the HDD access
+                             indicator is flashing. Autosave may be turned off at any
+                             time in the options menu.'  AND the three ALERT rows are
+                             still drawn under it (Continue Without Saving / Create A
+                             New Save Game / Retry)
+
+Both then reach the same RDR key-art 'Loading...' screen and both die in the
+same null+0x10 SIGSEGV at guest 0x10 inside f_0053338c.
+
+Evidence: docs/evidence/rdr-p4-warning-new-save.png (the new-save warning),
+and /tmp/p4drive_loopE/caps/LOADING-0084.png (the loading after it).
