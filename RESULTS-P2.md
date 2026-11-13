@@ -192,3 +192,40 @@ Consequence for the two candidate diagnoses:
       TLS block.
   #68 (reused block not reinitialised): not a known ps3recomp issue (M6), and
       the measured block for the crash thread is initialised (M3).
+## M9. What f_360002a0 is: libfiber's stack switch, and why gpr[9] is NULL
+f_360002a0_body (libfiber_000.cpp:216-235) is the classic PPC64 context switch:
+
+    gpr[8]  = gpr[1]                      ; old sp
+    gpr[9]  = ~sp + gpr[5] + 1            ; = gpr[5] - sp   (the backward frame distance)
+    st64(sp + gpr[9], gpr[1])             ; save old sp at the new frame
+    sp      = sp + gpr[9]                 ; switch stacks
+    st64(gpr[8] + 16, lr)                 ; save lr in the OLD frame
+    st64(sp + 40, r2)
+    gpr[7]  = gpr[3] & 0xffffffff
+    ctr     = ld32(gpr[7] + 0)            ; function word
+    r2      = ld32(gpr[7] + 4)            ; TOC word
+    r3      = gpr[4]
+    call_indirect(ctr)                    ; enter the fiber body
+    r2      = ld64(sp + 40)
+    gpr[9]  = ld64(sp + 0)                ; <<< RELOAD THE BACK-CHAIN: 0 at the fault
+    lr      = ld64(gpr[9] + 16)           ; <<< FAULTS: guest 0x10
+    sp      = gpr[9]
+    return
+
+The guest saved the old stack pointer at [sp] before entering the fiber, and
+reads it back afterwards to return to the caller's stack. At the fault that
+slot is 0, so the "return to the previous context" step dereferences NULL+0x10.
+
+What this means mechanistically: the fiber ran to completion (or the body
+returned) and the unwind slot it depends on is zero. Two ways that happens, and
+they are distinguishable only by watching the slot:
+  (a) the switch was entered with gpr[5]-gpr[1] landing on a frame whose [sp]
+      slot was never written (the save was skipped or wrote elsewhere), or
+  (b) the slot was written and then clobbered -- by a stack overflow past the
+      fiber's own stack, or by another thread using the same fiber.
+
+Neither is TLS. r13 stays a fibre-local value throughout; the crash dump prints
+r13 because the reporter prints the register, not because the fault reads it.
+This also explains why the r13 window was all zero (M4) and why that told us
+nothing: the reporter dumps the thread pointer's surroundings, and the fault is
+on a stack pointer that has nothing to do with it.
