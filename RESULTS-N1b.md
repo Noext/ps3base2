@@ -200,3 +200,33 @@ Not an SPU change, and not a kernel branch change. In order:
 One run with a real dev_flash (or the flashMP3.pic stand-in) plus the refusal
 dump, to name the field behind the second refusal (block+0x78) the same way, and
 a GOWA_FLASH_DIR-aware regress.sh.
+
+## 9. Merge-queue gate (rebase + tests)
+
+Rebased onto origin/main and re-checked before declaring done:
+
+    $ git fetch /root/Dev/ps3base2 main:refs/remotes/origin/main -f && git rebase origin/main
+    Successfully rebased and updated refs/heads/explore/n1b.
+    $ git rev-list --count HEAD..origin/main
+    0
+    $ git diff --diff-filter=D --name-only origin/main...HEAD | wc -l
+    0
+
+The branch changes no source file -- it is a measurement branch:
+
+    $ git diff-tree -r --name-only origin/main HEAD
+    .agent-status/N1b.json
+    RESULTS-N1b.md
+    current_tasks/N1b.claim
+
+So the rebased tree is source-identical to origin/main (0674552), and the test
+gate is that tree's own build:
+
+    $ cd /root/Dev/ps3base2/build-rdr && ctest --output-on-failure
+    40/40 Test #40: cellAudio ........................   Passed    0.01 sec
+    100% tests passed, 0 tests failed out of 40
+    Total Test time (real) =   9.53 sec
+
+The refusal this report explains was re-measured on main 202e9ef (section 1) and
+on the same binary at the rebased base in the A/B (section 5); N3b and N5b, which
+landed in between, report the same refusal at the same pc.
