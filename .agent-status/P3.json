@@ -1,8 +1,11 @@
 {
   "agent": "P3",
-  "status": "running",
+  "status": "done",
   "branch": "explore/p3",
   "worktree": "/root/Dev/wt-P3",
-  "task": "cellFiber HLE implemented (ucontext host fibres); LLE crash proven, HLE no crash in 198s/4801 flips; measuring crash rate",
-  "updated": "2026-11-13T11:26:25.767Z"
+  "result": "cellFiber moved from LLE to HLE on ucontext host fibres. The RDR guest-0x10 SIGSEGV (LLE libfiber back-chain epilogue on the fibre's own stack) is gone; A/B same-minute: LLE SIGSEGV guest 0x10, HLE 0 SIGSEGV with 3530-10407 real fibre switches. Title now stops at rdr+0xad5618 (lift-coverage gap), not a fibre defect.",
+  "evidence": "RESULTS-P3.md measurements 1-10; docs/findings/f-rdr-fiber-crash.md was an independent prior finding",
+  "tests": "ctest 40/40 after rebase onto origin/main 7264335",
+  "notes": "spu_bench ALL-target build failure is pre-existing on main (3 missing generated headers)",
+  "updated": "2026-11-13T12:20:13.493Z"
 }

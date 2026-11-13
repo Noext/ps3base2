@@ -438,3 +438,21 @@ in its own code at guest 0x400.
 What is NOT claimed: a crash rate, and "RDR is fixed". The guest-0x10 fault is
 gone; the title still stops at 48 s on a lift-coverage gap at rdr+0xad5618,
 which is the next task and not a fibre defect.
+## Measurement 10 -- post-rebase validation (this is the tree that lands)
+
+Rebased onto origin/main (7264335), rebuilt, ctest 40/40, then the A/B again:
+
+    A LLE (main checkout binary)  EXIT=139 SIGSEGV guest 0x10  flip 781
+    B HLE (this branch)           EXIT=134 abort, 0 SIGSEGV    flip 1201
+      cellFiber: HLE RunFibers(0x0165d580) ran 3530 fibre switch(es) -> CELL_OK
+
+Same result as Measurement 9, on the rebased tree.
+
+Build notes for whoever merges:
+  cmake --build build-rdr --target ps3base      -> OK
+  ctest in build-rdr                            -> 40/40 passed
+  cmake --build build-rdr (ALL targets)         -> fails on spu_bench ONLY,
+      with three missing GENERATED headers (edge_ovl_gen.h, edge_softbody_gen.inc,
+      renjob_gen.h). That failure is PRE-EXISTING on main: the same three
+      failures reproduce in /root/Dev/ps3base2/build-rdr, which this branch does
+      not touch.
