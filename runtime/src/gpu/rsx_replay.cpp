@@ -235,12 +235,33 @@ bool emit_shader(StoredShader& s) {
             dims |= v << (u * 2);
         }
         key.texture_dims = dims;
+        /* THE HALFWORD SWAP, which is what made every fragment program unreadable.
+         *
+         * rsx_renderer.cpp:1104 builds its reader as
+         *     uint32_t v = vm::read32(ea + i * 4);
+         *     return (v << 16) | (v >> 16);
+         * -- the guest stores each instruction as two big-endian halfwords, and the
+         * analyser expects them swapped. Feeding the raw words made layout() return
+         * invalid, so analyse_fragment_program refused every program: measured
+         * no_shader=1715 against draws_ready=1102, and the emitter logged
+         * "emitter refused (128 words)" for all of them. */
         const std::vector<uint32_t>& ucode = s.ucode;
-        FpWordReader read = [&ucode](uint32_t i) { return i < ucode.size() ? ucode[i] : 0u; };
+        FpWordReader read = [&ucode](uint32_t i) {
+            const uint32_t v = i < ucode.size() ? ucode[i] : 0u;
+            return (v << 16) | (v >> 16);
+        };
         WgslShader w = emit_fragment_wgsl(read, key);
         s.valid = w.valid;
         s.texture_mask = w.texture_mask;
         if (w.valid) s.wgsl = std::move(w.source);
+    }
+    if (!s.valid && g_stats.shaders <= 12) {
+        /* Name what the analyser saw: an invalid layout means the ucode words are
+         * not a fragment program, which is a different bug from an emitter refusal. */
+        const uint32_t w0 = s.ucode.empty() ? 0 : s.ucode[0];
+        const uint32_t w1 = s.ucode.size() > 1 ? s.ucode[1] : 0;
+        LOG_WARN("replay", "shader stage %u: ucode %zu words, w0 %08x w1 %08x (emitter refused)",
+                 s.stage, s.ucode.size(), w0, w1);
     }
     if (!s.valid && g_stats.shaders <= 12)
         LOG_WARN("replay", "shader 0x%08x stage %u: emitter refused (%zu words)",
