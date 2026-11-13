@@ -86,7 +86,7 @@ struct Device {
         uint32_t color_format = 0, depth_format = 0;
         uint32_t topology = 0, cull = 0;
         uint32_t blend_enable = 0, sfactor = 0, dfactor = 0, equation = 0;
-        uint32_t sfactor_alpha = 0, dfactor_alpha = 0;
+        uint32_t sfactor_alpha = 0, dfactor_alpha = 0, equation_alpha = 0;
         uint32_t write_mask = 0;
         uint32_t depth_test = 0, depth_write = 0, depth_compare = 0;
         uint32_t cw = 0;
@@ -335,6 +335,7 @@ WGPURenderPipeline pipeline_for(const DrawInputs& in) {
     k.dfactor = in.dfactor;
     k.sfactor_alpha = in.sfactor_alpha;
     k.dfactor_alpha = in.dfactor_alpha;
+    k.equation_alpha = in.equation_alpha;
     k.equation = in.equation;
     k.write_mask = in.write_mask;
     k.depth_test = in.depth_test ? 1u : 0u;
@@ -436,7 +437,10 @@ WGPURenderPipeline pipeline_for(const DrawInputs& in) {
     ct.writeMask = WGPUColorWriteMask(k.write_mask ? k.write_mask : 0xF);
     WGPUBlendState bs = WGPU_BLEND_STATE_INIT;
     bs.color.operation = WGPUBlendOperation(k.equation & 0xFFFF);
-    bs.alpha.operation = WGPUBlendOperation((k.equation >> 16) & 0xFFFF);
+    /* The alpha OPERATION is derived from its own half of the register and
+     * converted through the same table; reading it as a raw enumerant is the
+     * same mistake the factors had. */
+    bs.alpha.operation = WGPUBlendOperation(k.equation_alpha ? k.equation_alpha : (k.equation & 0xFFFF));
     bs.color.srcFactor = WGPUBlendFactor(k.sfactor & 0xFFFF);
     bs.color.dstFactor = WGPUBlendFactor(k.dfactor & 0xFFFF);
     /* The alpha factors are CONVERTED values too, not the upper half of the

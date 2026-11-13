@@ -117,9 +117,147 @@ C'est la cause nommee a corriger en premier : elle explique a la fois la saturat
 de precision (le remap place les canaux dans le desordre, la modulation du fragment shader
 s'applique alors au mauvais canal).
 
-## 4. Ce qui reste a faire (etat a l'instant de l'ecriture)
+## 4. Les cinq causes trouvees, chacune mesuree
 
-1. corriger le retournement Y du miroir (uniforme de viewport, cote wgpu seulement) ;
-2. porter le remap de composantes dans l'upload du miroir ;
-3. remesurer, puis bissecter le premier draw qui diverge encore s'il en reste un ;
-4. tableau ecran | RMS avant | RMS apres | draw fautif | cause | correction.
+Chaque ligne a ete appliquee SEULE puis remesuree, sauf la 1 et la 2 qui ont ete posees
+ensemble avant la premiere mesure (elles seules font tomber de 69,51 a 13,32).
+
+### 4.1 La cible WebGPU est retournee en Y (defaut de la section 2)
+
+`vp_decompiler.cpp` : la variante wgpu du vertex shader produit `vec4(xy.x, -xy.y, ...)`.
+Le chemin Vulkan garde `vec4(xy, ...)`. Mesure : 59,73 -> 32,92 sur l'image comparee, et
+**13,32 sur le run complet** (le chiffre de 59,7 venait d'une frame differente de la capture
+de reference ; c'est le run `fix2` qui est la mesure de reference).
+
+### 4.2 Le miroir lisait width*height*4 octets quel que soit le format (crash)
+
+`wgpu_backend.cpp::upload_texture` supposait 4 octets par texel. Le decodeur ecrit la largeur
+REELLE du format (1 pour R8, 2 pour les 16 bits, 8/16 pour les blocs). Consequence mesuree sur
+le logo, dont l'atlas de glyphes est un 0x81 (R8) :
+
+    E  14.685156 [1255596] crash: signal 11 at ... gpu::wgpu::draw(gpu::wgpu::DrawInputs const&)+0x1730
+    E  14.685156 [1255596] crash:   #0 gpu::wgpu::draw(gpu::wgpu::DrawInputs const&)+0x1730
+    $ addr2line -e /tmp/out-K2/ps3base -f -C 0x329940
+    gpu::wgpu::draw(gpu::wgpu::DrawInputs const&)
+    /root/Dev/k-K2/runtime/src/gpu/wgpu_backend.cpp:670        <- la boucle de hachage sur t.pixels[i]
+
+Correction : `TextureLayout::out_bytes` (le format le donne), deux champs sur `Texture`
+(`host_bytes_per_texel`, `host_vk_format`), et `texel_to_float()` qui convertit selon le format
+au lieu de supposer RGBA8.
+
+### 4.3 Le remap de composantes du chemin Vulkan etait ignore
+
+Vulkan applique `texture_mapping(code, control1)` dans sa VUE (`rsx_renderer.cpp:2298`) ; le
+miroir uploade `host_pixels` tel quel. wgpu-native v29 n'a **pas** la fonctionnalite
+texture-component-swizzle (`grep -i swizzle` sur `libwgpu_native.so` : 0 symbole), donc le remap
+est applique par texel pendant la conversion. A/B mesure :
+
+    $ PS3BASE_WGPU_NO_MAPPING=1   -> rms 42,2544   (remap retire : le rouge devient (69,60,255))
+    $ (avec remap)                -> rms 10,5665
+
+### 4.4 **Le piege des enums decales n'etait pas uniforme : la table de melange etait fausse**
+
+C'est la cause la plus couteuse, et c'est la meme classe que celle documentee en H2 (defaut 10),
+mais sur une table que H2 avait supposee decalee uniformement. Les deux enumerations ordonnent
+les facteurs DIFFEREMMENT a partir du troisieme membre :
+
+    VK   0 ZERO 1 ONE 2 SRC_COLOR 3 1-SRC_COLOR 4 DST_COLOR 5 1-DST_COLOR 6 SRC_ALPHA 7 1-SRC_ALPHA ...
+    WGPU 1 ZERO 2 ONE 3 Src       4 1-Src       5 SrcAlpha  6 1-SrcAlpha  7 Dst       8 1-Dst      ...
+
+`v+1` transformait donc VK `SRC_ALPHA` (6) en WebGPU `Dst` (7) et VK `ONE_MINUS_SRC_ALPHA` (7)
+en `OneMinusDst` (8) : le melange alpha devenait un melange avec la destination.
+
+    $ (v+1, avant)  rms 12,9132   rouge du logo (184,96,89)
+    $ (table exacte) rms 10,5665  rouge du logo (134,36,31)
+
+Le rouge Vulkan est (152,53,47). Le defaut restant est nomme en section 5.
+
+Les facteurs ALPHA et l'OPERATION alpha venaient en plus des 16 bits hauts du registre RSX sans
+passer par `blend_factor()`/`blend_op()` : c'etait la meme faute, sur le meme draw. Corrige
+(`sfactor_alpha`, `dfactor_alpha`, `equation_alpha`) ; mesure identique a 0,0001 pres, donc ce
+draw-la n'utilise pas de facteur alpha distinct — mais le defaut etait reel sur d'autres draws.
+
+### 4.5 Le remap etait global au lieu d'etre par unite
+
+`g_last_bound_mapping` etait une seule variable globale : sur un draw a deux textures, les deux
+unites recevaient le remap de la DERNIERE. Mesure : 13,3182 -> 12,9132.
+
+### 4.6 Pistes testees et REFUTEES (chacune mesuree, aucune gardee)
+
+| hypothese | commutateur | RMS | verdict |
+|---|---|---|---|
+| melange en cause | `PS3BASE_WGPU_NO_BLEND=1` | 27,12 | non : le melange AMELIORE (le retirer degrade) |
+| profondeur en cause | `PS3BASE_WGPU_DEPTH_ALWAYS=1` | 13,47 | non |
+| masque d'ecriture | `PS3BASE_WGPU_MASK_ALL=1` | 13,08 | non |
+| culling en cause | `PS3BASE_WGPU_CULL_NONE=1` | 13,33 | non |
+| **face avant a inverser** (le flip Y inverse le sens) | `PS3BASE_WGPU_FLIP_FACE` | **38,02** | **refute** : ces draws ne culent rien |
+| filtrage lineaire | `PS3BASE_WGPU_SAMPLER_LINEAR=1` | 11,97 | non (le filtrage n'est pas la cause) |
+| textures en sRGB | `PS3BASE_WGPU_TEX_SRGB=1` | 20,56 | non (trop sombre) |
+| mauvais ordre de canaux | `PS3BASE_WGPU_RGBA_RAW=1` | 62,15 | non |
+
+## 5. Livrable : tableau ecran | RMS avant | RMS apres | draw fautif | cause | correction
+
+| ecran | RMS avant | RMS apres | draw fautif | cause | correction |
+|---|---|---|---|---|---|
+| Logo 4J Studios (frame 1-2, fp `6081aed9d403e4d2`, vp `fd4be450bbeda1e5`) | **69,5067** | **10,5665** | draws 1-2 (idx 39, 17 sommets, 2 unites de texture) | cinq causes cumulees, sec. 4.1-4.5 ; la dominante est la **table de melange fausse** (sec. 4.4) et le **retournement Y** (sec. 4.1) | voir sec. 4 |
+| Menu / ecran titre | non atteint | non atteint | - | la session s'est arretee avant (voir sec. 6) | - |
+
+Mesure finale, sortie brute :
+
+    $ python3 tools/imgdiff.py wgpu_000080.ppm surface_local_00500000_1280x720_f44.ppm
+    size        1280x720 vs 1280x720
+    rms_r       9.5820
+    rms_g       11.0228
+    rms_b       11.0287
+    rms         10.5665
+    max         189
+    over_8      9.3883%
+    coverage_a  71.7120%
+    coverage_b  72.3870%
+    mean_a      169.2057
+    mean_b      170.7049
+
+    $ grep -c 'wgpu: ERROR' err.log
+    0
+
+Images : `diff_before.png` (avant, RMS 69,51) et `diff_after.png` (apres, RMS 10,57), dans
+`/tmp/K2/final/`. L'image de difference APRES ne montre plus qu'un liseré d'un pixel sur les
+contours plus un aplat uniforme sur l'interieur du logo : la geometrie, la couverture et les
+contours sont justes, il reste un ecart de couleur sur le remplissage.
+
+## 6. Ce qui n'est PAS fait, et pourquoi (nomme, pas maquille)
+
+**L'objectif RMS < 2 n'est PAS atteint : 10,5665.** Il reste un aplat constant sur le logo.
+Etat mesure de cet aplat :
+
+    wgpu   (134,36,31)   sur 59 396 pixels
+    vulkan (152,53,47)   sur 51 906 pixels
+    (le noir sort 19,19,19 cote wgpu contre 0,0,0 cote vulkan sur les memes pixels)
+
+Les deux sont un aplat, pas du bruit : le remplissage du quad n'est pas calcule de la meme
+facon. Pistes identifiees mais NON tranchees, faute de temps de session :
+
+1. **le sampler RSX n'est pas derive** : le miroir lie `dummy_sampler()` (Nearest,
+   ClampToEdge) pour TOUTES les unites, alors que `sampler_slow()` (`rsx_renderer.cpp:1565`)
+   derive filtrage, mipmap, wrap, LOD et biais des registres. C'est la piste que H2 nommait
+   deja comme la plus courte, et elle reste ouverte.
+2. **les uniformes de texture (`texscale`) et le biais LOD** ne sont pas transmis au miroir
+   autrement que par `win.texture_scale[]`, que `wgpu_backend.cpp` n'utilise nulle part.
+3. l'ecart noir 19/0 suggere que la valeur sortie du fragment shader n'est pas la meme a la
+   source, ce qui pointerait vers le uniform block `FragmentState` (le miroir l'envoie tel
+   quel, taille 112 contre 8160 par defaut) plutot que vers la texture.
+
+**Ecran titre et menu : non mesures.** Le run s'arrete sur le logo (frame 1) ; aucun chemin de
+ce worktree n'atteint le menu en moins de 60 s, et le budget de la session est passe en
+debuggage du logo. Le tableau ci-dessus porte donc sur un seul ecran, avec son chiffre exact.
+
+## 7. Fichiers touches
+
+| fichier | nature |
+|---|---|
+| `runtime/src/gpu/vp_decompiler.cpp` | flip NDC Y dans la variante wgpu du vertex shader |
+| `runtime/src/gpu/texture_decode.{h,cpp}` | `out_bytes` expose (largeur reelle du decodeur) |
+| `runtime/include/gpu/wgpu_backend.h` | format/octets/remap par texture, facteurs et operation alpha |
+| `runtime/src/gpu/wgpu_backend.cpp` | conversion par texel + remap, table de melange exacte, alpha separe |
+| `runtime/src/gpu/rsx_renderer.cpp` | remap par unite, format et octets passes au miroir |
+| `docs/explore/K2/RESULTS.md` | ce rapport |

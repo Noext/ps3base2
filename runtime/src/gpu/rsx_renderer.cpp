@@ -3837,6 +3837,7 @@ bool draw() {
         win.sfactor_alpha = uint32_t(wgpu::blend_for(int(blend_factor(k.sfactor >> 16))));
         win.dfactor_alpha = uint32_t(wgpu::blend_for(int(blend_factor(k.dfactor >> 16))));
         win.equation = uint32_t(wgpu::equation_for(int(blend_op(k.equation & 0xFFFF))));
+        win.equation_alpha = uint32_t(wgpu::equation_for(int(blend_op(k.equation >> 16))));
         win.write_mask = k.write_masks & 0xF;
         win.cull = uint32_t(wgpu::cull_for(cull));
         win.front_face_cw = cw;

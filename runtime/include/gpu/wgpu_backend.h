@@ -109,6 +109,9 @@ struct DrawInputs {
      * WebGPU enumerants is the same trap as the color ones: the numbers are
      * Vulkan's. The renderer converts them with the same table. */
     uint32_t sfactor_alpha = 0, dfactor_alpha = 0;
+    /* The ALPHA blend operation is the upper half of the RSX equation register,
+     * separate from the colour one exactly as the factors are. */
+    uint32_t equation_alpha = 0;
     uint32_t write_mask = 0xF;
     uint32_t cull = 0;           /* WGPUCullMode */
     bool front_face_cw = false;
