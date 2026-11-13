@@ -53,7 +53,7 @@ find "$ROOT/runtime/src" -name '*.cpp' \
      -not -path '*/spu/shadows/*' \
      -not -path '*/spu/tasks/*' | while read -r f; do
     o="$OUT/obj/$(echo "${f#$ROOT/}" | tr '/' '_' | sed 's/\.cpp$/.o/')"
-    "$EMCC" "${CXXFLAGS[@]}" -DPS3BASE_BOOT_PROBE=1 -DPS3BASE_INPUT_BUILTIN=1 -DPS3BASE_NO_RENDERER=1 -DPS3BASE_CALL_TARGET_CHECK=1 -DPS3BASE_RSXB_PROBE=1 -DPS3BASE_RSXB_PROBE=1 -DPS3BASE_BLOCK_TRACE=1 -DPS3BASE_LD_TRAP=1 -c "$f" -o "$o"
+    "$EMCC" "${CXXFLAGS[@]}" -DPS3BASE_BOOT_PROBE=1 -DPS3BASE_INPUT_BUILTIN=1 -DPS3BASE_NO_RENDERER=1 -DPS3BASE_PAD_PROBE=1 -DPS3BASE_PAD_LOG=1 -DPS3BASE_CALL_TARGET_CHECK=1 -DPS3BASE_RSXB_PROBE=1 -DPS3BASE_RSXB_PROBE=1 -DPS3BASE_BLOCK_TRACE=1 -DPS3BASE_LD_TRAP=1 -c "$f" -o "$o"
 done
 
 # stb_image: the HLE image decoders (cellPngDec/cellJpgDec) call it. The runtime
@@ -86,7 +86,7 @@ echo "== link"
 # attributed to a function instead of guessed from wasm-function indices.
 "$EMCC" "${CXXFLAGS[@]}" -nostdlib++ ${PS3BASE_NAMED:+-g} \
     -sPTHREAD_POOL_SIZE=24 -sPTHREAD_POOL_SIZE_STRICT=2 -sPROXY_TO_PTHREAD=1 -sALLOW_MEMORY_GROWTH=1 \
-    -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createPs3base \
+    -sNODE_HOST_ENV=1 -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createPs3base \
     -sENVIRONMENT=web,node -sALLOW_BLOCKING_ON_MAIN_THREAD=0 \
     -sINITIAL_MEMORY=268435456 -sMAXIMUM_MEMORY=3221225472 \
     -sERROR_ON_UNDEFINED_SYMBOLS=0 \
