@@ -1,0 +1,8 @@
+{
+ "status": "running",
+ "agent": "P1",
+ "task": "read the RDR SIGSEGV at exe+0x17aa2b6",
+ "branch": "explore/p1",
+ "base": "01c5e16",
+ "updated": "2026-11-13T09:56:00Z"
+}
