@@ -142,6 +142,20 @@ struct SpuThread : Host {
     /* Per-channel aggregate, printed as a table. Counts and the first/last value
      * are what turn "the trace has 4096 lines" into "ch0 was read 3102 times and
      * last returned 0x0". */
+    /* First/last is not enough: the SPURS kernel writes ch22 a million times and
+     * both the first and the last value are legal, so a wrong value in the
+     * middle of the stream is invisible. The histogram is the actual table the
+     * audit needs -- the SET of distinct values each channel carried, with how
+     * often. Eight slots per channel covers every real pattern (16 tag groups,
+     * a handful of event masks); beyond that the excess is counted as "other"
+     * so a counter that takes thousands of distinct values cannot blow up the
+     * structure or the log. */
+    struct ChVal { uint32_t value = 0; uint32_t n = 0; };
+    struct ChHist {
+        ChVal rd[8]{}; uint8_t rd_n = 0; uint32_t rd_other = 0;
+        ChVal wr[8]{}; uint8_t wr_n = 0; uint32_t wr_other = 0;
+    } ch_hist[128]{};
+    static void ch_hist_add(ChVal* v, uint8_t& n, uint32_t& other, uint32_t value);
     struct ChStat {
         uint64_t rd = 0, wr = 0, cnt = 0;
         uint32_t rd_first = 0, rd_last = 0, wr_first = 0, wr_last = 0, cnt_last = 0;

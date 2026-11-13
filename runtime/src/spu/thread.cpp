@@ -378,6 +378,25 @@ uint32_t SpuThread::channel_count(uint32_t ch) {
 static const bool g_ch_trace = std::getenv("PS3BASE_SPU_CH_TRACE") != nullptr;
 static const bool g_ch_table = std::getenv("PS3BASE_SPU_CH_TABLE") != nullptr;
 
+/* Record one distinct value of one channel. The set is what turns "ch22 was
+ * written 1.4M times" into "ch22 carried 0x80000000 and 0x0000ffff and nothing
+ * else", which is a statement that can be checked against the guest. */
+void SpuThread::ch_hist_add(ChVal* v, uint8_t& n, uint32_t& other, uint32_t value) {
+    if (n < 8) {
+        for (uint8_t i = 0; i < n; i++) {
+            if (v[i].value == value) { v[i].n++; return; }
+        }
+        v[n].value = value;
+        v[n].n = 1;
+        n++;
+        return;
+    }
+    for (uint8_t i = 0; i < 8; i++) {
+        if (v[i].value == value) { v[i].n++; return; }
+    }
+    other++;
+}
+
 void SpuThread::ch_note(uint32_t ch, uint32_t value, uint32_t pc, int kind) {
     if (!g_ch_trace && !g_ch_table) return;
     if (ch < 128) {
@@ -385,12 +404,15 @@ void SpuThread::ch_note(uint32_t ch, uint32_t value, uint32_t pc, int kind) {
         if (kind == 1) {
             if (!s.wr++) s.wr_first = value;
             s.wr_last = value;
+            ch_hist_add(ch_hist[ch].wr, ch_hist[ch].wr_n, ch_hist[ch].wr_other, value);
         } else if (kind == 2) {
             if (!s.cnt++) s.cnt_last = value;
             s.cnt_last = value;
+            ch_hist_add(ch_hist[ch].rd, ch_hist[ch].rd_n, ch_hist[ch].rd_other, value);
         } else {
             if (!s.rd++) s.rd_first = value;
             s.rd_last = value;
+            ch_hist_add(ch_hist[ch].rd, ch_hist[ch].rd_n, ch_hist[ch].rd_other, value);
         }
     }
     if (!g_ch_trace) return;
@@ -446,6 +468,12 @@ void SpuThread::dump_channel_table(const char* why) {
     LOG_ERROR("spu", "channel table for thread 0x%x '%s' (%s): pc 0x%05x ie %d mask 0x%x events 0x%x count %d dec_frozen %d dec 0x%08x",
               id, name.c_str(), why, ctx.pc, ctx.interrupts_enabled ? 1 : 0, event_mask, events,
               event_count ? 1 : 0, dec_frozen ? 1 : 0, dec_now());
+    /* The tag state machine, read out of the same object ch12/ch22/ch23/ch24 go
+     * through. A channel table says what the guest READ; this says what the
+     * machine HELD when it answered, which is the only way to tell a stale
+     * channel from a correct one. */
+    LOG_ERROR("spu", "  tag state: mask 0x%08x fence 0x%08x update %u stat 0x%08x stat_count %d completed 0x%08x",
+              tag.tag_mask, tag.fence, tag.update, tag.stat, tag.stat_count ? 1 : 0, tag.completed());
     for (uint32_t ch = 0; ch < 128; ch++) {
         const ChStat& s = ch_stat[ch];
         if (!s.rd && !s.wr) continue;
@@ -453,6 +481,24 @@ void SpuThread::dump_channel_table(const char* why) {
                   ch, names(ch), (unsigned long long)s.rd, s.rd_first, s.rd_last,
                   (unsigned long long)s.wr, s.wr_first, s.wr_last,
                   (unsigned long long)s.cnt, s.cnt_last);
+        /* The distinct-value set: a channel whose first and last values are both
+         * legal can still have carried a wrong one in between, and only the set
+         * shows that. */
+        const ChHist& h = ch_hist[ch];
+        std::string rd, wr;
+        for (uint8_t i = 0; i < h.rd_n; i++) {
+            char b[40];
+            std::snprintf(b, sizeof b, " 0x%08x x%u", h.rd[i].value, h.rd[i].n);
+            rd += b;
+        }
+        if (h.rd_other) rd += " (+" + std::to_string(h.rd_other) + " other)";
+        for (uint8_t i = 0; i < h.wr_n; i++) {
+            char b[40];
+            std::snprintf(b, sizeof b, " 0x%08x x%u", h.wr[i].value, h.wr[i].n);
+            wr += b;
+        }
+        if (h.wr_other) wr += " (+" + std::to_string(h.wr_other) + " other)";
+        LOG_ERROR("spu", "        values rd:{%s } wr:{%s }", rd.c_str(), wr.c_str());
     }
     if (g_ch_trace && ch_ring_i) {
         const uint32_t n = ch_ring_i < 256 ? ch_ring_i : 256;
