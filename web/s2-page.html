@@ -1,0 +1,64 @@
+<!doctype html><meta charset=utf-8>
+<title>S2 ring measurement</title>
+<canvas id=c width=1280 height=720></canvas>
+<pre id=o></pre>
+<script type=module>
+/* S2 -- the measurement page.
+ *
+ * It boots the module, then DRAINS THE RING from this thread every animation frame
+ * through the same consumer class the real page uses (web/s2-ring.js). That is the
+ * configuration S1 needs; here it exists so the producer's counters can be read in
+ * a run long enough to mean something.
+ *
+ * No WebGPU device is requested: this harness measures the TRANSPORT (what crosses
+ * the ring, how many bytes, how many refusals), and asking for a device would add
+ * a failure mode that has nothing to do with the question.
+ */
+import { Ring } from './s2-ring.js';
+
+const log = [];
+window.__s2 = { log, ready:false, stats:null, samples:[] };
+const push = (t) => { log.push(String(t)); if (log.length > 6000) log.shift(); };
+
+(async () => {
+  try {
+    const m = await import('./game.js');
+    const M = await m.default({
+      print: push, printErr: push, noExitRuntime: true,
+      locateFile: (p) => './' + p,
+    });
+    window.__s2.M = M;
+    window.__s2.ready = true;
+    const ring = new Ring(M);
+    window.__s2.ring = ring;
+    let peak = 0, peakT = 0;
+    const t0 = performance.now();
+    const tick = () => {
+      try {
+        ring.drain();
+        if (ring.maxUsed > peak) { peak = ring.maxUsed; peakT = (performance.now()-t0)/1000; }
+        const s = (i) => M._rsx_ring_stat(i) >>> 0;
+        const snap = { t:+((performance.now()-t0)/1000).toFixed(1), records:s(0), bytes:s(1),
+          stateMethods:s(2), vtxBytes:s(4), idxBytes:s(5), texBytes:s(6), texObjects:s(7),
+          shaderBytes:s(8), shaderObjects:s(9), draws:s(10), clears:s(11), flips:s(12),
+          refused:s(13), refusedBytes:s(14), geomUnmapped:s(15), texRefused:s(16),
+          threads:s(17), texUnchanged:s(18), refs:s(19), distinctObjects:s(20),
+          bytesSaved:s(21), shaderAlternations:s(22),
+          used:M._rsx_ring_control(0), pushed:M._rsx_ring_control(1),
+          wrapped:M._rsx_ring_control(3), capacity:M._rsx_ring_capacity(),
+          peakUsedBytes:peak, peakAtSeconds:+peakT.toFixed(1),
+          consumerRecords:ring.stats.records, consumerBytes:ring.stats.bytes,
+          dedup:ring.payloadReport(),
+          heapBytes:(M.HEAPU8 && M.HEAPU8.length) || 0 };
+        window.__s2.stats = snap;
+        if (Math.floor(snap.t) % 5 === 0) window.__s2.samples.push(snap);
+      } catch (e) { push('drain error ' + e.message); }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  } catch (e) {
+    push('BOOT FAIL ' + (e && e.stack || e));
+    window.__s2.error = String(e && e.stack || e);
+  }
+})();
+</script>
