@@ -295,3 +295,24 @@ RDR, same-minute A/B, 40 s budget:
     spu_channel_conformance: 104 checks, 0 failures
 
 (the channel test grew from 95 to 104 checks with the decrementer arithmetic.)
+## CORRECTION to Measurement 2: the SPURS kernel DOES dispatch jobs
+
+Measurement 2 said 'this run never dispatches one [a job]'. That is wrong and is
+retracted here. `GOWA_SPU_JOBS=2` shows thread 0x200 alone entering 477,259 job
+dispatches of code 0x0178ee00 and 473,336 of 0x0178ae00 in a 25 s window:
+
+    $ python3 -c '...'   # count 'spujob: thread X enters code Y' over /tmp/N3b-run12.log
+    ('0x200', '0178ee00') 477259
+    ('0x200', '0178ae00') 473336
+    ('0x4000100', '011c5d80') 124029
+    ('0x100', '011e2b00') 70805
+    ...
+
+Those are real SPU job bodies, repeatedly dispatched and run. So the mixer's
+code IS executing; the conclusion of measurement 2 stands only in its corrected
+form: **the job runs and computes zeros**, it does not fail to arrive. The PUTs
+at pc 0x941c/0x943c in measurement 2 are issued from inside those dispatches.
+
+What measurement 2 got right and is unaffected: the channel tables (they are
+counted per thread access, independent of dispatch accounting), the absent ch7,
+the ch1 = 0x400-only mask, and the 3814 all-zero PUTs -- all re-verified below.
