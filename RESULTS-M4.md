@@ -345,3 +345,55 @@ Negative controls: a wrong marker, a missing binary and a non-title binary all
 report a failure (measurement 4). Both false greens that the controls found --
 globals clobbered across functions, and two concurrent runs sharing /tmp paths --
 are fixed and are the reason those controls exist.
+### Measurement 8 -- post-rebase, on origin/main 3f22528
+
+The merge queue requires the rebase before declaring done, and the tests after it.
+Rebased onto 3f22528 (M1, M2, M3 and M5 landed since this branch started; the
+tree's cellAudio and RESULTS.md files are theirs and are untouched here -- this
+diff adds M4's own files plus the two files it rewrote, and deletes nothing):
+
+    $ git fetch /root/Dev/ps3base2 main:refs/remotes/origin/main -f && git rebase origin/main
+    Successfully rebased and updated refs/heads/explore/m4.
+    $ git diff --diff-filter=D --name-only origin/main..HEAD
+    (empty: no file deleted)
+
+The three binaries were rebuilt on the rebased tree (only cellAudio relinked; the
+generated SPU bench target needs out/gen/spu headers that are not in this
+worktree, which predates this branch and is unrelated to it -- the ps3base target
+builds in all three configurations).
+
+    $ ctest --test-dir build -j 4
+    100% tests passed, 0 tests failed out of 40
+
+    $ DISPLAY_NUM=:963 sh tools/regress.sh
+    regress: 120s per run; reference and candidate paired back to back
+    minecraft    candidate /root/Dev/wt-M4/build/ps3base
+                 reference /root/Dev/wt-M4/../ps3base2/build/ps3base  (paired back to back)
+      minecraft-ref1 alive         flips=6541   crashes=0   abort=none      120s load=7.50
+      minecraft-cand1 alive         flips=6721   crashes=0   abort=none      120s load=13.05
+      minecraft-ref2 alive         flips=6721   crashes=0   abort=none      120s load=11.09
+      minecraft-cand2 alive         flips=6781   crashes=0   abort=none      121s load=11.05
+      minecraft    PASS  flips=6781   vs reference 6721 over 3 pair(s) in 491s
+    gta-sa       candidate /root/Dev/wt-M4/build-gta/ps3base
+                 reference /root/Dev/wt-M4/../ps3base2/build-gta/ps3base  (paired back to back)
+      gta-sa-ref1    alive         flips=6301   crashes=0   abort=none      120s load=9.18
+      gta-sa-cand1   alive         flips=6361   crashes=0   abort=none      120s load=9.59
+      gta-sa-ref2    alive         flips=6361   crashes=0   abort=none      120s load=10.62
+      gta-sa-cand2   alive         flips=6241   crashes=0   abort=none      121s load=9.91
+      gta-sa       PASS  flips=6361   vs reference 6361 over 3 pair(s) in 491s
+    rdr          candidate /root/Dev/wt-M4/build-rdr/ps3base
+                 reference /root/Dev/wt-M4/../ps3base2/build-rdr/ps3base  (paired back to back)
+                 run root /root/Dev/wt-M4/../ps3base2, up to 6 attempt(s)
+      rdr-ref1       SPURS abort   flips=541    crashes=0   abort=25.038515  28s load=12.65
+      rdr-ref2       SPURS abort   flips=601    crashes=0   abort=22.870011  25s load=14.46
+        miss: 751 frames, 19 with lit text in the window, 19 OCR'd
+      rdr-cand2      SPURS abort   flips=601    crashes=0   abort=23.092448  25s load=12.36
+        hit f00749.png 24.93 Press START
+      rdr          PASS  flips=601    vs floor 500 (metric=screen); reference flips 601 (recorded, not a bar) over 2 pair(s) in 159s screen=PressSTART 1/2 candidate, 1/2 reference
+
+    regress: all present games passed
+    EXIT=0
+
+Note the first reference attempt in the RDR pair aborted at 25.0 s and never drew
+the title; the second did. That is the race, in the raw output, on code that is
+identical between the two sides.
