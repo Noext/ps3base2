@@ -84,3 +84,21 @@ SPU interpreter, so the rounding mode cannot affect it.
 The 6361 vs 5641 gap is 11.3%, inside the 17% spread this machine shows between
 two runs of the SAME code (docs/regress-baseline.md). More pairs are needed
 before it can be called anything.
+## Incident -- another agent deleted out-gta mid-A/B (12:48)
+
+GTA pairs 2-3 came back `exit=1, flips=0` with:
+
+    E   0.241849 loader: cannot read ./out-gta/gen/reloc/liblv2.elf
+
+`/root/Dev/ps3base2/out-gta/ppu` and `out-gta/gen` were both empty, and free disk
+jumped 98% -> 78% in the same minute. Another agent wiped the derived GTA tree
+to reclaim space. This is not a rounding effect and those two pairs are void --
+they never loaded the title.
+
+Recovered from `/root/Dev/reg3/out-gta` (a complete 23 MB copy: 85 ppu TUs and
+all 8 reloc ELFs). Restored, and GTA runs again -- smoke test at 25 s reaches
+flip 901 with no load error. Pair 1 above was taken while the tree was intact
+and stands; the pairs below are taken after the restore.
+
+Note for the merge: `out-gta` is derived and gitignored, so this is a shared-
+machine hazard, not a branch defect. Nothing in this branch touches it.
