@@ -341,6 +341,13 @@ target_include_directories(cellfiber_contract PRIVATE runtime/include runtime/sr
 target_compile_options(cellfiber_contract PRIVATE ${PS3BASE_ARCH_FLAGS})
 add_test(NAME cellfiber_contract COMMAND cellfiber_contract)
 
+# lift_stamp: the lift's staleness check and seed fingerprint, on a synthetic
+# tree. A lift is a pure function of (ELF, seeds, switch tables, images.json); if
+# an input is newer than table.cpp the generated code describes a different
+# binary than the one on disk, and nothing in the build said so until this.
+add_test(NAME lift_stamp
+         COMMAND python3 "${CMAKE_SOURCE_DIR}/tests/lift_stamp.py")
+
 # ppu_dispatch_table: the lifter's shared-table bctr detector, on synthetic
 # words. Pins the two shape rules that cost a session on Red Dead Redemption:
 # mtctr is not always at bctr-4 (26 of f_00d19208's 163 are at -2, 3 at -3 and
