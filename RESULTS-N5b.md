@@ -137,3 +137,77 @@ by tests/cellAudio.cpp block 13 (one event per period per registered queue,
 DECIMATE_2 / BEFOREMIX / NOMIX all checked) and it is the same audio::step +
 lv2::send_event_by_key the mixer thread calls (cellAudio.cpp:348, :246-253).
 
+
+## Measurement 3 -- port 0 vs port 1: WHO writes each buffer, and how many nonzero bytes
+
+The 0/8 vs 16/16 difference is a producer difference, and the trap names the
+producer for each port. Same binary, same machine, both runs inside the same
+two minutes.
+
+### 3a. Port 0 (0x12190000, 8 ch x 8 blocks): written ONLY by the SPU, and every
+byte written is zero
+
+    $ GOWA_TRAP=12190000+0x10000 GOWA_TRAP_MAX=100000 timeout 24 ./build-rdr/ps3base --no-launcher
+    $ grep 'trap 0 write' /tmp/n5b-p0all.log | grep -o 'by [A-Za-z0-9].*' | sort | uniq -c
+       0    # (see note)
+       1455 by SPU 0 Secondary
+    $ grep 'trap 0 write' /tmp/n5b-p0all.log | grep -v 'prev 0x00000000 -> 0x00000000' | wc -l
+    0
+    $ grep 'trap 0 read' /tmp/n5b-p0all.log | wc -l
+    0
+
+1455 store events into the port 0 buffer across 24 s and NOT ONE of them carries a
+nonzero byte: every one is `prev 0x00000000 -> 0x00000000`. The only writer is the
+SPU (the multistream mixer job). The independent confirmation is the same fact
+measured from the other side, by the runtime's own fill counter:
+
+    $ GOWA_TRAP=12190000+0x10000 GOWA_TRAP_NONZERO=1 ... (trap armed, line 20)
+    I   0.422935 trap: trap 0: write 0x12190000+0x10000 arm-time words: 00000000 ...
+    $ grep -c 'trap 0 write' /tmp/n5b-trap0nz.log
+    0        # zero NONZERO writes in a run that reached the SPURS abort at 25.9 s
+    $ grep 'audio stats' /tmp/n5b-trap0nz.log | tail -2
+    I  17.500144 ... port0 0/8 filled, index 5 port1 16/16 filled, index 4
+    I  22.502545 ... port0 0/8 filled, index 7 port1 16/16 filled, index 3
+
+Block histogram, 0x2000-byte blocks: 650 of 650 writes land in block 6
+(0x1219c000) -- the mixer writes the block its cur_pos selects, and it wrote
+one block, zeroes.
+
+### 3b. Port 1 (0x121a0000, 2 ch x 16 blocks): written by the PPU Bink thread with
+real audio
+
+    $ GOWA_TRAP=121a0000+0x8000 GOWA_TRAP_NONZERO=1 GOWA_TRAP_MAX=4000 timeout 26 ./build-rdr/ps3base --no-launcher
+    $ grep 'trap 0 write' /tmp/n5b-trap1hist.log | grep -o 'by .*' | sort | uniq -c
+       1000 by Bink Audio Thread
+    $ grep 'trap 0 write' /tmp/n5b-trap1hist.log | sed 's/.*write 0x121a\([0-9a-f]*\).*/\1/' | (histogram by 0x800)
+    block 6 writes 1000
+    $ first/last trap:
+    I  15.347069 trap: trap 0 write 0x121a3000 prev 0xbc41cb24 -> 0x00723593 (guest lr 0x00fef920) by Bink Audio Thread
+    I  25.989359 trap: trap 0 write 0x121a37c8 prev 0xbc41cb24 -> 0xbc109842 (guest lr 0x00fef920) by Bink Audio Thread
+
+The values are real IEEE-754 floats (0x00723593, 0xbc109842, 0x3da744ee) and the
+stale-value field `prev 0xbc41cb24` is the previous frame's sample -- the guest is
+writing a stream, not zeroes. 1000 nonzero stores from lr 0x00fef920, all in block
+6 (0x121a3000), which is why the fill counter reads 16/16: the counter asks
+'does this block contain any nonzero byte', and for port 1 it does.
+
+### 3c. Both index slots, readers attributed
+
+    $ GOWA_TRAP=r12180010+0x18 GOWA_TRAP_MAX=4000 (traps both port-0 and port-1 slots)
+    index word          reads   writes
+    0x12180010 (p0 hi)    144    1171
+    0x12180014 (p0 lo)    442       0
+    0x12180020 (p1 hi)      0     197
+    0x12180024 (p1 lo)     41       0
+    $ grep 'read 0x12180014 ' ... | grep -o 'by .*' | sort | uniq -c
+       442 by [RAGE Audio] Multistream
+    $ grep 'read 0x12180024 ' ... | grep -o 'by .*' | sort | uniq -c
+        26 by Bink Audio Thread
+        15 by [RDR2] Render Thread
+
+Port 1's index has TWO guest readers and port 0's has one -- the Bink thread and
+the RDR2 Render Thread both re-read port 1's index, the Multistream thread is the
+only reader of port 0's. Both indexes advance under a writer named `cellAudio`
+(197 writes to 0x12180020, 1171 to 0x12180010 -- the latter is the high word of
+every one of port 0's periods).
+
