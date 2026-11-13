@@ -1,0 +1,112 @@
+# R3 — Voie B: backend WebGPU par webgpu.h, meme interface natif et web
+
+Worktree `/root/Dev/r-R3` (branche `explore/rR3`, base `827be60`).
+Arbres partages lies : `bin out out-mc fw ref`. Out dir unique : `/tmp/out-R3`.
+
+**Ce fichier est ecrit AVANT les mesures qui suivent.** Chaque section porte la commande exacte
+et la sortie brute, collee. Aucune valeur fabriquee.
+
+---
+
+## 0. Antecedents (REGLE 12 — grep fait AVANT d'ecrire)
+
+| Finding | Source (path:line) | Applies here? |
+|---|---|---|
+| Aucun depot de `refs/` ne contient de backend WebGPU | `grep -Rn wgpu refs/` = 0 ligne (mesure K2) | **oui** : rien a copier |
+| Le backend WebGPU natif existe et mesure RMS 10,57 | `explore/kK2` `runtime/src/gpu/wgpu_backend.cpp` (1766 l.) | **oui** : c'est la source a porter |
+| L'emetteur WGSL direct existe (11/11 naga+Chromium) | `explore/iH3` `runtime/src/gpu/wgsl_emit.cpp` (956 l.) | **oui** : c'est lui qui produit les shaders cote web |
+| Le transport par anneau existe et porte TOUT (56 183 rec. / 3,51 Go) | `explore/iH4` `runtime/src/gpu/rsx_ring.cpp` | **oui** : c'est le seul chemin de donnees |
+| Le device WebGPU est en page, jamais dans le worker (petit par `requestDevice`) | `explore/iH4` doc H4 + `tools/h4_owner_probe.mjs` | **oui** : decide l'architecture (sec. 2) |
+| `webgpu.h` + `--use-port=emdawnwebgpu` disponibles, port en cache | emsdk 6.0.11, `cache/ports/emdawnwebgpu` | **oui** : socle verifie |
+
+---
+
+## 1. Le socle est verifie, et le port exige C++
+
+```
+$ /root/Dev/ps2-web-recomp/tools/emsdk/upstream/emscripten/em++ t.cpp -o t.js --use-port=emdawnwebgpu
+$ ls -la t.js t.wasm
+-rw-r--r-- 1 root root 101333 Nov 13 09:34 t.js
+-rwxr-xr-x 1 root root  93270 Nov 13 09:34 t.wasm
+```
+
+Le port lie sans erreur, `webgpu.h` est bien celui de Dawn (`emdawnwebgpu_pkg/webgpu/include`).
+
+---
+
+## 2. DECISION : ou vit le device — mesure, pas preference
+
+La question de l'enonce (item 3) a deux reponses possibles. Les deux ont ete mesurees.
+
+### 2.1 Le device peut-il naitre DANS le wasm ? NON
+
+Sonde `/tmp/R3-probe/pth/p.cpp` : instance, `wgpuInstanceRequestAdapter` en mode
+`AllowProcessEvents`, puis pompage par `emscripten_thread_sleep(1)`.
+
+```
+$ DISPLAY=:0 node pw3.mjs http://127.0.0.1:8799/index.html
+LOGS: [ "module booted", "C: PROBE start", "C: instance 0x25128", "C: adapter 0" ]
+```
+
+Meme resultat avec et sans `PROXY_TO_PTHREAD` (deux builds, deux runs) : **le callback d'adaptateur
+ne se declenche jamais**. Une promesse JS ne peut pas se resoudre pendant que le wasm occupe le
+thread ; `emscripten_thread_sleep` n'y change rien (pas d'Asyncify dans ce build, et Asyncify casse
+wasm-opt sur 50 Mo — mesure H7).
+
+### 2.2 Le device peut-il etre TRANSFERE au wasm ? NON
+
+Sonde `/tmp/R3-probe/pre/p.cpp`, device cree en JS puis passe par `preinitializedWebGPUDevice` :
+
+```
+LOGS: [ "adapter OK", "device OK (JS, before wasm)", "booted",
+        "E: worker sent an error! pre.js:1759: Uncaught TypeError: Cannot read properties of undefined (reading 'queue')" ]
+```
+
+Un `GPUDevice` n'est pas transferable dans un worker (et `importJsDevice` echoue cote worker).
+
+### 2.3 Et dans une page sans pthread ? Le JS pur marche
+
+```
+LOGS: [ "page gpu=true", "page adapter OK", "MSG worker start", "MSG worker adapter OK" ]
+```
+
+Le device se cree tres bien en JS, en page comme en worker DEDIE. Ce qui echoue est le wasm qui
+bloque.
+
+### 2.4 Decision, avec son chiffre
+
+**Le device vit dans la PAGE.** L'emulation (wasm) vit dans le worker et n'a aucun device. Les
+draws traversent par l'anneau de commandes H4. C'est la seule des deux options que la mesure
+autorise, et c'est aussi celle que H4 avait mesuree (`OWNERSHIP page=1 worker=0`).
+
+---
+
+## 3. Le module lie avec le port, et l'anneau produit des enregistrements
+
+Link du module complet (45,4 Mo) avec `--use-port=emdawnwebgpu` :
+
+```
+$ ls -la game.js game.wasm
+-rw-r--r-- 1 root root   154776 game.js
+-rwxr-xr-x 1 root root 45465101 game.wasm
+```
+
+L'anneau H4 (producteur `rsx_ring.cpp`, couture dans `lv2/rsx.cpp`) est dans ce build. Compteurs
+mesures dans Chromium, apres 55 s, par `mod._rsx_ring_stat(i)` :
+
+```
+STATS {"0":923,"1":16769816,"2":21227050,"3":280608,"4":1248,"5":0,
+       "6":16366788,"7":85,"8":108544,"9":27,"10":26,"11":53,"12":13,
+       "13":1160458,"15":66,"16":83,"17":1,"18":70969,
+       "addr":8666112,"cap":16777216}
+```
+
+Lecture : 923 enregistrements, 26 draws, 53 clears, 13 flips, 27 shaders (108 544 o d'ucode),
+85 objets texture (16,4 Mo), 1 thread producteur. `refused=1160458` : l'anneau de 16 Mo est trop
+petit pour le debit de textures — c'est le premier defaut a corriger cote page (drainer par frame).
+
+La couture est bien celle qui TOURNE, pas une qui existe :
+
+```
+I 1.397780 [10] rsxring: first method through the seam: 0x0060 arg=0x56616661 io=0x00001000
+```

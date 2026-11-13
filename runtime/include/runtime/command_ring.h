@@ -67,6 +67,13 @@ public:
 
     uint32_t used() const;
     uint32_t free_space() const;
+    /* The three state words, for a consumer that lives in another language (the
+     * page's JavaScript) and can therefore only reach them as addresses in the
+     * shared linear memory. Single consumer: the caller must be that consumer. */
+    uint32_t* head_word() { return reinterpret_cast<uint32_t*>(&head_); }
+    uint32_t* tail_word() { return reinterpret_cast<uint32_t*>(&tail_); }
+    uint32_t* used_word() { return reinterpret_cast<uint32_t*>(&used_); }
+
     uint64_t pushed() const { return pushed_.load(std::memory_order_relaxed); }
     uint64_t popped() const { return popped_.load(std::memory_order_relaxed); }
     uint64_t wrapped() const { return wrapped_.load(std::memory_order_relaxed); }
