@@ -1,8 +1,9 @@
 {
  "status": "running",
  "agent": "P1",
- "task": "read the RDR SIGSEGV at exe+0x17aa2b6",
+ "task": "addr2line done: fault is lifted libfiber f_360002a0_body+0xe6, not HLE; *NO NAME* only in libfiber/libsre/libspurs_jq",
+ "next": "guest thread/lr + last 30 imports",
  "branch": "explore/p1",
  "base": "01c5e16",
- "updated": "2026-11-13T09:56:00Z"
+ "updated": "2026-11-13T10:08:00Z"
 }
