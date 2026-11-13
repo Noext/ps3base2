@@ -42,6 +42,7 @@
 #include "runtime/memory.h"
 #include "runtime/thread.h"
 
+#include <setjmp.h>
 #include <ucontext.h>
 
 #include <atomic>
@@ -49,6 +50,7 @@
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <memory>
 #include <vector>
 
 namespace hle {
@@ -88,6 +90,19 @@ constexpr uint32_t SCHED_ATTR_INTERVAL = 0x14;
 
 enum class State : uint32_t { Free = 0, Ready, Running, Suspended, Terminated };
 
+/* The host stack every fibre runs on.
+ *
+ * It is a fixed 256 KB because the guest fibre entry runs lifted C++ whose frames
+ * live on this stack, and 256 KB is what the previous per-fibre malloc used. The
+ * difference is that the memory is now REUSED: a terminating fibre returns its
+ * stack to the thread's reserve and the next CreateFiber takes it back.
+ *
+ * MEASURED why this matters: the previous version malloc'd 256 KB per fibre and
+ * freed it only on the getcontext failure path. Three 900 s runs created 5522,
+ * 4983 and 5739 fibres, i.e. 1.35 / 1.22 / 1.40 GiB of host stacks that were
+ * never freed. */
+constexpr size_t FIBER_HOST_STACK = 256 * 1024;
+
 struct Fiber {
     State state = State::Free;
     uint32_t entry = 0;      /* guest function pointer (a code address, not an OPD) */
@@ -99,36 +114,65 @@ struct Fiber {
     uint32_t exit_status = 0;/* what the entry returned; JoinFiber reports it */
     char name[32] = {};
 
-    /* The host side. One host stack and one host context per fibre, because a
-     * fibre has to be able to yield from the middle of a guest call chain and
-     * come back into it: only a real context switch preserves the C++ frames
-     * between the import and the guest entry. */
-    ucontext_t host_ctx{};
-    void* host_stack = nullptr;
-    ppu::Context guest_ctx{};  /* the guest registers while this fibre is not running */
+    /* The host side. The context is per fibre (it holds the saved registers and
+     * the stack pointer of a suspended fibre); the STACK is borrowed from the
+     * thread's reserve for the fibre's lifetime and given back when it
+     * terminates. */
+    ucontext_t host_ctx{};        /* used ONCE, to enter the fibre on its stack */
+    void* host_stack = nullptr;   /* borrowed from ThreadState::stack_pool */
+    ppu::Context guest_ctx{};     /* the guest registers while this fibre is not running */
+
+    /* Every switch AFTER the first goes through this, not through swapcontext.
+     *
+     * MEASURED why: swapcontext saves and restores the signal mask, which is two
+     * sigprocmask syscalls per switch. At the measured 9 098 fibre switches/s
+     * that is ~18 000 syscalls/s spent on a mask that never changes -- the
+     * runtime does not alter the signal mask across a fibre switch. _setjmp and
+     * _longjmp are the same register save/restore WITHOUT the mask, so the
+     * syscall disappears.
+     *
+     * makecontext is still used to ENTER a fibre the first time, because that is
+     * what puts the stack pointer on the new stack; it costs once per fibre, not
+     * once per switch. */
+    jmp_buf host_jmp{};
+    bool started = false;         /* has the trampoline saved host_jmp yet? */
 };
 
+/* A thread's fibre state.
+ *
+ * It is held by shared_ptr and never moves. MEASURED why: the previous version
+ * kept a std::vector<std::pair<uint32_t, ThreadState>> and handed out
+ * &g_threads.back().second; a second guest thread creating fibres reallocates
+ * that vector and every ThreadState* already in flight becomes a dangling
+ * pointer. RDR only ever creates fibres on one guest thread, so it did not fire
+ * here -- but it is a use-after-realloc waiting for any title that does. */
 struct ThreadState {
     bool initialized = false;
     bool in_fiber = false;
     int current = -1;
     std::vector<Fiber> fibers;   /* index == guest CellFiberPpu handle, stable */
     ucontext_t scheduler_ctx{};
+    jmp_buf scheduler_jmp{};      /* where a yielding fibre returns to */
     ppu::Context* live_ctx = nullptr;  /* the thread's ctx, so we can save and restore */
     uint32_t scheduler_ea = 0;
+    /* Host stacks handed back by terminated fibres, reused by the next
+     * CreateFiber. Bounded: a title that creates a burst of fibres keeps at most
+     * as many stacks as its high-water mark of live fibres. */
+    std::vector<void*> stack_pool;
 };
 
 /* One set of fibres per guest thread. A fibre belongs to the thread that created
  * it -- the console's fibres are per-PPU-thread cooperatively scheduled, and a
  * process-wide table would let one thread resume another's fibre. */
 std::mutex g_lock;
-std::vector<std::pair<uint32_t, ThreadState>> g_threads;
+/* shared_ptr, so a ThreadState never moves: see the comment on ThreadState. */
+std::vector<std::pair<uint32_t, std::shared_ptr<ThreadState>>> g_threads;
 
 ThreadState* state_for(uint32_t tid) {
     for (auto& [id, st] : g_threads)
-        if (id == tid) return &st;
-    g_threads.emplace_back(tid, ThreadState{});
-    return &g_threads.back().second;
+        if (id == tid) return st.get();
+    g_threads.emplace_back(tid, std::make_shared<ThreadState>());
+    return g_threads.back().second.get();
 }
 
 ThreadState* state_for_self() {
@@ -171,11 +215,61 @@ void suspend_guest(Fiber& f) {
     if (st && st->live_ctx) f.guest_ctx = *st->live_ctx;
 }
 
+/* Switch from the scheduler into a fibre, and back.
+ *
+ * First entry into a fibre uses swapcontext once, because makecontext set up its
+ * stack and only swapcontext can start it there. Every later entry uses
+ * _longjmp into the fibre's saved host_jmp, and every yield uses _longjmp back
+ * into the scheduler's. Neither touches the signal mask, so neither is a
+ * syscall.
+ *
+ * The contract: switch_to_fiber returns when the fibre yields or terminates,
+ * with the scheduler's registers restored. */
+void switch_to_fiber(ThreadState* st, Fiber& f) {
+    /* st->scheduler_jmp must be valid BEFORE the fibre can yield, on the first
+     * entry as well as later ones. MEASURED: the first version only set it on the
+     * non-first path, so the very first Yield did _longjmp into an uninitialised
+     * jmp_buf and the process died at the first CreateFiber (exit -11 at 118.8 s,
+     * right after "HLE CreateFiber #0"). */
+    if (_setjmp(st->scheduler_jmp) == 0) {
+        if (!f.started) {
+            /* First run: enter on the fibre's own stack. makecontext set it up,
+             * and only swapcontext can start it there. The fibre's first yield
+             * leaves through _longjmp(scheduler_jmp), so this call does not
+             * return on that path -- the scheduler resumes at the _setjmp above. */
+            swapcontext(&st->scheduler_ctx, &f.host_ctx);
+        } else {
+            _longjmp(f.host_jmp, 1);
+        }
+    }
+    /* Reached when a fibre yielded or terminated and resumed us. */
+}
+
+/* Called from inside a fibre to give control back to the scheduler.
+ *
+ * NOT [[noreturn]]: it RETURNS when the scheduler resumes this fibre. Marking it
+ * noreturn made the compiler warn "should not return" and would have let it
+ * optimise away the code after the call -- the yield would have looked like the
+ * end of the fibre. */
+void yield_to_scheduler(ThreadState* st, Fiber& f) {
+    if (_setjmp(f.host_jmp) == 0) {
+        _longjmp(st->scheduler_jmp, 1);
+    }
+    /* _longjmp came back here: the scheduler resumed this fibre. */
+}
+
 void fiber_trampoline() {
     ThreadState* st = state_for_self();
     if (!st || st->current < 0) return;
     Fiber& f = st->fibers[static_cast<size_t>(st->current)];
     f.state = State::Running;
+    /* From here on this fibre can be suspended and resumed: the save point is
+     * taken before the guest entry runs, so a yield resumes INSIDE the guest
+     * call chain with the C++ frames on this stack intact. */
+    if (_setjmp(f.host_jmp) != 0) {
+        /* resumed after a yield: fall through into the guest code below */
+    }
+    f.started = true;
     if (st->live_ctx) {
         prepare_guest_stack(f, *st->live_ctx);
         st->live_ctx->gpr[3] = f.arg;
@@ -190,7 +284,17 @@ void fiber_trampoline() {
     f.state = State::Terminated;
     st->in_fiber = false;
     st->current = -1;
-    swapcontext(&f.host_ctx, &st->scheduler_ctx);
+    /* The fibre is done with its host stack. Give it back to the thread's
+     * reserve so the next CreateFiber reuses it instead of allocating 256 KB.
+     * This is the fix for the leak: the old code never freed it at all. */
+    if (f.host_stack) {
+        st->stack_pool.push_back(f.host_stack);
+        f.host_stack = nullptr;
+    }
+    /* Return to the scheduler with the syscall-free switch. The fibre is
+     * Terminated, so nothing will resume this host_jmp again. */
+    _longjmp(st->scheduler_jmp, 1);
+    std::abort();   /* not reached */
 }
 
 bool hle_enabled() {
@@ -316,15 +420,23 @@ HLE_FUNC(cellFiber, cellFiberPpuCreateFiber) {
     f.guest_fiber = fiber_ea;
     f.priority = priority;
 
-    f.host_stack = std::malloc(256 * 1024);
+    /* Take a stack from the thread's reserve, or allocate one on first use. The
+     * pool is what makes this reuse rather than leak: a terminated fibre gives
+     * its stack back (release_fiber_stack), and the next CreateFiber takes it. */
+    if (!st->stack_pool.empty()) {
+        f.host_stack = st->stack_pool.back();
+        st->stack_pool.pop_back();
+    } else {
+        f.host_stack = std::malloc(FIBER_HOST_STACK);
+    }
     if (!f.host_stack) return ret(ctx, CELL_FIBER_ERROR_NOMEM);
     if (getcontext(&f.host_ctx) != 0) {
-        std::free(f.host_stack);
+        st->stack_pool.push_back(f.host_stack);
         f.host_stack = nullptr;
         return ret(ctx, CELL_FIBER_ERROR_NOMEM);
     }
     f.host_ctx.uc_stack.ss_sp = f.host_stack;
-    f.host_ctx.uc_stack.ss_size = 256 * 1024;
+    f.host_ctx.uc_stack.ss_size = FIBER_HOST_STACK;
     f.host_ctx.uc_link = nullptr;
     /* The trampoline takes no arguments: it reads st->current, which RunFibers
      * sets immediately before switching. Passing the index through makecontext
@@ -372,7 +484,11 @@ static uint32_t run_runnable_fibers(ThreadState* st, ppu::Context& ctx, bool& st
          * 0x400 in its own code. */
         const ppu::Context scheduler_ctx = ctx;
         f.guest_ctx = ctx;
-        swapcontext(&st->scheduler_ctx, &f.host_ctx);
+        /* switch_to_fiber: swapcontext on the FIRST entry (it has to start the
+         * fibre on its own stack), _longjmp on every later one. The difference is
+         * the two sigprocmask syscalls swapcontext makes, and at 9 098 switches/s
+         * that is ~18 000 syscalls/s for a mask that never changes. */
+        switch_to_fiber(st, f);
         ctx = scheduler_ctx;
         st->current = -1;
         st->in_fiber = false;
@@ -508,7 +624,7 @@ HLE_FUNC(cellFiber, cellFiberPpuYield) {
      * its own. Restore our own registers on the way back in, exactly as
      * RunFibers does, so the scheduler's r1 is its own. */
     const ppu::Context fibre_ctx = ctx;
-    swapcontext(&f.host_ctx, &st->scheduler_ctx);
+    yield_to_scheduler(st, f);
     ctx = fibre_ctx;
     st->current = prev;
     st->in_fiber = true;
@@ -546,7 +662,12 @@ HLE_FUNC(cellFiber, cellFiberPpuExit) {
     f.state = State::Terminated;
     st->current = -1;
     st->in_fiber = false;
-    swapcontext(&f.host_ctx, &st->scheduler_ctx);
+    /* Exit is the last thing this fibre does; give its stack back first. */
+    if (f.host_stack) {
+        st->stack_pool.push_back(f.host_stack);
+        f.host_stack = nullptr;
+    }
+    _longjmp(st->scheduler_jmp, 1);
     ret(ctx, 0);
 }
 
