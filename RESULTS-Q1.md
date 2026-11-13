@@ -306,3 +306,35 @@ reported. **No other table anywhere in the image changed**, so the rule is
 narrow: it fires on this shape and on nothing else present in RDR.
 
 
+
+### M9 -- the regression test, and it FAILS on the old detector
+
+`tests/ppu_run_extent_table.py`, registered in CMakeLists.txt as
+`ppu_run_extent_table`. Five checks, all on synthetic words (the disc is derived
+material and is not in the tree):
+
+    \$ python3 tests/ppu_run_extent_table.py
+    ok   no bound, no default, absolute base: accepted, 3 entries from 0x00020000
+    ok   TOC-loaded base without a bound: still rejected
+    ok   a run of two code words is not a dispatch table: rejected
+    ok   entries spanning 0x8000 bytes are function pointers, not cases: rejected
+    ok   nearest definition before the bctr wins over a later writer: base 0x00020000
+    5 checks passed
+
+It is a regression test and not a description -- run against main's analysis.py
+it stops at the first check:
+
+    \$ cp /tmp/q1-ab/main/recomp/ppu/analysis.py recomp/ppu/analysis.py
+    \$ python3 tests/ppu_run_extent_table.py
+    AssertionError: run extent: the RDR shape was rejected
+
+    \$ cp /tmp/q1-analysis-new.py recomp/ppu/analysis.py
+    \$ python3 tests/ppu_run_extent_table.py
+    5 checks passed
+
+The other two lifter tests still pass on the branch:
+
+    \$ python3 tests/ppu_dispatch_table.py   -> 4 checks passed
+    \$ python3 tests/ppu_seed_forms.py       -> 16 checks passed
+
+

@@ -283,6 +283,16 @@ add_test(NAME ppu_dispatch_table
 add_test(NAME ppu_seed_forms
          COMMAND python3 "${CMAKE_SOURCE_DIR}/tests/ppu_seed_forms.py")
 
+# ppu_run_extent_table: jump_table's run-extent rule and table_dispatch_bctr's
+# setter rule, on synthetic words. Pins the fix for the stop at rdr+0xad5618:
+# a dispatch table whose base is an absolute lis/addi pair and which has NO
+# bound compare (the caller validates the index) was rejected, the lift emitted
+# a switch with no cases, and the run stopped on 0x00ae5818 -- entry 13 of the
+# 17-entry table at 0x013e5c8c. It FAILED on the old detector at the first
+# check, so it is a regression test and not a description.
+add_test(NAME ppu_run_extent_table
+         COMMAND python3 "${CMAKE_SOURCE_DIR}/tests/ppu_run_extent_table.py")
+
 add_executable(memory_map tests/memory_map.cpp runtime/src/memory.cpp runtime/src/regions.cpp runtime/src/mem.cpp runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/backtrace_port.cpp runtime/src/host.cpp runtime/src/log.cpp)
 target_include_directories(memory_map PRIVATE runtime/include)
 target_compile_options(memory_map PRIVATE ${PS3BASE_ARCH_FLAGS})
