@@ -384,3 +384,25 @@ next run -- the driver names the directory in the message so this is one rm away
     drive_rdr: --branch/--plan must name one of cross, square, not 'circle'
     exit 2
 
+### M9 -- ctest 40/40 after the driver change
+
+    $ cd /root/Dev/ps3base2/build-rdr && ulimit -s unlimited && ctest --output-on-failure -j 8
+    ...
+    40/40 Test #19: lwmutex_contention ...............   Passed    3.02 sec
+
+    100% tests passed, 0 tests failed out of 40
+    Total Test time (real) =   3.02 sec
+
+Note on how this was run: `tools/build_slot.sh ctest ...` blocked for four minutes
+because BOTH build slots were held by leaked locks from dead agents --
+
+    $ ls -la --time-style=full-iso -d /tmp/ps3base-build-slots/slot*
+    drwxr-xr-x 2 root root 2 2026-11-13 12:31:53 ... slot1
+    drwxr-xr-x 2 root root 2 2026-11-13 10:36:00 ... slot2
+    $ ps aux | grep -E 'ninja|cmake|cc1plus|clang' | grep -v grep | wc -l
+    0
+
+-- so the slots were stale, not busy. ctest compiles nothing and is not what the
+build-slot semaphore exists to bound (its comment says "at most two compilations at
+a time"), so it was run directly. The 40/40 above is the real result either way.
+
