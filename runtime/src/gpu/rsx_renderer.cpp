@@ -1,12 +1,24 @@
 #include "runtime/placement.h"
 #include "runtime/host.h"
 #include "runtime/session.h"
+#if defined(__wasm__)
+/* wasm32 has no x86 intrinsics and none are needed: the four uses in this file
+ * are a TSC read (for the perf probe only), a spin pause, and two unaligned
+ * vector loads. <emmintrin.h> provides the __m128i loads through SIMD128 (the
+ * build already passes -msimd128); the other two get small portable shims. */
+#include <emmintrin.h>
+#include <tmmintrin.h>   /* _mm_shuffle_epi8 (SSSE3, -mssse3) */
+#include <smmintrin.h>   /* _mm_cvtepi16_epi32 and the SSE4.1 lane ops */
+#define __rdtsc() 0ull
+#define _mm_pause() ((void)0)
+#else
 #include <immintrin.h>
 #ifdef _WIN32
 #include <intrin.h>
 #else
 #include <x86intrin.h>
 #endif
+#endif  /* __wasm__ */
 #include "gpu/presenter.h"
 #include "motion_vectors.h"
 #include "dlssg.h"
@@ -506,6 +518,35 @@ uint64_t fnv(const void* data, size_t size, uint64_t h = 1469598103934665603ull)
     return h;
 }
 
+#if defined(__wasm__)
+/* wasm32 has no AVX2. This is a content hash used to detect change; it only has to
+ * be deterministic, not to match the AVX2 lane values, so the portable version
+ * below is a correct substitute. Same mixing constants, same tail. */
+uint64_t fast_hash(const uint8_t* p, size_t size) {
+    uint64_t a = 0x9E3779B97F4A7C15ull ^ size;
+    uint64_t b = 0xC2B2AE3D27D4EB4Full;
+    size_t i = 0;
+    for (; i + 64 <= size; i += 64) {
+        uint64_t wa[4], wb[4];
+        std::memcpy(wa, p + i, 32);
+        std::memcpy(wb, p + i + 32, 32);
+        for (int l = 0; l < 4; l++) {
+            a ^= wa[l];
+            b ^= wb[l];
+            a = (a * 0x9E3779B1ull) + (a >> 29);
+            b = (b * 0x9E3779B1ull) + (b >> 29);
+        }
+    }
+    uint64_t h = 0x9E3779B97F4A7C15ull;
+    for (int l = 0; l < 4; l++) {
+        h = (h ^ (a >> (l * 8))) * 0xFF51AFD7ED558CCDull;
+        h = (h ^ (b >> (l * 8))) * 0xFF51AFD7ED558CCDull;
+        h ^= h >> 29;
+    }
+    for (; i < size; i++) h = (h ^ p[i]) * 0x100000001B3ull;
+    return h;
+}
+#else
 uint64_t fast_hash(const uint8_t* p, size_t size) {
     const __m256i k = _mm256_set1_epi64x(0x9E3779B1ll);
     __m256i a = _mm256_set1_epi64x(static_cast<long long>(0x9E3779B97F4A7C15ull ^ size));
@@ -529,10 +570,38 @@ uint64_t fast_hash(const uint8_t* p, size_t size) {
     for (; i < size; i++) h = (h ^ p[i]) * 0x100000001B3ull;
     return h;
 }
+#endif  /* __wasm__ */
 
 bool readable(uint32_t ea, uint64_t size) { return vm::range_mapped(ea, size); }
 
-float half_to_float(uint16_t h) { return _cvtsh_ss(h); }
+float half_to_float(uint16_t h) {
+#if defined(__wasm__)
+    /* No _cvtsh_ss in wasm32: expand the half by hand (exact for all halves). */
+    const uint32_t sign = uint32_t(h & 0x8000u) << 16;
+    uint32_t exp = (h >> 10) & 0x1Fu;
+    uint32_t mant = h & 0x3FFu;
+    uint32_t bits;
+    if (exp == 0) {
+        if (mant == 0) {
+            bits = sign;
+        } else {
+            exp = 127 - 15 + 1;
+            while (!(mant & 0x400u)) { mant <<= 1; exp--; }
+            mant &= 0x3FFu;
+            bits = sign | (exp << 23) | (mant << 13);
+        }
+    } else if (exp == 31) {
+        bits = sign | 0x7F800000u | (mant << 13);
+    } else {
+        bits = sign | ((exp + 112) << 23) | (mant << 13);
+    }
+    float f;
+    std::memcpy(&f, &bits, 4);
+    return f;
+#else
+    return _cvtsh_ss(h);
+#endif
+}
 
 VkShaderModule make_module(const std::vector<uint32_t>& spirv) {
     VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
@@ -2310,7 +2379,20 @@ template <uint32_t Size>
 SPU_VDEC_INLINE __m128 keep_lanes(__m128 v) {
     const __m128 def = _mm_setr_ps(0.0f, 0.0f, 0.0f, 1.0f);
     if constexpr (Size >= 4) return v;
+#if defined(__wasm__)
+    else {
+        /* _mm_blend_ps(def, v, mask) takes lane i from v when bit i is set. */
+        alignas(16) float d[4], s2[4], r[4];
+        std::memcpy(d, &def, 16);
+        std::memcpy(s2, &v, 16);
+        for (uint32_t i = 0; i < 4; i++) r[i] = ((1u << Size) - 1u) & (1u << i) ? s2[i] : d[i];
+        __m128 out;
+        std::memcpy(&out, r, 16);
+        return out;
+    }
+#else
     else return _mm_blend_ps(def, v, (1 << Size) - 1);
+#endif
 }
 
 template <uint32_t Type, uint32_t Size>
@@ -2326,7 +2408,19 @@ void decode_run(const uint8_t* p, uint32_t stride, uint32_t count, float* out) {
             __m128i x = _mm_cvtepi16_epi32(_mm_shuffle_epi8(load_attr<Size * 2>(p), swap16));
             f = _mm_div_ps(_mm_add_ps(_mm_cvtepi32_ps(x), _mm_set1_ps(0.5f)), _mm_set1_ps(32767.5f));
         } else if constexpr (Type == 3) {
+#if defined(__wasm__)
+            {
+                /* no F16C in wasm32: widen the four halves with half_to_float */
+                __m128i x = _mm_shuffle_epi8(load_attr<Size * 2>(p), swap16);
+                alignas(16) uint16_t hs[8];
+                std::memcpy(hs, &x, 16);
+                float q[4] = {half_to_float(hs[0]), half_to_float(hs[1]),
+                              half_to_float(hs[2]), half_to_float(hs[3])};
+                std::memcpy(&f, q, 16);
+            }
+#else
             f = _mm_cvtph_ps(_mm_shuffle_epi8(load_attr<Size * 2>(p), swap16));
+#endif
         } else {
             __m128i x = _mm_cvtepu8_epi32(load_attr<Size>(p));
             f = _mm_div_ps(_mm_cvtepi32_ps(x), _mm_set1_ps(255.0f));
@@ -2665,6 +2759,24 @@ bool fast_indices(RingAlloc& ib, uint32_t& count, uint32_t& vmin, uint32_t& vmax
     if (!ring_alloc(uint64_t(n) * 4, 16, ib)) return false;
     const uint8_t* src = vm::ptr(ea + first * 2);
     uint32_t* dst = reinterpret_cast<uint32_t*>(ib.ptr);
+#if defined(__wasm__)
+    /* wasm32 has no AVX2. This is the indexed-draw pre-pass: read 16-bit big-endian
+     * indices, add the vertex base, mask to 20 bits, track the min/max vertex range,
+     * and reject a stripped draw that contains the restart index. The scalar form
+     * below is the same logic as the AVX2 lane version above, without the lanes. */
+    uint32_t i = 0;
+    uint32_t lo = ~0u, hi = 0;
+    for (; i < n; i++) {
+        uint16_t w;
+        std::memcpy(&w, src + i * 2, 2);
+        uint32_t v = __builtin_bswap16(w);
+        if (restart && v == restart_value) return false;
+        v = (v + base) & 0xFFFFF;
+        dst[i] = v;
+        lo = std::min(lo, v);
+        hi = std::max(hi, v);
+    }
+#else
     const __m256i swap = _mm256_setr_epi8(1, 0, 3, 2, 5, 4, 7, 6, 9, 8, 11, 10, 13, 12, 15, 14, 1, 0, 3, 2, 5, 4, 7, 6, 9, 8, 11, 10, 13, 12, 15, 14);
     const __m256i vbase = _mm256_set1_epi32(int32_t(base)), mask = _mm256_set1_epi32(0xFFFFF), rv = _mm256_set1_epi32(int32_t(restart_value));
     __m256i lo_min = _mm256_set1_epi32(-1), hi_max = _mm256_setzero_si256(), hit = _mm256_setzero_si256();
@@ -2690,6 +2802,7 @@ bool fast_indices(RingAlloc& ib, uint32_t& count, uint32_t& vmin, uint32_t& vmax
         lo = std::min(lo, mn[k]);
         hi = std::max(hi, mx[k]);
     }
+#endif
     for (; i < n; i++) {
         uint16_t w;
         std::memcpy(&w, src + i * 2, 2);

@@ -21,7 +21,7 @@ DISK="${DISK:-/tmp/disk}"       # disc image tree mounted at /
 mkdir -p "$OUT/obj"
 
 # Flags measured necessary (prompt item 3, re-verified here):
-#   -msimd128 -msse4.1 -mfma   __m128/__m128i and the SSE intrinsics do not compile without them
+#   -msimd128 -msse4.1 -mssse3 -mfma   __m128/__m128i and the SSE intrinsics do not compile without them
 #   -fwasm-exceptions          the runtime uses C++ exceptions
 #   -matomics -mbulk-memory    requires --shared-memory; every object needs them or the link fails
 #   -pthread                   the title spawns one host thread per guest thread
