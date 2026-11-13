@@ -1,0 +1,36 @@
+{
+  "status": "done",
+  "task": "P1 -- profile the RDR green-screen state (step 1: where does the time go)",
+  "results": "/root/Dev/ps3base2/RESULTS-PERF.md",
+  "method": "perf record -g (frame-pointer, 30 s) + perf record -g --call-graph dwarf (15 s), both on the live guest; /usr/lib/linux-tools-6.8.0-149/perf; plus a 1 Hz /proc/<pid>/task/*/stat sampler and exact guest-log window counting",
+  "run": {
+    "outdir": "/tmp/rdr-perf/run3",
+    "guest_pid": 322892,
+    "green_onset": "92 s after the chapter card; green_frac 0.8740 -> 0.9063 (test G>60,R<40,B<40)",
+    "profiled_state_confirmed_green": "all 34 sampler frames during the profile measure green_frac 0.906"
+  },
+  "findings": {
+    "title_progresses": "YES, slowly: 60 flips per 34.210 s = 1.75 fps on the green, against 29.97 fps on the loading card (17x slower). Not frozen.",
+    "lifted_guest_code_share": "0.30% of 18124 samples (54 samples over 8 distinct f_XXXXXXXX, max 3 each)",
+    "runtime_share": "55.16%",
+    "kernel_libc_share": "44.53%",
+    "hle_share": "0.01%",
+    "top_self": "spu::SpuThread::exec 16.91%, spu::aot::note_interpreted 12.41%, pthread_mutex_lock 7.42%, spu::aot::is_terminator 5.77%, spu::step 3.83%",
+    "interpreter_total": "~33% of all samples is the SPU interpreter and its bookkeeping; the bookkeeping alone (19.92%) costs more than twice the instruction emulation (9.07%)",
+    "cpu": "615% across 47 threads; guest main thread is 7.2%; six SPU threads ~99% each + RSX FIFO 97.8% (87.7% of that is its own idle-wait, 0 semaphore waits/s)",
+    "fibres": "CreateFiber 5.24/s, RunFibers 1.77/s, JoinFiber 5.30/s, 9098 switches/s, 5148 switches per RunFibers call (two independent methods agree within 1%)",
+    "file_io": "0 fs: read fd lines/s on the green with PS3BASE_FS_LOG=1 set -- the load is genuinely finished"
+  },
+  "not_measured": [
+    "RAGE script opcodes/s: not countable without instrumenting (forbidden), and the interpreter f_00d19278 has 0 samples in both profiles, so there is nothing to count. Substituted the runtime's own 'main: pgw' guest-write counter (falls from ~100/s to ~31/s)."
+  ],
+  "harness_defects_found_and_fixed": [
+    "tools/green_screen_probe.sh starts TWO game instances: it launches $BIN itself (lines 27-30) and then drive_rdr.py launches it again in run().",
+    "kill (SIGTERM) of drive_rdr.py lets its finally block SIGKILL the guest, so no guest is left to profile; SIGKILL the driver instead.",
+    "The probe's solid-screen test uses %[fx:standard_deviation] as if it were 0..255; it is 0..1, so the threshold matches every frame. My first run profiled the red chapter card because of this; that run is discarded and not reported."
+  ],
+  "discarded_runs": [
+    "/tmp/rdr-perf/run2 (profiled the chapter card, not the green -- standard_deviation bug)"
+  ],
+  "evidence_note": "Every number in RESULTS-PERF.md has the command and its output next to it; artifacts in /tmp/rdr-perf/run3/ and tooling in /tmp/rdr-perf/*.py, probe3.sh."
+}
