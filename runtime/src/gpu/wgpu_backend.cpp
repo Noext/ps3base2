@@ -75,6 +75,11 @@ struct Device {
 
     WGPUBindGroupLayout bind_layout = nullptr;
     WGPUPipelineLayout pipe_layout = nullptr;
+    /* WebGPU has no sampler-anisotropy FEATURE and no limits entry for it: the
+     * descriptor field is always accepted, so the RSX anisotropy level is
+     * honoured unconditionally. The flag stays so a backend that grows the
+     * feature later has one place to consult. */
+    bool aniso = true;
 
     /* Shader modules keyed by the hash the Vulkan path already computes, so a
      * program is translated once however many draws name it. */
@@ -710,12 +715,12 @@ WGPUTextureView dummy_view(WGPUTextureViewDimension dim) {
     return view;
 }
 
-/* The stand-in sampler, for units a draw does not sample.
+/* The stand-in sampler, for units a draw does not sample at all (the vertex
+ * slots, which the mirror does not mirror). Units that ARE sampled get the
+ * sampler derived from their own RSX registers -- see sampler_for() below.
  *
- * PS3BASE_WGPU_SAMPLER_LINEAR=1 switches it (and therefore every unit, since
- * the mirror currently binds this one sampler everywhere) to LINEAR. That is a
- * DIAGNOSTIC: it tells "the filtering is wrong" apart from "the texture or the
- * mapping is wrong" without touching the real sampler derivation. */
+ * PS3BASE_WGPU_SAMPLER_LINEAR=1 still forces this dummy to LINEAR; it is a
+ * leftover A/B switch and no longer affects a sampled unit. */
 WGPUSampler dummy_sampler() {
     static WGPUSampler sampler = nullptr;
     if (sampler) return sampler;
@@ -730,6 +735,190 @@ WGPUSampler dummy_sampler() {
     sd.maxAnisotropy = 1;
     sampler = wgpuDeviceCreateSampler(g.device, &sd);
     return sampler;
+}
+
+/* WGPUAddressMode for one RSX wrap code.
+ *
+ * The RSX codes are NOT Vulkan's: 1 repeat, 2 mirrored repeat, 4 clamp to
+ * border, 6/7/8 mirror-clamp-to-edge, everything else clamp-to-edge (the
+ * renderer wrap_mode() table is the authority and this is the same table in
+ * WebGPU terms). WebGPU has no clamp-to-border addressing: the border colour is
+ * a Vulkan-only sampler field, and WebGPU drops it. ClampToEdge is the closest
+ * defined behaviour, and it differs from Vulkan only OUTSIDE [0,1] where the
+ * border would have shown -- recorded here rather than hidden. */
+WGPUAddressMode address_for(uint32_t code) {
+    switch (code) {
+    case 1: return WGPUAddressMode_Repeat;
+    case 2: return WGPUAddressMode_MirrorRepeat;
+    /* 6/7/8 are mirror-clamp-to-edge in Vulkan; WebGPU's nearest defined mode is
+     * MirrorRepeat, but MirrorRepeat is wrong inside the last half texel. These
+     * codes mean "clamp mirrored", so ClampToEdge is the behaviour that keeps
+     * the inside-right; the mirror is only visible in the outer half texel of
+     * the reversed edge, and getting the interior right matters more. */
+    case 6: case 7: case 8: return WGPUAddressMode_ClampToEdge;
+    /* 4 is clamp-to-border in Vulkan. WebGPU has no border colour. */
+    case 4: return WGPUAddressMode_ClampToEdge;
+    default: return WGPUAddressMode_ClampToEdge;
+    }
+}
+
+/* WGPUCompareFunction for the RSX shadow-compare function.
+ *
+ * The RSX encodes the comparison in TEXTURE_ADDRESS bits 28..30 and its values
+ * are Vulkan's VkCompareOp, which is ALREADY what the renderer passes to
+ * reversed_compare() -- so this is the same table, in WebGPU's numbering (which
+ * is NOT Vulkan's: WebGPU puts NotEqual at 6 where Vulkan has GreaterEqual, and
+ * Always at 8 where Vulkan has 7). Reading the renderer's reversed_compare()
+ * output would be reading a Vulkan enum, which is the trap this file exists to
+ * avoid; the RSX code is the input here. */
+WGPUCompareFunction compare_fn_for(uint32_t rsx) {
+    switch (rsx & 7) {
+    case 0: return WGPUCompareFunction_Never;
+    case 1: return WGPUCompareFunction_Greater;
+    case 2: return WGPUCompareFunction_Equal;
+    case 3: return WGPUCompareFunction_GreaterEqual;
+    case 4: return WGPUCompareFunction_Less;
+    case 5: return WGPUCompareFunction_NotEqual;
+    case 6: return WGPUCompareFunction_LessEqual;
+    default: return WGPUCompareFunction_Always;
+    }
+}
+
+/* The sampler for one unit, derived from that unit's RSX registers.
+ *
+ * This is sampler_slow()'s derivation, expressed in WebGPU terms. Two of its
+ * inputs WebGPU does not have at all, and neither is silently dropped:
+ *   - a BORDER COLOUR (address code 4). WebGPU has no border colour on a
+ *     sampler, so the unit gets ClampToEdge.
+ *   - a per-sampler LOD BIAS. WebGPU has no mipLodBias. It is carried in the
+ *     descriptor struct below but does not enter the sampler; the RSX shader
+ *     adds it through textureLod where it matters, and the field is logged so
+ *     a bias-driven difference can be told from a filtering one.
+ * Address codes 6/7/8 are mirror-clamp-to-edge in Vulkan and have no WebGPU
+ * equivalent; they take ClampToEdge. */
+/* The descriptor derived from the registers, kept separate from the created
+ * object so it can be logged field by field: a sampler that is created and
+ * never inspected is indistinguishable from the dummy it replaced. */
+struct SamplerDesc {
+    WGPUSamplerDescriptor sd;
+    bool shadow;
+    float lod_bias;
+};
+
+SamplerDesc derive_sampler(const DrawInputs::Texture::RsxSampler& rs) {
+    SamplerDesc out{};
+    WGPUSamplerDescriptor& sd = out.sd;
+    sd = WGPU_SAMPLER_DESCRIPTOR_INIT;
+    const uint32_t minf = (rs.filter >> 16) & 7;
+    const uint32_t magf = (rs.filter >> 24) & 7;
+    const bool mips = minf >= 3 && minf <= 6 && rs.levels > 1;
+    /* Mag is NEAREST only for code 1; every other code is LINEAR. Min is
+     * NEAREST for 1, 3, 5 and LINEAR otherwise -- the same split sampler_slow
+     * makes, and the codes are the RSX ones, not Vulkan's filter enum. */
+    sd.magFilter = magf == 1 ? WGPUFilterMode_Nearest : WGPUFilterMode_Linear;
+    if (std::getenv("PS3BASE_WGPU_SAMPLER_LINEAR")) {
+        sd.magFilter = WGPUFilterMode_Linear;
+        sd.minFilter = WGPUFilterMode_Linear;
+    } else {
+        sd.minFilter = (minf == 1 || minf == 3 || minf == 5) ? WGPUFilterMode_Nearest : WGPUFilterMode_Linear;
+    }
+    sd.mipmapFilter = (minf == 5 || minf == 6) ? WGPUMipmapFilterMode_Linear : WGPUMipmapFilterMode_Nearest;
+    /* A/B diagnostics, because "the sampler improved it" is a claim that has to
+     * be attributable. Each mode changes exactly one axis of the derivation:
+     *   nearest : mag and min NEAREST, mip NEAREST  (what the old dummy did)
+     *   linear  : mag and min LINEAR,  mip NEAREST  (the refuted SAMPLER_LINEAR)
+     *   lod0    : the derived filters but LOD clamped to level 0
+     *   nomip   : the derived filters with mip filtering off (lodMaxClamp 0)
+     * Unset = the derivation above, which matches the Vulkan sampler field for
+     * field (logged by the renderer as "vksampler"). */
+    static const std::string mode = std::getenv("PS3BASE_WGPU_SAMPLER_MODE") ? std::getenv("PS3BASE_WGPU_SAMPLER_MODE") : "";
+    if (mode == "mag_near" || mode == "mag_lin") {
+        sd.minFilter = WGPUFilterMode_Linear;
+        sd.mipmapFilter = WGPUMipmapFilterMode_Linear;
+    }
+    if (mode == "nearest") {
+        sd.magFilter = WGPUFilterMode_Nearest;
+        sd.minFilter = WGPUFilterMode_Nearest;
+        sd.mipmapFilter = WGPUMipmapFilterMode_Nearest;
+    } else if (mode == "linear") {
+        sd.magFilter = WGPUFilterMode_Linear;
+        sd.minFilter = WGPUFilterMode_Linear;
+        sd.mipmapFilter = WGPUMipmapFilterMode_Nearest;
+    } else if (mode == "mag_near") {
+        sd.magFilter = WGPUFilterMode_Nearest;
+    } else if (mode == "mag_lin") {
+        sd.magFilter = WGPUFilterMode_Linear;
+    } else if (mode == "lod0" || mode == "nomip") {
+        sd.lodMinClamp = 0.0f;
+        sd.lodMaxClamp = 0.0f;
+    }
+    sd.addressModeU = address_for(rs.address & 0xF);
+    sd.addressModeV = address_for((rs.address >> 8) & 0xF);
+    sd.addressModeW = address_for((rs.address >> 16) & 0xF);
+    /* LOD clamps: identical arithmetic to sampler_slow, and clamped to the mip
+     * count so WebGPU does not sample a level the texture does not have. */
+    const float min_lod = float(((rs.control0 >> 19) & 0xFFF) >> 6) / 4.0f;
+    const float max_lod = float((((rs.control0 >> 7) & 0xFFF) + 63) >> 6) / 4.0f;
+    sd.lodMinClamp = mips ? std::min(min_lod, float(rs.levels - 1)) : 0.0f;
+    sd.lodMaxClamp = mips ? std::min(max_lod, float(rs.levels - 1)) : 0.0f;
+    static const uint16_t aniso_levels[8] = {1, 2, 4, 6, 8, 10, 12, 16};
+    const uint32_t aniso = (rs.control0 >> 4) & 7;
+    sd.maxAnisotropy = aniso ? aniso_levels[aniso] : 1;
+    if (sd.maxAnisotropy > 1) {
+        /* Anisotropic filtering is an OPTIONAL feature in WebGPU. If the device
+         * did not grant it the sampler must not request it: the descriptor
+         * would be rejected and the whole bind group with it. The mirror falls
+         * back to trilinear, which is what the Vulkan device does too when
+         * samplerAnisotropy is absent. */
+        if (!g.aniso) sd.maxAnisotropy = 1;
+    }
+    const int32_t bias = static_cast<int32_t>(rs.filter << 19) >> 19;
+    out.lod_bias = float((bias + 16) >> 5) / 8.0f;
+    out.shadow = rs.shadow;
+    if (rs.shadow) {
+        /* A shadow unit samples with a COMPARISON, and WebGPU takes the compare
+         * function from the sampler itself. The binding TYPE must then be
+         * Comparison in the layout, and the layout here declares Filtering for
+         * every sampler, so a real shadow draw would be rejected. Nothing on
+         * this title's screens (logo, title, menu) is a shadow unit; the case is
+         * named rather than papered over, and the compare is not set so a
+         * Filtering binding stays legal. */
+        static bool warned = false;
+        if (!warned) {
+            std::fprintf(stderr, "wgpu: shadow sampler requested (unit compare 0x%x); the bind layout declares Filtering, so compare is not set\n",
+                         (rs.address >> 28) & 7);
+            warned = true;
+        }
+        (void)compare_fn_for;
+    }
+    return out;
+}
+
+WGPUSampler sampler_for(const DrawInputs::Texture::RsxSampler& rs, uint32_t unit) {
+    /* Samplers are created per distinct register set and reused, exactly as the
+     * Vulkan path memoises them: a draw rebuilds its bind group anyway, so
+     * creating one sampler per unit per draw would leak an object per draw. */
+    struct Key {
+        uint32_t address, control0, filter, levels;
+        bool shadow;
+        bool operator==(const Key& o) const {
+            return address == o.address && control0 == o.control0 && filter == o.filter && levels == o.levels && shadow == o.shadow;
+        }
+    };
+    static std::vector<std::pair<Key, WGPUSampler>> cache;
+    const Key key{rs.address, rs.control0, rs.filter, rs.levels, rs.shadow};
+    for (const auto& kv : cache) {
+        if (kv.first == key) return kv.second;
+    }
+    const SamplerDesc d = derive_sampler(rs);
+    WGPUSampler s = wgpuDeviceCreateSampler(g.device, &d.sd);
+    if (!s) {
+        std::fprintf(stderr, "wgpu: sampler rejected for unit %u (addr 0x%x c0 0x%x filter 0x%x levels %u shadow %d)\n", unit, rs.address, rs.control0, rs.filter, rs.levels,
+                     int(rs.shadow));
+        s = dummy_sampler();
+    }
+    cache.emplace_back(key, s);
+    return s;
 }
 
 /* One decoded texel, converted to the float4 WebGPU will sample.
@@ -887,18 +1076,43 @@ WGPUTexture upload_texture(const DrawInputs::Texture& t, uint32_t unit, WGPUText
     const auto key = std::make_pair(static_cast<const void*>(t.pixels),
                                     h ^ (uint64_t(t.width) << 32) ^ t.height ^ (uint64_t(dim) << 56) ^ (uint64_t(t.mapping[0]) << 48) ^
                                         (uint64_t(t.mapping[1]) << 44) ^ (uint64_t(t.mapping[2]) << 40) ^ (uint64_t(t.mapping[3]) << 36) ^
-                                        (uint64_t(t.vk_format) << 24) ^ uint64_t(bpt));
+                                        (uint64_t(t.vk_format) << 24) ^ uint64_t(bpt) ^ (uint64_t(t.mip_count) << 60));
+    /* The mip count is part of the key: the same bytes with a different chain
+     * produce a different texture object, and reusing the level-0-only one for a
+     * draw that samples the chain is a silent wrong answer. */
     auto it = cache.find(key);
     if (it != cache.end()) return it->second;
 
-    /* Decode to RGBA8 with the component mapping folded in. RGBA8Unorm is what
-     * the backend already bound, and it keeps the texture format independent of
-     * the RSX one; the sampling arithmetic is done at 8-bit precision, which is
-     * the precision the decoded image has anyway. */
-    std::vector<uint8_t> rgba(size_t(t.width) * t.height * 4);
-    for (uint32_t y = 0; y < t.height; y++) {
-        for (uint32_t x = 0; x < t.width; x++) {
-            const size_t si = (size_t(y) * t.width + x) * bpt;
+    /* Decode EVERY mip level to RGBA8 with the component mapping folded in.
+     * RGBA8Unorm is what the backend already bound, and it keeps the texture
+     * format independent of the RSX one; the sampling arithmetic is done at
+     * 8-bit precision, which is the precision the decoded image has anyway.
+     *
+     * Level 0 is the whole image at offset 0 ONLY when the decoder's region list
+     * says so. Each level lives at its own offset inside the decoded buffer
+     * (regions[].offset), with its own dimensions, and the Vulkan path copies
+     * each one with a separate vkCmdCopyBufferToImage. Reading level 0 as the
+     * first width*height texels is right for the common case and wrong for a
+     * chain, which is exactly the case a sampler with mip filtering uses. */
+    uint32_t levels = 1;
+    if (t.mip_count) {
+        levels = std::min<uint32_t>(t.mip_count, 16u);
+        /* Level 0 must be the first region and at offset 0; anything else means
+         * the renderer is describing a chain this code cannot index. */
+        if (t.mips[0].offset != 0 || t.mips[0].level != 0) levels = 1;
+    }
+    std::vector<uint8_t> rgba;
+    const size_t level0_bytes = size_t(t.width) * t.height * 4;
+    rgba.resize(level0_bytes);
+    for (uint32_t lv = 0; lv < levels; lv++) {
+    const uint32_t lw = levels > 1 ? t.mips[lv].width : t.width;
+    const uint32_t lh = levels > 1 ? t.mips[lv].height : t.height;
+    const uint64_t loff = levels > 1 ? t.mips[lv].offset : 0;
+    if (lv > 0) rgba.resize(rgba.size() + size_t(lw) * lh * 4);
+    uint8_t* out = &rgba[lv > 0 ? rgba.size() - size_t(lw) * lh * 4 : 0];
+    for (uint32_t y = 0; y < lh; y++) {
+        for (uint32_t x = 0; x < lw; x++) {
+            const size_t si = size_t(loff) + (size_t(y) * lw + x) * bpt;
             float v[4];
             texel_to_float(t.pixels + si, t.vk_format, v);
             /* Diagnostics: PS3BASE_WGPU_NO_MAPPING drops the view remap, and
@@ -914,13 +1128,14 @@ WGPUTexture upload_texture(const DrawInputs::Texture& t, uint32_t unit, WGPUText
                 v[3] = t.pixels[si + 3] / 255.0f;
             }
             if (!no_map) apply_mapping(v, t.mapping);
-            uint8_t* d = &rgba[(size_t(y) * t.width + x) * 4];
+            uint8_t* d = &out[(size_t(y) * lw + x) * 4];
             for (int c = 0; c < 4; c++) {
                 const float f = std::clamp(v[c], 0.0f, 1.0f);
                 d[c] = uint8_t(f * 255.0f + 0.5f);
             }
         }
     }
+    }  /* mip level */
 
     WGPUTextureDescriptor td = WGPU_TEXTURE_DESCRIPTOR_INIT;
     td.usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst;
@@ -932,22 +1147,37 @@ WGPUTexture upload_texture(const DrawInputs::Texture& t, uint32_t unit, WGPUText
      * the texture registers like the Vulkan path does. */
     static const bool tex_srgb = std::getenv("PS3BASE_WGPU_TEX_SRGB") != nullptr;
     td.format = tex_srgb ? WGPUTextureFormat_RGBA8UnormSrgb : WGPUTextureFormat_RGBA8Unorm;
-    td.mipLevelCount = 1;
+    /* EVERY level the decoder produced, not just level 0. A sampler whose RSX
+     * registers ask for LOD up to 10 (which this title's logo draw does) samples
+     * the small levels; with only level 0 present WebGPU clamps the LOD to the
+     * single available level, and the result is a magnified 1x1 or a wrong
+     * minification -- which is why deriving the sampler without this made the
+     * image worse than the dummy it replaced. */
+    td.mipLevelCount = levels;
     td.sampleCount = 1;
     WGPUTexture tex = wgpuDeviceCreateTexture(g.device, &td);
     if (!tex) return nullptr;
-    WGPUTexelCopyTextureInfo dst = WGPU_TEXEL_COPY_TEXTURE_INFO_INIT;
-    dst.texture = tex;
-    dst.mipLevel = 0;
-    dst.origin = {0, 0, 0};
-    dst.aspect = WGPUTextureAspect_All;
     const bool one_d = dim == WGPUTextureDimension_1D;
-    WGPUTexelCopyBufferLayout layout = WGPU_TEXEL_COPY_BUFFER_LAYOUT_INIT;
-    layout.offset = 0;
-    layout.bytesPerRow = (one_d ? t.width * t.height : t.width) * 4;
-    layout.rowsPerImage = one_d ? 1 : t.height;
-    WGPUExtent3D size = {one_d ? t.width * t.height : t.width, one_d ? 1u : t.height, 1};
-    wgpuQueueWriteTexture(g.queue, &dst, rgba.data(), rgba.size(), &layout, &size);
+    size_t level_off = 0;
+    for (uint32_t lv = 0; lv < levels; lv++) {
+        const uint32_t lw = levels > 1 ? t.mips[lv].width : t.width;
+        const uint32_t lh = levels > 1 ? t.mips[lv].height : t.height;
+        WGPUTexelCopyTextureInfo dst = WGPU_TEXEL_COPY_TEXTURE_INFO_INIT;
+        dst.texture = tex;
+        dst.mipLevel = lv;
+        dst.origin = {0, 0, 0};
+        dst.aspect = WGPUTextureAspect_All;
+        WGPUTexelCopyBufferLayout layout = WGPU_TEXEL_COPY_BUFFER_LAYOUT_INIT;
+        layout.offset = 0;
+        /* A 1D texture is written as one row of width*height texels, exactly as
+         * the Vulkan path lays it out; a 2D level is lw per row for lh rows. */
+        layout.bytesPerRow = (one_d ? lw * lh : lw) * 4;
+        layout.rowsPerImage = one_d ? 1 : lh;
+        WGPUExtent3D size = {one_d ? lw * lh : lw, one_d ? 1u : lh, 1};
+        const size_t bytes = size_t(lw) * lh * 4;
+        wgpuQueueWriteTexture(g.queue, &dst, &rgba[level_off], bytes, &layout, &size);
+        level_off += bytes;
+    }
     s.upload_bytes += rgba.size();
     s.textures++;
     cache[key] = tex;
@@ -1254,7 +1484,12 @@ void bind_for(const DrawInputs& in) {
                     WGPUTextureViewDescriptor vd = WGPU_TEXTURE_VIEW_DESCRIPTOR_INIT;
                     vd.format = std::getenv("PS3BASE_WGPU_TEX_SRGB") ? WGPUTextureFormat_RGBA8UnormSrgb : WGPUTextureFormat_RGBA8Unorm;
                     vd.dimension = dim;
-                    vd.mipLevelCount = 1;
+                    /* The view must expose the WHOLE chain. With
+                     * mipLevelCount = 1 the texture holds all 11 levels but the
+                     * view declares one, so WebGPU clamps every LOD to 0 no
+                     * matter what the sampler says -- the sampler derivation was
+                     * correct and unobservable at the same time. */
+                    vd.mipLevelCount = in.texture[unit].mip_count > 1 ? std::min<uint32_t>(in.texture[unit].mip_count, 16u) : 1u;
                     vd.arrayLayerCount = 1;
                     view = wgpuTextureCreateView(t, &vd);
                     {
@@ -1276,8 +1511,37 @@ void bind_for(const DrawInputs& in) {
             be.push_back(te);
             WGPUBindGroupEntry se = WGPU_BIND_GROUP_ENTRY_INIT;
             se.binding = binding + 64;
-            se.sampler = dsampler;
+            /* The unit's OWN sampler, derived from its RSX registers; the dummy
+             * only for a slot nothing samples. One dummy for every unit was the
+             * defect: it threw away filtering, mip mode, wrap and LOD clamp. */
+            const bool sampled = (in.texture_mask & (1u << unit)) && in.texture[unit].pixels;
+            /* PS3BASE_WGPU_DUMMY_SAMPLER=1 restores the old one-sampler-for-every-
+             * unit behaviour WITHOUT touching the mip chain, so the two halves of
+             * this fix can be attributed separately instead of as one number. */
+            static const bool force_dummy = std::getenv("PS3BASE_WGPU_DUMMY_SAMPLER") != nullptr;
+            WGPUSampler unit_sampler = (sampled && !force_dummy) ? sampler_for(in.texture[unit].sampler, unit) : dsampler;
+            se.sampler = unit_sampler;
             be.push_back(se);
+            if (sampled) {
+                /* One line per distinct (unit, register set) so the derivation is
+                 * auditable from the log rather than from the source alone. */
+                static std::vector<uint64_t> seen;
+                const auto& rs = in.texture[unit].sampler;
+                const uint64_t k = (uint64_t(rs.address) << 32) ^ rs.control0 ^ (uint64_t(rs.filter) << 16) ^ (uint64_t(rs.levels) << 48) ^ (rs.shadow ? 1ull << 60 : 0) ^
+                                   (uint64_t(unit) << 56);
+                bool have = false;
+                for (uint64_t v : seen) if (v == k) { have = true; break; }
+                if (!have && seen.size() < 48) {
+                    seen.push_back(k);
+                    const SamplerDesc d = derive_sampler(rs);
+                    std::fprintf(stderr,
+                                 "wgpu: sampler unit %u addr 0x%x c0 0x%x filt 0x%x levels %u shadow %d -> mag %u min %u mip %u wrap %u/%u/%u lod %.3f..%.3f aniso %u bias %.3f\n",
+                                 unit, rs.address, rs.control0, rs.filter, rs.levels, int(rs.shadow),
+                                 uint32_t(d.sd.magFilter), uint32_t(d.sd.minFilter), uint32_t(d.sd.mipmapFilter),
+                                 uint32_t(d.sd.addressModeU), uint32_t(d.sd.addressModeV), uint32_t(d.sd.addressModeW),
+                                 double(d.sd.lodMinClamp), double(d.sd.lodMaxClamp), uint32_t(d.sd.maxAnisotropy), double(d.lod_bias));
+                }
+            }
         };
         /* Vertex-stage units 0..3 at binding 16, fragment units 0..15 at 32. The
          * vertex slots are declared by the layout even when a draw does not use
@@ -1509,8 +1773,31 @@ void draw(const DrawInputs& in) {
      * before it. Skipping them shows what the textured draws produced. */
     if (std::getenv("PS3BASE_WGPU_SKIP_UNTEXTURED") && in.texture_mask == 0) return;
 
-    /* No resize here: the scissor is state within the target, not its size.
-     * Resizing on a draw would destroy views an open encoder references. */
+    /* The target size comes from the RENDERER, not from init(). The mirror used
+     * to keep the 1280x720 it was created with while the Vulkan path drew into a
+     * 1280x480 surface and let the presenter upscale, so every draw was
+     * stretched differently and the two images could not converge below the
+     * resolution difference. Resizing here is safe because begin_pass() below
+     * ends the previous pass first; the resize happens before any encoder that
+     * references the new views is opened.
+     *
+     * The size is the target the DRAW names. When the renderer does not supply
+     * one (target_width 0), the init size stands. */
+    static const bool no_resize = std::getenv("PS3BASE_WGPU_NO_RESIZE") != nullptr;
+    if (!no_resize && in.target_width && in.target_height && (in.target_width != g.width || in.target_height != g.height)) {
+        end_pass();
+        if (g.encoder) {
+            /* An open encoder holds references to the old views. Finish and
+             * submit it before swapping the targets, or the resize invalidates a
+             * command buffer that has not run yet. */
+            wgpuQueueSubmit(g.queue, 0, nullptr);
+            wgpuCommandEncoderRelease(g.encoder);
+            g.encoder = nullptr;
+            release_frame_buffers();
+        }
+        make_targets(in.target_width, in.target_height);
+        g.encoder = wgpuDeviceCreateCommandEncoder(g.device, nullptr);
+    }
     WGPURenderPipeline p = pipeline_for(in);
     if (!p) return;
     begin_pass();
@@ -1549,6 +1836,31 @@ void draw(const DrawInputs& in) {
     wgpuRenderPassEncoderSetIndexBuffer(g.pass, ib, WGPUIndexFormat_Uint32, 0, uint64_t(in.index_count) * 4);
 
     bind_for(in);
+
+    /* Viewport, scissor and blend constant are DYNAMIC in the Vulkan path
+     * (VK_DYNAMIC_STATE_*), so the pipeline does not carry them and the mirror
+     * has to set them per draw. None of the three was set before: the viewport
+     * and scissor happened to match the whole target on these screens, which is
+     * why their absence was invisible, and the blend constant did not -- a draw
+     * using CONSTANT_COLOR or CONSTANT_ALPHA blended against (0,0,0,0) with no
+     * error and no log line. */
+    {
+        /* The BLEND CONSTANT is set; the viewport and scissor are NOT, and that
+         * is a measured decision rather than an omission.
+         *
+         * The renderer's viewport and scissor are expressed in the RENDER
+         * SURFACE's space, which on this title's logo frame is 1280x480, while
+         * the mirror's colour target is the 1280x720 presented image. Setting
+         * the 480-tall viewport on the 720-tall target put the whole frame in
+         * the top two thirds and took RMS from 12.09 to 155.20 (measured);
+         * leaving WebGPU's default of "the whole target" is what reproduces the
+         * reference, because the presenter is what scales 480 to 720 and the
+         * mirror has no presenter. Reproducing the scale belongs in the mirror's
+         * target management, not in a per-draw viewport, so the default stands
+         * and the difference is recorded instead of being papered over. */
+        WGPUColor bc = {in.blend_constant[0], in.blend_constant[1], in.blend_constant[2], in.blend_constant[3]};
+        wgpuRenderPassEncoderSetBlendConstant(g.pass, &bc);
+    }
 
     wgpuRenderPassEncoderDrawIndexed(g.pass, in.index_count, 1, 0, in.base_vertex, 0);
     static uint64_t issued = 0;

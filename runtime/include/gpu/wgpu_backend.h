@@ -89,6 +89,50 @@ struct DrawInputs {
          * texels are converted on the host. Ignoring it was worth 17.4% of
          * pixels at more than 8 levels of error. */
         int mapping[4] = {0, 1, 2, 3};
+        /* The SAMPLER this draw binds to the unit. One dummy sampler everywhere
+         * discarded the whole derivation -- every unit sampled Nearest /
+         * ClampToEdge at mip 0 -- and the mirror produced 38 distinct colours
+         * where the Vulkan path produced 1279 on the same frame.
+         *
+         * These are the RAW RSX registers the Vulkan path's sampler_slow()
+         * derives from, not a pre-digested WebGPU state: the RSX -> WebGPU table
+         * stays in this backend (beside wgpu_map) and there is exactly one place
+         * that turns registers into a sampler object. Passing a VkSampler across
+         * would be meaningless, and re-deriving from a converted enum would lose
+         * the wrap codes.
+         *
+         *   filter   TEXTURE_FILTER: mag in bits 24..26, min in 16..18,
+         *            LOD bias in the low 13 bits (signed)
+         *   address  TEXTURE_ADDRESS: U in 0..3, V in 8..11, W in 16..19,
+         *            shadow compare fn in 28..30
+         *   control0 max LOD in 7..18, min LOD in 19..30, anisotropy in 4..6
+         *   levels   the texture's decoded mip count (clamps min/max LOD)
+         *   shadow   the fragment program samples this unit as a depth compare */
+        /* One mip level of the DECODED image. The renderer's decoder writes the
+         * whole chain into one buffer, level by level, each region at its own
+         * byte offset -- the same offsets Vulkan uses for its
+         * vkCmdCopyBufferToImage calls. Without them the mirror uploaded level 0
+         * only, and a sampler that asks for mip 10 (which the RSX registers do:
+         * c0 0x80060000 -> max LOD 10) sampled a 1x1 texture stretched over the
+         * whole quad. */
+        struct MipRegion {
+            uint32_t level = 0;
+            uint64_t offset = 0;   /* bytes into the decoded buffer */
+            uint32_t width = 0;
+            uint32_t height = 0;
+        };
+        MipRegion mips[16] = {};
+        uint32_t mip_count = 0;
+        /* Per-row padding the decoder writes, if any; 0 = tightly packed. */
+        uint32_t mip_pitch = 0;
+
+        struct RsxSampler {
+            uint32_t address = 0;
+            uint32_t control0 = 0;
+            uint32_t filter = 0;
+            uint32_t levels = 1;
+            bool shadow = false;
+        } sampler;
     } texture[16];
     uint32_t texture_mask = 0;
     /* Values the RSX shader multiplies its texture coordinates by; part of the
@@ -113,6 +157,11 @@ struct DrawInputs {
      * separate from the colour one exactly as the factors are. */
     uint32_t equation_alpha = 0;
     uint32_t write_mask = 0xF;
+    /* The RSX blend constant (BLEND_COLOR), as the four floats the Vulkan path
+     * passes to vkCmdSetBlendConstants. The mirror had no way to set it, so a
+     * draw using CONSTANT_COLOR / CONSTANT_ALPHA blended against a default of
+     * (0,0,0,0) with no error and no log line. */
+    float blend_constant[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     uint32_t cull = 0;           /* WGPUCullMode */
     bool front_face_cw = false;
     uint32_t stencil_mask = 0;

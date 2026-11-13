@@ -1688,6 +1688,19 @@ VkSampler sampler_slow(const TextureRegs& t, uint32_t levels, bool shadow) {
         g_samplers[key] = oit->second;
         return oit->second;
     }
+    {
+        /* Ground truth for the WebGPU mirror: the Vulkan sampler fields this
+         * exact register set produces. The mirror derives its own from the same
+         * registers; printing both lets the two be compared field by field
+         * instead of inferred from the picture. */
+        static uint64_t logged = 0;
+        if (logged++ < 32) {
+            LOG_INFO("vksampler",
+                     "addr 0x%x c0 0x%x filt 0x%x levels %u shadow %d -> mag %d min %d mip %d wrap %d/%d/%d lod %.3f..%.3f bias %.3f aniso %u",
+                     t.address, t.control0, t.filter, levels, int(shadow), int(si.magFilter), int(si.minFilter), int(si.mipmapMode), int(si.addressModeU), int(si.addressModeV),
+                     int(si.addressModeW), double(si.minLod), double(si.maxLod), double(si.mipLodBias), unsigned(si.maxAnisotropy));
+        }
+    }
     VkSampler s = VK_NULL_HANDLE;
     if (vkCreateSampler(vk().device, &si, nullptr, &s) != VK_SUCCESS || !s) {
         static bool warned = false;
@@ -3821,6 +3834,57 @@ bool draw() {
             win.texture[tu].mapping[1] = int(m.g);
             win.texture[tu].mapping[2] = int(m.b);
             win.texture[tu].mapping[3] = int(m.a);
+            /* The unit's sampler REGISTERS, the same four the Vulkan path feeds
+             * to sampler_slow(). They travel as registers rather than as a
+             * VkSampler or as converted WebGPU enums: the RSX -> WebGPU table is
+             * the backend's job, and passing a converted value would be reading
+             * a Vulkan enum again -- the trap that produced the wrong blend
+             * factors. The mip count clamps the LOD range exactly as the Vulkan
+             * sampler does. */
+            {
+                const TextureRegs tr = texture_regs(tu);
+                win.texture[tu].sampler.address = tr.address;
+                win.texture[tu].sampler.control0 = tr.control0;
+                win.texture[tu].sampler.filter = tr.filter;
+                win.texture[tu].sampler.levels = ht->layout.levels;
+                /* The same shadow rule fp_key() uses: a depth format with a
+                 * non-trivial compare class. It is not on FpEntry, so it is
+                 * evaluated here from the registers the sampler is built from. */
+                {
+                    const uint32_t tcode = ((tr.format >> 8) & 0xFF) & ~0x60u;
+                    const uint32_t tzf = (tr.address >> 28) & 7;
+                    win.texture[tu].sampler.shadow = tcode >= 0x90 && tcode <= 0x93 && tzf != 0 && tzf != 7;
+                }
+            }
+            /* The decoded MIP CHAIN, level by level with the byte offset and the
+             * dimensions the decoder wrote. Level 0 is region 0 (layer 0); the
+             * Vulkan path copies each region separately, so the offsets are the
+             * decoder's own and not something re-derived here. Without this the
+             * mirror could only offer level 0 while the RSX sampler asked for
+             * up to level 10. */
+            {
+                win.texture[tu].mip_count = 0;
+                for (const TextureRegion& rg : ht->layout.regions) {
+                    if (rg.layer != 0) continue;   /* the mirror binds 2D/1D only */
+                    if (win.texture[tu].mip_count >= 16) break;
+                    auto& mr = win.texture[tu].mips[win.texture[tu].mip_count++];
+                    mr.level = rg.level;
+                    mr.offset = rg.offset;
+                    mr.width = rg.width;
+                    mr.height = rg.height;
+                }
+                static uint64_t mn = 0;
+                if (mn++ < 8) {
+                    std::string chain;
+                    for (uint32_t k = 0; k < win.texture[tu].mip_count; k++) {
+                        char b[48];
+                        std::snprintf(b, sizeof b, " %ux%u@%llu", win.texture[tu].mips[k].width, win.texture[tu].mips[k].height,
+                                      (unsigned long long)win.texture[tu].mips[k].offset);
+                        chain += b;
+                    }
+                    LOG_INFO("wgpu", "mirror tex unit %u mip chain (%u levels, %zu decoded bytes):%s", tu, win.texture[tu].mip_count, ht->host_pixels.size(), chain.c_str());
+                }
+            }
             win.texture_mask |= (1u << tu);
         }
         win.color_format = uint32_t(wgpu::format_for(colors.empty() ? VK_FORMAT_UNDEFINED : colors[0]->format));
@@ -3838,6 +3902,16 @@ bool draw() {
         win.dfactor_alpha = uint32_t(wgpu::blend_for(int(blend_factor(k.dfactor >> 16))));
         win.equation = uint32_t(wgpu::equation_for(int(blend_op(k.equation & 0xFFFF))));
         win.equation_alpha = uint32_t(wgpu::equation_for(int(blend_op(k.equation >> 16))));
+        /* The blend constant, in the same order the Vulkan path passes it to
+         * vkCmdSetBlendConstants. Without it the mirror had no constant to
+         * blend against. */
+        {
+            const uint32_t bc = R(BLEND_COLOR);
+            win.blend_constant[0] = ((bc >> 16) & 0xFF) / 255.0f;
+            win.blend_constant[1] = ((bc >> 8) & 0xFF) / 255.0f;
+            win.blend_constant[2] = (bc & 0xFF) / 255.0f;
+            win.blend_constant[3] = ((bc >> 24) & 0xFF) / 255.0f;
+        }
         win.write_mask = k.write_masks & 0xF;
         win.cull = uint32_t(wgpu::cull_for(cull));
         win.front_face_cw = cw;
