@@ -98,7 +98,16 @@ SPU_INLINE double trunc_to_double(float f) { return static_cast<double>(f); }
 #else
 struct RoundGuard {
     unsigned old;
-    RoundGuard() : old(_mm_getcsr()) { _mm_setcsr((old & ~0x6000u) & ~0x8040u); }
+    /* MXCSR bits 13-14 are the rounding control: 00 nearest, 11 toward zero.
+     * The console truncates (RPCS3 SPUThread.cpp:1491 does
+     * std::fesetround(FE_TOWARDZERO) for the whole thread), so those bits must
+     * be SET. Clearing them -- as this line did until now -- selects
+     * round-to-nearest, the opposite of the comment above, and every double op
+     * plus FRDS/FESD inherited the wrong answer. Measured: DFA of
+     * 1.0 + 0.625 ulp gave 3ff0000000000001 here and 3ff0000000000000 on the
+     * console. Bits 15 and 7 (FTZ, DAZ) are cleared because the SPU does not
+     * flush denormals. */
+    RoundGuard() : old(_mm_getcsr()) { _mm_setcsr((old | 0x6000u) & ~0x8040u); }
     ~RoundGuard() { _mm_setcsr(old); }
 };
 SPU_INLINE float trunc_to_float(double d) { return static_cast<float>(d); }
