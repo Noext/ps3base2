@@ -174,11 +174,16 @@ EOF
 # burns every core and lowers the flips of the run being judged, and a leftover
 # client would show up in the recording as a second window.
 clear_strays() {
+    # Never kill this script's own children: a driver that hard-linked the binary
+    # to another name was the only way round the old rule.
     for p in /proc/[0-9]*; do
         c=$(tr "\0" " " < "$p/cmdline" 2>/dev/null) || continue
         case "$c" in
             *ps3base*--no-launcher*)
-                [ "$(cat "$p/comm" 2>/dev/null)" != "tmux: server" ] && kill -9 "${p#/proc/}" 2>/dev/null
+                [ "$(cat "$p/comm" 2>/dev/null)" = "tmux: server" ] && continue
+                ppid=$(awk '/^PPid:/{print $2}' "$p/status" 2>/dev/null)
+                [ "$ppid" = "$$" ] && continue
+                kill -9 "${p#/proc/}" 2>/dev/null
                 ;;
         esac
     done 2>/dev/null
@@ -220,7 +225,7 @@ run_game() {
         sleep 2
     fi
 
-    ( cd "$rg_runroot" && PS3BASE_DISC_DIR="$rg_disc" PS3BASE_LOG=info DISPLAY="$DISPLAY_NUM" \
+    ( cd "$rg_runroot" && GOWA_FLASH_DIR="${GOWA_FLASH_DIR:-/root/Dev/devflash-out/dev_flash}" PS3BASE_DISC_DIR="$rg_disc" PS3BASE_LOG=info DISPLAY="$DISPLAY_NUM" \
       XDG_RUNTIME_DIR="/run/user/$(id -u)" \
           timeout "$SECONDS_PER_GAME" "$rg_bin" --no-launcher ) >"$rg_log" 2>&1
     rg_code=$?
