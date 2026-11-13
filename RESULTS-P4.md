@@ -295,3 +295,45 @@ Verified end to end, run /tmp/p4tool2 (the committed tool, unmodified):
 The WARNING frame from that run is committed as
 docs/evidence/rdr-p4-warning-tool.png -- produced by the committed tool, so the
 evidence and the tool cannot drift apart.
+### M9 -- tools/regress.sh cannot ever see the ALERT: it never sets GOWA_FLASH_DIR
+
+Found while checking the tree's own regression path. The A/B, same binary, same
+display, same minute, only the variable differing.
+
+The rdr arm's environment, verbatim from tools/regress.sh:222-225:
+
+    ( cd "$rg_runroot" && PS3BASE_DISC_DIR="$rg_disc" PS3BASE_LOG=info DISPLAY="$DISPLAY_NUM" \
+      XDG_RUNTIME_DIR="/run/user/$(id -u)" \
+          timeout "$SECONDS_PER_GAME" "$rg_bin" --no-launcher ) >"$rg_log" 2>&1
+
+    $ grep -n 'GOWA_FLASH_DIR|PS3BASE_VFS_DIR' tools/regress.sh
+    (nothing)
+
+Measured, back to back on :145, 70 s budget each:
+
+    arm                  flips  exit  flashMP3.pic
+    no GOWA_FLASH_DIR      661    12   ENOENT -> SPURS aborted at 29.31 s
+    GOWA_FLASH_DIR set     781   124   open flags 0x00 -> fd 6, no abort
+
+    $ grep -a 'flashMP3' ab-nf.log
+    W  3.275855 fs: open '/dev_flash/sys/external/flashMP3.pic' -> ENOENT (host '/root/.config/rpcs3/dev_flash/sys/external/flashMP3.pic')
+    I 29.310876 tty: [0] The SPURS is aborted.
+
+    $ grep -a 'flashMP3' ab-f.log
+    I  4.802037 fs: open '/dev_flash/sys/external/flashMP3.pic' flags 00 -> 6
+
+So the rdr regression bar (screen=ALERT) is unachievable from tools/regress.sh as
+it stands: without the flash tree the title SPURS-aborts at 29 s, before it can draw
+anything past the logo. The current regress output in
+/tmp/out-V/regress-rdr-current.out shows exactly this: rdr arms at flips=601/541/
+481/601 with 'miss: ... 23 OCR'd' on every screen attempt.
+
+That is a defect in the harness, not in the runtime, and it is why the ALERT was
+believed unreachable from regression while it is plainly reachable under the
+driver. The fix is one variable in the arm's environment:
+
+    GOWA_FLASH_DIR=/root/Dev/devflash-out/dev_flash
+
+I am NOT changing tools/regress.sh: it is shared by every agent's merge check and a
+silent edit by me would change what everybody's PASS means. Left as a named finding
+for the lead to assign.
