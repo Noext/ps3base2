@@ -33,10 +33,16 @@ The numbers below are read by `tools/regress.sh`, one line per game, as
                 # Measured 2026-11-12 at a 120 s budget: reference 5401,
                 # candidate 5821, back to back, both alive, 0 crashes.
 
-    rdr         flips=500 screen=PressSTART screen_attempts=6 metric=screen
+    rdr         flips=1000 screen=ALERT screen_attempts=6 metric=screen
                 # The TITLE SCREEN: RED DEAD REDEMPTION with "Press START" on
                 # black, drawn from the title's own assets. Measured 2026-11-12:
                 # 601 flips, title at ~22 s, SPURS abort at ~23.4 s.
+                # 2026-11-13: the bar is now the game's own ALERT screen,
+                # not the title. Two fixes together (a real dev_flash tree and
+                # the RoundGuard rounding mode) took RDR from 601 flips and a
+                # SPURS abort at 23 s to 1321 flips, zero refusals, zero abort,
+                # and the save prompt: "A Red Dead Redemption single player save
+                # could not be found". The marker is the word ALERT.
                 # The marker is written without its space because this file is
                 # parsed by whitespace; the comparison drops whitespace from
                 # both sides, so "PressSTART" matches the screen's "Press START".
