@@ -100,7 +100,22 @@ struct DisplayBuffer {
 DisplayBuffer g_display[8];
 }  // namespace
 
-bool enabled() { return false; }
+/* TRUE, and this is the one place a "yes" does not pretend Vulkan works.
+ *
+ * gpu::enabled() is read by the RENDERER as "may I run a frame?" in two places
+ * that gate the whole decode path:
+ *   rsx_renderer.cpp:4386  method() returns immediately -- abandoning every RSX
+ *                          register write, including BEGIN_END and its draw()
+ *   rsx_renderer.cpp:4519  present() returns before end_pass()
+ * Measured with false: 700 009 method() calls, 62 679 BEGIN_END pairs, and
+ * enabled()==false on all 700 009 of them, so draws stayed 0 and not one pixel of
+ * state was decoded. This is exactly the "nothing is drawn" that must not be
+ * confused with "nothing is decoded".
+ *
+ * With true, the decode path runs to completion; present_image() is the null stub,
+ * so no Vulkan submission happens and nothing is displayed. What the true answer
+ * buys is the decode itself, which is the half the web port needs. */
+bool enabled() { return true; }
 void flip(uint32_t) {}
 void set_display_buffer(uint32_t id, uint32_t offset, uint32_t pitch, uint32_t width, uint32_t height) {
     if (id >= 8) return;

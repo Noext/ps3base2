@@ -171,3 +171,80 @@ Le module boote et flippe dans Chromium avec le VRAI renderer lie :
 $ grep -oE 'rsx: flip [0-9]+' /tmp/R3-probe/rend3.log | tail -1
 rsx: flip 241
 ```
+
+---
+
+## 5. Le chemin de decode s'execute, et ses trois murs mesures
+
+Le renderer lie ne suffisait pas : `draw()` etait appele 72 775 fois et **skippait 72 775 fois**.
+Chaque mur a ete nomme par mesure, pas par lecture.
+
+### 5.1 Mur 1 — `gpu::enabled()` faux : le decode n'etait jamais atteint
+
+Instrumentation (exportee, `r3_n_method_get` / `r3_n_enabled_false_get`) :
+
+```
+{"n_method":700009, "n_begin":62679, "n_end":62679, "n_ef":700009, "draws":0}
+```
+
+**700 009 appels a `method()`, et `enabled()` faux sur les 700 009.** `rsx_renderer.cpp:4386`
+retourne immediatement quand `enabled()` est faux, donc aucun `BEGIN_END` n'atteint `draw()`, et
+aucun etat RSX n'est decode. `gpu::enabled()` n'etait pas la fonction que je croyais patcher :
+`gpu_wasm_support.cpp` en definit trois (`edge_compute::`, `mv::`, `gpu::`), et mon premier patch
+etait tombe sur `edge_compute::enabled()`.
+
+Apres correction : `n_ef=0`. C'est le seul "oui" du fichier qui ne simule pas Vulkan, parce que
+cette fonction ne dit pas "le GPU marche", elle dit "tu peux executer une frame" — et `present_image()`
+reste nul, donc rien n'est dessine.
+
+### 5.2 Mur 2 — 72 775 draws, tous skippes a la ligne 3043 : pas de shader
+
+```
+skip":"3043:72775", "nlines":1, "skipped":72775, "draws":0
+```
+
+`rsx_renderer.cpp:3043` est `if (!vp || !vp->ok) return skip(__LINE__)`. Le programme de vertex
+n'a pas de module : `compile_glsl` appelle glslang, qui n'a **pas de build wasm ici**. C'est
+exactement ce que la piste H3 a resolu autrement : `runtime/src/gpu/wgsl_emit.cpp`, emetteur
+RSX -> WGSL direct (11/11 programmes reels valides par naga et par Chromium).
+
+Les deux sites d'emission sont ceux ou les entrees sont encore vivantes :
+- vertex : `vertex_program()`, ou `g_vp_canon`/`g_vp_canon_start` sont en portee ;
+- fragment : `fragment_program()`, ou `read` et `key` sont en portee.
+
+Premier resultat de ce cablage — les shaders du LOGO apparaissent, avec les hash de K2 :
+
+```
+I 10.095145 rsx: vertex program fd4be450bbeda1e5 start 9: queued (1 seen, 1 failures)
+I 10.110155 rsx: fragment program 6081aed9d403e4d2 at 0x5c850680 (7 slots, 0 literals): ok (1 seen, 1 failures)
+```
+
+`6081aed9d403e4d2` et `fd4be450bbeda1e5` sont exactement les hash du logo mesures par K2
+(`docs/explore/K2/RESULTS.md`, tableau sec. 5). Le FP sort **ok**.
+
+### 5.3 Mur 3 — debordement de pile : 64 Ko par defaut, et l'emetteur en demande plus
+
+Avec l'emission vertex active : `RuntimeError: memory access out of bounds`, module mort.
+La pile Emscripten par defaut est **64 Ko** (`settings.js:113  var STACK_SIZE = 64*1024`).
+
+A/B mesure, meme build, meme disque, seule difference `-sSTACK_SIZE` :
+
+| config | resultat |
+|---|---|
+| `-sSTACK_SIZE=8388608` (8 Mo), emission vertex ACTIVE | `draws=43`, `skipped=61`, `skip":""`, **0 crash** |
+| meme build, emission vertex desactivee (`A/B: emit off`) | 601 flips, 0 crash |
+| `-sSTACK_SIZE=33554432`, emission ACTIVE | pas de crash, mais le run n'atteint pas la boucle (25 s bloque `pc=0x30004da8`) |
+
+**Le passage de 0 a 43 draws est le resultat de ce tour** : avant le cablage WGSL, `draws=0` et
+72 775 skips sur la ligne 3043 ; apres, `draws=43`, `skipped=61`, et la liste des raisons de skip
+est **vide** — le decode va au bout de `draw()`.
+
+### 5.4 Ce qui n'est PAS fait, et pourquoi (nomme, pas maquille)
+
+1. **Aucune image du jeu n'est capturee.** Le critere de l'enonce n'est pas atteint. Le chemin
+   de donnees existe (anneau H4 : 923 enregistrements, 26 draws, 85 textures) et le decode tourne
+   (`draws=43`), mais **la page ne rejoue rien encore** : il n'y a pas de consommateur WebGPU cote
+   page qui reconstruise les draws depuis l'anneau.
+2. Le run s'arrete a t=10 s sur `Aborted()` dans le thread audio `MSSAsync` (0x1000007), pas dans
+   le rendu. C'est une limite independante a nommer.
+3. `refused=2621` a l'anneau : 16 Mo ne suffisent pas ; il faut drainer par frame cote page.
