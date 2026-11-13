@@ -113,3 +113,46 @@ r13=0x10007060 lies inside block index (0x10006f84..0x100073f7). Unused gap for
 thread 0, live storage for thread 25 - which is exactly RPCS3's layout
 (sys_ppu_thread_.cpp:79-90: s_tls_area of 0x40000, s_tls_size=memsz+0x30,
 TP=block+0x7000+0x30) and is only safe while nothing reads the gap.
+## M6. The two ps3recomp issues named in the brief, checked against their source
+The brief asks for a comparison against ps3recomp #253 and #68. Read from the
+reference tree (/root/Dev/soyjxck-ps3recomp):
+
+  CHANGELOG.md:50  "Loader, from *@undecuple*: TLS blocks sized by the TLS image
+                    (#253), a per-coroutine indirect-call depth guard (#270),
+                    and thread-locals that stay thread-local under MinGW (#271)."
+
+  #253 IS the relevant one, and it is exactly the rule this title exercises:
+  one block per thread, sized from the TLS image (memsz), plus a 0x30 system
+  area. That is the layout measured in M1/M2 above.
+
+  #68 is NOT about TLS. CHANGELOG.md:631 reads
+    "**`lmw`/`stmw`** (#68), **`mulldo`** overflow form (#70) ..."
+  It is a PPU instruction-implementation item, nothing to do with thread-local
+  storage. There is no "reused block not reinitialised" issue under that number.
+  Checked every other TLS mention in the reference: CHANGELOG.md:809 is the
+  MinGW `__declspec(thread)` mismatch (#271's theme), docs/TOOLS.md:258 is a
+  lifter trampoline TLS declaration, docs/SYSCALLS.md:581 is the guest address
+  band "0x0F000000-0x0F100000 TLS allocation region". None of them is a
+  reuse-without-reinit defect.
+
+  So the brief's two candidate diagnoses are answered as:
+    #253-shaped (block sizing / N threads): REAL and present; quantified in M5
+        and in the boundary measurement below -- 33 threads fit, not 229.
+    #68-shaped (reused block not reinitialised): NOT a known ps3recomp issue,
+        and not observed here: see the census.
+
+## M7. Region boundary: this title fits 33 thread points, RPCS3 fits 229
+Guest allocated its TLS region with one call (gowa-runG.log:21,
+sys_memory_allocate(0x10000 flags 0x200) -> 0x10000000), i.e. 0x10000 bytes.
+With stride 0x474 and TP bias 0x7030:
+
+    block i's thread pointer is inside the region iff
+        0x10000030 + i*0x474 + 0x7030 < 0x10010000
+    => i <= 32  (i=33 would put TP at 0x10010354, past the end)
+    0x10000 region  -> 33 thread points
+    0x40000 region  (RPCS3, sys_ppu_thread_.cpp:79) -> 229 thread points
+
+33 is exactly the number of PPU threads this title creates before the crash
+(main_thread 0x1000000 + guest threads 0x1000008..0x1000020 = 33). So the last
+threads created have thread pointers at or past the end of the region -- the
+#253 shape, not the #68 shape.
