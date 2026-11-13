@@ -20,6 +20,19 @@
 <div id="stage">
   <canvas id="canvas" width="1280" height="720"></canvas>
   <div id="bar">starting&hellip;</div>
+  <script>
+    /* ?nolog=1 hides the DOM overlay so a compositor screenshot shows ONLY the
+     * canvas. The overlay is the reason a 2000-colour screenshot was mistaken for
+     * the game once: it is monospace text on black, and it composites over the
+     * canvas area. This switch makes "is the canvas drawing" answerable from a
+     * screenshot instead of only from a GPU readback. */
+    if (location.search.indexOf('nolog=1') >= 0) {
+      document.addEventListener('DOMContentLoaded', function () {
+        var l = document.getElementById('log'); if (l) l.style.display = 'none';
+        var b = document.getElementById('bar'); if (b) b.style.display = 'none';
+      });
+    }
+  </script>
   <div id="log"></div>
 </div>
 <script type="module">
@@ -58,6 +71,11 @@ const canvas = document.getElementById('canvas');
  * this canvas (measured: "s1: canvas has no webgpu context" on every run, while the
  * same call from the page's thread returns a context immediately). Taking it here
  * means the bridge's getContext() returns the SAME object instead of failing. */
+/* The binary fingerprint every capture carries. The harness overwrites it with the
+ * md5 of the module it actually served, so a shot can never be attributed to a
+ * build it did not come from. */
+window.__T1_WASM_MD5 = window.__T1_WASM_MD5 || 'pending';
+
 const canvasCtx = canvas.getContext('webgpu');
 console.log('page: canvas webgpu context ' + (canvasCtx ? 'acquired' : 'UNAVAILABLE'));
 
@@ -217,6 +235,10 @@ async function main() {
       replayTicks++;
       replayPopped += n;
       const now = performance.now();
+      /* THE CAPTURE, in the same callback and immediately after the replay, before
+       * any new getCurrentTexture() invalidates the frame. toBlob() encodes exactly
+       * the canvas the browser is about to composite. */
+      takeShot(now);
       if (now - replayLastLog > 2000) {
         replayLastLog = now;
         console.log('T1REPLAY ticks=' + replayTicks + ' popped=' + stat(0) +
@@ -246,62 +268,48 @@ async function main() {
   requestAnimationFrame(replayTick);
 
   /* ==================================================================
-   * CANVAS READBACK, OWNED BY THE PAGE.
+   * CAPTURE: canvas.toBlob() right after the replay, in the same rAF callback.
    *
-   * tools/x-capture.mjs reads the canvas through window.__x6Readback, which its
-   * --auto-hook installs. That hook bails on this page: it is injected before any
-   * page script runs, and at that moment GPUCanvasContext is still undefined, so
-   * its guard returns and no readback function is ever installed (measured: no
-   * __x6Readback in the page, "readback capture skipped").
+   * This is deliberately the simplest thing that can work. The previous attempt
+   * copied the canvas into a persistent texture inside the backend, kept a
+   * g_capture_want flag, and had the page poll for 30 animation frames; it never
+   * met (measured: "capture_now: ready 0 tex 0" while the copy had succeeded).
    *
-   * The page has the device and the context, so it can do the copy itself: render
-   * the canvas into an offscreen texture with COPY_SRC, then map it back. The
-   * canvas is configured with COPY_SRC in s1-bridge.js for exactly this.
+   * toBlob() asks the browser to encode the canvas it is about to composite, which
+   * is exactly the image on screen, and it needs no WebGPU handle at all. It is
+   * called immediately after replay_frame() -- before any new getCurrentTexture()
+   * that would invalidate the frame -- and the PNG is posted to the capture script
+   * through window.__t1Shot, which the harness installs.
    */
-  window.__x6Readback = async function () {
+  let lastShotAt = 0;
+  let shotCount = 0;
+  const SHOT_EVERY_MS = 2000;
+  const SHOT_UNTIL_MS = 60000;
+  const replayStart = performance.now();
+
+  function takeShot(now) {
+    if (now - replayStart > SHOT_UNTIL_MS) return;
+    if (now - lastShotAt < SHOT_EVERY_MS) return;
+    lastShotAt = now;
+    const idx = shotCount++;
+    const at = new Date().toISOString();
     try {
-      /* TWO-PHASE CAPTURE, because the copy must happen at the frame boundary.
-       *
-       * Reading the canvas from here does not work: getCurrentTexture() invalidates
-       * the texture the replay drew into, and after the submit the encoder is already
-       * finished (measured: 1008 draws replayed, 0 GPU errors, capture refused every
-       * time). So the page REQUESTS a capture, the backend takes it inside end_frame
-       * where the target is still valid, and the page reads the bytes back next frame. */
-      const wPtr = window.__t1CapW || (window.__t1CapW = mod._malloc ? mod._malloc(8) : 0);
-      if (!wPtr) { console.log('T1READBACK no malloc'); return null; }
-      mod._t1_replay_capture_request();
-      /* WAIT UNTIL THE COPY HAS ACTUALLY BEEN TAKEN.
-       *
-       * A fixed two-frame wait was not enough: the replay's end_frame() runs on its
-       * own animation tick, and capture_now() was being called before it -- measured:
-       * "capture_now: ready 0 tex 0 w 0 h 0" four times while "capture copied to
-       * persistent texture 1280x720" appeared later. So poll the request until the
-       * backend reports a capture ready, with a bounded number of frames. */
-      let addr = 0;
-      for (let attempt = 0; attempt < 30; attempt++) {
-        await new Promise((r) => requestAnimationFrame(r));
-        mod._t1_replay_capture_now();
-        addr = mod._t1_replay_capture(wPtr, wPtr + 4);
-        if (addr) break;
-      }
-      const heap = mod.HEAPU32;
-      const w = heap[wPtr >> 2] >>> 0;
-      const h = heap[(wPtr + 4) >> 2] >>> 0;
-      if (!addr || !w || !h) { console.log('T1READBACK capture still empty'); return null; }
-      const src = new Uint8Array(mod.HEAPU8.buffer, addr, w * h * 4);
-      const rgba = new Uint8Array(w * h * 4);
-      rgba.set(src);
-      let bin = '';
-      for (let j = 0; j < rgba.length; j += 0x8000) bin += String.fromCharCode.apply(null, rgba.subarray(j, j + 0x8000));
-      console.log('T1READBACK captured ' + w + 'x' + h + ' from the backend target');
-      return { w: w, h: h, format: 'rgba8unorm', b64: btoa(bin),
-               meta: { source: 'backend', addr: addr } };
-    } catch (e) {
-      console.log('T1READBACK ERROR ' + (e && e.message || e));
-      return null;
-    }
-  };
-  console.log('T1READBACK installed (two-phase backend capture)');
+      canvas.toBlob(function (blob) {
+        if (!blob) { console.log('T1SHOT ' + idx + ' toBlob returned null'); return; }
+        const fr = new FileReader();
+        fr.onload = function () {
+          const b64 = String(fr.result).split(',')[1] || '';
+          const meta = { idx: idx, at: at, wasm: window.__T1_WASM_MD5 || 'unknown',
+                         bytes: blob.size, w: canvas.width, h: canvas.height };
+          console.log('T1SHOT ' + idx + ' ' + at + ' wasm=' + meta.wasm +
+                      ' bytes=' + blob.size + ' ' + canvas.width + 'x' + canvas.height);
+          if (window.__t1Shot) window.__t1Shot(meta, b64);
+        };
+        fr.readAsDataURL(blob);
+      }, 'image/png');
+    } catch (e) { console.log('T1SHOT ' + idx + ' threw: ' + (e && e.message || e)); }
+  }
+
 
   window.__S1.ready = true;
   /* The renderer's OWN counters, not a narrative. g_stats.draws is the number of

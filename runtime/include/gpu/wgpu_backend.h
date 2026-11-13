@@ -224,24 +224,8 @@ void clear(uint32_t mask, const float color[4], float depth, uint32_t stencil);
  * false on failure. This is what the comparison is computed from. */
 bool capture_ppm(const std::string& path, uint32_t width, uint32_t height);
 
-/* T1 -- capture the CURRENT TARGET into a buffer the PAGE can read.
- *
- * capture_ppm() writes through std::fopen into Emscripten's MEMFS, which the page
- * cannot fetch over HTTP. This variant leaves the RGBA bytes in a static buffer and
- * returns its heap address, so the page reads them with HEAPU8. The copy is from
- * the texture the draws actually went to, not from getCurrentTexture(), which would
- * invalidate it. Returns 0 on failure. */
-uint32_t capture_rgba(uint32_t* out_width, uint32_t* out_height);
 
-/* Ask for a capture at the NEXT frame boundary, where the canvas texture is still
- * valid. The pixels are then read with capture_rgba(). Two phases because the copy
- * cannot be taken from the page: measured, it returned 0 every time after the
- * submit had already finished the encoder. */
-uint32_t capture_request();
 
-/* Take the capture NOW from the persistent copy, synchronously. Called by the
- * replay right after end_frame(), where an async map can complete. */
-uint32_t capture_now();
 
 void shutdown();
 

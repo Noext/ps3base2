@@ -46,6 +46,7 @@
 
 #if defined(__EMSCRIPTEN__)
 #include <emscripten/threading.h>
+#include <emscripten/emscripten.h>
 #endif
 
 /* The decode seam, defined beside the tables in rsx_renderer.cpp so there is ONE
@@ -311,22 +312,19 @@ void pump() {
     if (!enter("pump")) return;
     g_stats.frames++;
 
-    /* BOUNDED PER TICK. A budget of 200 000 records let one call run long enough
-     * that the browser could not answer a CDP Runtime.evaluate for 30 s -- measured:
-     * "state evaluate failed: CDP Runtime.evaluate timed out", and no capture was
-     * ever taken even though the FIFO was healthy at 102k methods/s. The replay must
-     * return the thread to the browser every frame; whatever is left stays in the
-     * ring for the next tick, and the ring is sized to hold it. */
-    /* A SMALL budget, because the main thread must stay responsive: the capture
-     * harness reaches the page through CDP Runtime.evaluate, and a replay that
-     * monopolises the thread makes that call time out -- measured: "state evaluate
-     * failed: CDP Runtime.evaluate timed out after 30 s", so no capture was ever
-     * taken. 1500 records per animation frame at 60 fps is 90k records/s, which is
-     * the same order as the producer's rate; whatever does not fit stays in the ring
-     * for the next frame. */
-    uint32_t budget = 1500;
+    /* A TIME BUDGET, not a record count.
+     *
+     * A count cannot hold a frame rate: the cost of one record varies by two orders
+     * of magnitude (a state batch is a memcpy, a texture is a full decode), so 1 500
+     * records could be 1 ms or 40 ms. Measured with a count budget: the ring sat at
+     * 100% (peak 16 776 688 / 16 777 216) and popped never caught up with recs.
+     *
+     * 8 ms per animation frame leaves the browser the rest of a 16.7 ms frame to
+     * paint, answer CDP and run the capture. Whatever does not fit stays in the ring
+     * for the next frame; the loop stops on the CLOCK, not on a counter. */
+    const double deadline = emscripten_get_now() + 8.0;
     for (;;) {
-        if (!budget--) break;
+        if (emscripten_get_now() >= deadline) break;
         const uint32_t kind = rsxring::poll();
         if (!kind) break;
         const uint8_t* payload = rsxring::poll_bytes();
@@ -414,6 +412,20 @@ void pump() {
             break;
         }
         case rsxring::kFlip: {
+            /* T1 DIAGNOSTIC: once, after a few frames, read the backend's OWN target
+             * back and report how many pixels are non-black. If this is high the
+             * rendering works and only the canvas presentation is broken; if it is 0
+             * the draws themselves produce nothing. */
+            if (g_stats.flips == 30) {
+                std::vector<uint8_t> probe;
+                uint32_t pw = 0, ph = 0;
+                if (wgpu::capture_ppm("/t1probe.ppm", 0, 0)) {
+                    LOG_INFO("replay", "target readback succeeded at flip 30");
+                } else {
+                    LOG_WARN("replay", "target readback FAILED at flip 30");
+                }
+                (void)probe; (void)pw; (void)ph;
+            }
             /* The renderer flipped 1081 times in a measured run while this counter
              * stayed 0, so the flip path is instrumented: a record that arrives and
              * is refused must not look like a record that never arrived. */
@@ -421,9 +433,7 @@ void pump() {
                 LOG_INFO("replay", "kFlip arrived (record %llu)", (unsigned long long)g_stats.flips);
             wgpu::end_frame();
             g_stats.flips++;
-            /* A capture the page asked for is taken HERE, right after the submit and
-             * outside the render callback, which is where an async map can complete. */
-            if (wgpu::capture_now()) g_stats.captures++;
+
             break;
         }
         case rsxring::kDraw: {
@@ -431,6 +441,20 @@ void pump() {
             rsxring::DrawRecord d;
             std::memcpy(&d, payload, sizeof d);
             g_stats.draws_seen++;
+            /* T1 DIAGNOSTIC: the record's own numbers. Measured draws of
+             * DrawIndexed(0, 1, 0, 0, 0) with all-zero vertices mean the record
+             * carries a count of 1 and no vertex data; this names which field is
+             * empty instead of guessing. */
+            if (g_stats.draws_seen <= 8) {
+                LOG_INFO("replay", "kDraw prim %u first %u count %u indexed %u mask 0x%x idx_hash %08x vp %08x fp %08x",
+                         d.primitive, d.first, d.count, d.indexed, d.array_mask,
+                         d.index_hash, d.shader_hash[0], d.shader_hash[1]);
+                for (uint32_t i = 0; i < 4; i++)
+                    if (d.array_mask & (1u << i))
+                        LOG_INFO("replay", "  array %u fmt 0x%08x stride %u count %u len %u hash %08x",
+                                 i, d.array_format[i], d.array_stride[i], d.array_count[i],
+                                 d.array_len[i], d.array_hash[i]);
+            }
 
             wgpu::DrawInputs in;
             auto vit = g_shaders.find(d.shader_hash[0]);
@@ -472,11 +496,55 @@ void pump() {
                 in.vertex[i] = decoded[i].data();
                 if (n > vcount) vcount = n;
             }
+            /* THE INLINE VERTEX BLOCK, which is bit 31 of array_mask.
+             *
+             * An immediate-mode draw carries its vertices inline: the producer sets
+             * array_mask bit 31 and puts the block's fingerprint in array_hash[0]
+             * (rsx_ring.cpp:519-521). The loop above only walks slots 0..15, so this
+             * block was never decoded and the draw ran with the slot-0 array instead --
+             * measured: the full-screen triangle arrived as three vertices of
+             * (0,0,0,1), zero area, nothing rasterised, no error.
+             *
+             * The inline bytes are raw float4s already (the producer copies the guest's
+             * inline words verbatim), so they need no attribute decode. */
+            if (d.array_mask & 0x80000000u) {
+                auto nit = g_buffers.find(d.array_hash[0]);
+                if (nit != g_buffers.end() && nit->second.bytes.size() >= 16) {
+                    const size_t n = nit->second.bytes.size() / 16;
+                    decoded[0].assign(n * 4, 0.0f);
+                    std::memcpy(decoded[0].data(), nit->second.bytes.data(), n * 16);
+                    in.vertex[0] = decoded[0].data();
+                    if (n > vcount) vcount = uint32_t(n);
+                    if (g_stats.draws_seen <= 6)
+                        LOG_INFO("replay", "  inline block: %zu vertices, v0 %.3f %.3f %.3f %.3f",
+                                 n, decoded[0][0], decoded[0][1], decoded[0][2], decoded[0][3]);
+                } else if (g_stats.draws_seen <= 6) {
+                    LOG_WARN("replay", "  inline block MISSING for hash %08x", d.array_hash[0]);
+                }
+            }
             in.vertex_count = vcount;
+            /* T1 DIAGNOSTIC: the decoded vertices and the index count, so a
+             * degenerate draw names its own cause. Measured: DrawIndexed(0, 1, ...)
+             * with all-zero vertices, which is either an empty index block or an
+             * empty vertex stream -- and the two need different fixes. */
+            if (g_stats.draws_seen <= 6) {
+                LOG_INFO("replay", "  assembled: vcount %u index_count %u mask 0x%x",
+                         vcount, in.index_count, in.texture_mask);
+                for (uint32_t i = 0; i < 2; i++) {
+                    if (!in.vertex[i] || !vcount) continue;
+                    const float* v = in.vertex[i];
+                    LOG_INFO("replay", "    v[%u][0] %.3f %.3f %.3f %.3f  v[%u][1] %.3f %.3f %.3f %.3f",
+                             i, v[0], v[1], v[2], v[3], i, v[4], v[5], v[6], v[7]);
+                }
+            }
 
             std::vector<uint32_t> indices;
             if (d.indexed && d.index_hash) {
                 auto iit = g_buffers.find(d.index_hash);
+                if (g_stats.draws_seen <= 6)
+                    LOG_INFO("replay", "  index lookup %08x -> %s (%zu buffers, size %zu)",
+                             d.index_hash, iit == g_buffers.end() ? "MISSING" : "found",
+                             g_buffers.size(), iit == g_buffers.end() ? size_t(0) : iit->second.bytes.size());
                 if (iit != g_buffers.end() && iit->second.bytes.size() >= 2) {
                     const size_t n = iit->second.bytes.size() / 2;
                     indices.resize(n);
@@ -524,6 +592,9 @@ void pump() {
             in.scissor[2] = int32_t(g_target_width);
             in.scissor[3] = int32_t(g_target_height);
 
+            if (g_stats.draws_ready <= 6)
+                LOG_INFO("replay", "  -> wgpu::draw index_count %u vertex_count %u indices %p",
+                         in.index_count, in.vertex_count, (const void*)in.indices);
             wgpu::draw(in);
             g_stats.draws_ready++;
             break;

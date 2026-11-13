@@ -26,6 +26,7 @@
 namespace lv2 {
 uint32_t rsx_io_to_ea(uint32_t io);
 uint32_t rsx_io_base();
+uint32_t rsx_address(uint32_t offset, uint32_t location);
 }
 
 namespace gpu {
@@ -121,6 +122,11 @@ void install_runtime_hooks() {
     hooks.io_to_ea = hook_io_to_ea;
     hooks.guest_ptr = hook_guest_ptr;
     hooks.describe_texture = hook_describe_texture;
+    /* The renderer's own translation, so a vertex array resolves the same way in the
+     * producer as it does in the draw. */
+    hooks.rsx_address = [](uint32_t offset, uint32_t location) {
+        return ::lv2::rsx_address(offset, location);
+    };
     install(hooks);
     /* The in-process measurement consumer stays OFF here: a page build must leave
      * the records for the page. A measurement build turns it on with

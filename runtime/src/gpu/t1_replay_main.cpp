@@ -99,31 +99,7 @@ uint32_t t1_replay_adopt(uint32_t width, uint32_t height) {
     return gpu::replay::adopt_device(dev, 0, width, height) ? 1u : 0u;
 }
 
-/* CAPTURE THE CANVAS FROM THE BACKEND'S OWN TARGET.
- *
- * The page cannot do this reliably: its readback calls getCurrentTexture(), which
- * INVALIDATES the texture the replay drew into, so it always copies a fresh, empty
- * one -- measured: 1093 draws replayed, 0 GPU errors, readback of exactly one
- * colour. The backend holds g.color, the texture the draws actually went to.
- *
- * Returns the heap address of the RGBA bytes (0 on failure); width and height come
- * back through the two out parameters. The page reads them with HEAPU8. */
-uint32_t t1_replay_capture(uint32_t* out_width, uint32_t* out_height) {
-    return gpu::wgpu::capture_rgba(out_width, out_height);
-}
 
-/* Ask for a capture at the next frame boundary. Returns 1 when pixels from a
- * previous request are already available. The page calls this, waits a frame, then
- * calls t1_replay_capture() to read them. */
-/* Take the capture now, synchronously. The page calls this AFTER the request has
- * been served at a frame boundary. */
-uint32_t t1_replay_capture_now(void) {
-    return gpu::wgpu::capture_now();
-}
-
-uint32_t t1_replay_capture_request(void) {
-    return gpu::wgpu::capture_request();
-}
 
 /* Reset the counters, keeping popped so a rate measurement stays monotonic. */
 void t1_replay_reset(void) { gpu::replay::reset_stats(); }

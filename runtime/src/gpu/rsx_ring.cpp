@@ -344,8 +344,25 @@ uint32_t push_vertex_array(uint32_t slot, uint32_t count, DrawRecord& draw) {
     if (!size || !stride || !count) return 0;
     uint32_t len = stride * count;
     if (len > 256u * 1024u) len = 256u * 1024u;   /* one array, one cap */
-    const uint32_t io = g_array_offset[slot] + g_base_offset;
-    const uint32_t ea = g_hooks.io_to_ea ? g_hooks.io_to_ea(io) : 0;
+    /* THE SAME TRANSLATION THE RENDERER USES, and the difference was the whole
+     * geometry path.
+     *
+     * rsx_renderer.cpp:3616 resolves a vertex array as
+     *     rsx_address((VERTEX_BASE_OFFSET + (off & 0x7FFFFFFF)) & 0x0FFFFFFF, off >> 31)
+     * -- a mask to 28 bits plus the location bit. This producer instead did
+     *     io = array_offset + base_offset
+     * with no mask, so an offset of 0x04650000 arrived as io 0x04650000, which is
+     * outside the io table (it covers 0x0..0xF00000) and outside the guest map. Every
+     * array came back as a geometry miss and every draw was degenerate: measured
+     * "geometry miss: slot=0 io=0x04650000 ea=0x00000000", then
+     * "DrawIndexed(0, 1, 0, 0, 0)" with all-zero vertices.
+     *
+     * The hooks gain an rsx_address so the producer asks the runtime rather than
+     * re-deriving the rule here. */
+    const uint32_t off = g_array_offset[slot];
+    const uint32_t io = (g_base_offset + (off & 0x7FFFFFFFu)) & 0x0FFFFFFFu;
+    const uint32_t ea = g_hooks.rsx_address ? g_hooks.rsx_address(io, off >> 31)
+                       : (g_hooks.io_to_ea ? g_hooks.io_to_ea(io) : 0);
     const uint8_t* src = (ea && g_hooks.guest_ptr) ? g_hooks.guest_ptr(ea) : nullptr;
     if (!src) {
         const uint64_t n = g_c.geometry_unmapped.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -429,8 +446,11 @@ void push_index_buffer(uint32_t first, uint32_t count) {
      * block's address and 16/32-bit selector. The producer tracks both; if the
      * address is absent there is nothing to carry and the draw says so via
      * array_mask bit 16 staying clear. */
-    const uint32_t io = g_index_offset + g_base_offset;
-    const uint32_t ea = g_hooks.io_to_ea ? g_hooks.io_to_ea(io) : 0;
+    /* Same 28-bit mask and location bit as the vertex arrays above. */
+    const uint32_t ioff = g_index_offset;
+    const uint32_t io = (g_base_offset + (ioff & 0x7FFFFFFFu)) & 0x0FFFFFFFu;
+    const uint32_t ea = g_hooks.rsx_address ? g_hooks.rsx_address(io, ioff >> 31)
+                       : (g_hooks.io_to_ea ? g_hooks.io_to_ea(io) : 0);
     const uint8_t* src = (ea && g_hooks.guest_ptr) ? g_hooks.guest_ptr(ea) : nullptr;
     const uint32_t sz = g_index_16bit ? 2u : 4u;
     uint32_t len = (first + count) * sz;

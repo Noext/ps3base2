@@ -214,7 +214,16 @@ void on_device(WGPURequestDeviceStatus status, WGPUDevice device, WGPUStringView
  */
 bool poll_until(const bool& done) {
     for (int i = 0; i < 20000; i++) {
-        wgpuInstanceProcessEvents(g.instance);
+        /* THE INSTANCE IS NULL ON THE WEB PATH, and that is why every map failed.
+         *
+         * g.instance is created only in the NATIVE init(); the wasm init adopts a
+         * device the page made and never creates an instance. wgpuInstanceProcessEvents
+         * on a null instance does nothing, so the map callback never ran and readback
+         * reported "map failed" -- measured at flip 30 of a run that had replayed 59
+         * draws with 0 GPU errors. On the web the device drives its own futures through
+         * the browser's event loop, so wgpuDevicePoll is what pumps them. */
+        if (g.instance) wgpuInstanceProcessEvents(g.instance);
+        else if (g.device) wgpuDevicePoll(g.device, false, nullptr);
         if (done) return true;
         std::this_thread::sleep_for(std::chrono::microseconds(200));
     }
@@ -1359,16 +1368,6 @@ void report_at_exit() {
 std::atomic<uint32_t> g_owner_thread{0};
 std::atomic<uint64_t> g_off_thread_refused{0};
 
-/* T1: the deferred capture buffer. Filled at the frame boundary (end_frame), read
- * by the page through capture_rgba(). Declared here because end_frame writes it. */
-std::vector<uint8_t> g_capture_rgba;
-std::atomic<uint32_t> g_capture_want{0};
-std::atomic<uint32_t> g_capture_w{0};
-std::atomic<uint32_t> g_capture_h{0};
-WGPUTexture g_capture_tex = nullptr;
-uint32_t g_capture_tex_w = 0;
-uint32_t g_capture_tex_h = 0;
-std::atomic<uint32_t> g_capture_ready{0};
 
 uint32_t backend_thread_id() {
 #if defined(__EMSCRIPTEN__)
@@ -1630,8 +1629,6 @@ namespace {
  * this file own code and no RSX state, so a failure points at the backend and a
  * success points at the inputs the renderer supplies. */
 bool readback(std::vector<uint8_t>& out, uint32_t& width, uint32_t& height);
-uint32_t capture_rgba(uint32_t* out_width, uint32_t* out_height);
-
 /* The known-good pipeline: a full-screen triangle, no bindings, no depth. Shared
  * by the start-up self test and by PS3BASE_WGPU_PROBE_MAIN, which draws it
  * through the MAIN pass so the pass machinery can be judged on its own. */
@@ -2193,9 +2190,26 @@ void draw(const DrawInputs& in) {
         wgpuRenderPassEncoderSetBlendConstant(g.pass, &bc);
     }
 
-    wgpuRenderPassEncoderDrawIndexed(g.pass, in.index_count, 1, 0, in.base_vertex, 0);
+    /* INDEXED OR NOT, decided by the record -- and getting this wrong rendered
+     * NOTHING for the most important draw on screen.
+     *
+     * This always called DrawIndexed. A non-indexed draw carries no index block, so
+     * index_count was 0 and the call became DrawIndexed(0, 1, ...): zero indices,
+     * zero primitives, no error, no pixel. Measured on the logo frame: the draws
+     * alternated between "index_count 0 vertex_count 3" (a full-screen triangle,
+     * NON-indexed) and "index_count 38 vertex_count 38" (indexed). The 3-vertex one
+     * is the one that covers the screen, and it was the one being dropped.
+     *
+     * in.indices being null is the signal: the replay sets it only when the record
+     * was indexed AND its index block was in the store. */
     static uint64_t issued = 0;
-    if (issued++ < 3) std::fprintf(stderr, "wgpu: issued DrawIndexed(%u, 1, 0, %d, 0)\n", in.index_count, in.base_vertex);
+    if (in.indices && in.index_count) {
+        wgpuRenderPassEncoderDrawIndexed(g.pass, in.index_count, 1, 0, in.base_vertex, 0);
+        if (issued++ < 6) std::fprintf(stderr, "wgpu: issued DrawIndexed(%u, 1, 0, %d, 0)\n", in.index_count, in.base_vertex);
+    } else {
+        wgpuRenderPassEncoderDraw(g.pass, in.vertex_count, 1, 0, 0);
+        if (issued++ < 6) std::fprintf(stderr, "wgpu: issued Draw(%u, 1, 0, 0)\n", in.vertex_count);
+    }
     s.draws++;
     s.last_fp = in.fp_hash;
     s.last_mask = in.texture_mask;
@@ -2370,59 +2384,6 @@ void end_frame() {
          * re-clear the canvas to black, so it is skipped. */
         return;
     }
-    /* A capture requested by the page is taken HERE: this is the last moment the
-     * canvas texture this frame drew into is still valid. Doing it from the page
-     * after the submit returned 0 every time (measured), because the encoder was
-     * already finished and the view released. */
-    /* A capture requested by the page is SERVED HERE: this is the last moment the
-     * canvas texture this frame drew into is still valid, so the pixels are copied
-     * into a PERSISTENT texture. The page then copies and maps THAT, outside the
-     * frame, where an async map can actually complete.
-     *
-     * Why not map here: measured, the map never completed inside the frame callback
-     * ("capture requested, encoder 1 color 0xb39f07d8" then "capture still empty"),
-     * because wgpuBufferMapAsync needs the event loop to run and this is the render
-     * callback. A copy is synchronous; the map is not. */
-    if (g_capture_want.exchange(0, std::memory_order_acq_rel)) {
-        const uint32_t w = g.width, h = g.height;
-        if (!g_capture_tex || g_capture_tex_w != w || g_capture_tex_h != h) {
-            if (g_capture_tex) wgpuTextureRelease(g_capture_tex);
-            WGPUTextureDescriptor td = WGPU_TEXTURE_DESCRIPTOR_INIT;
-            td.usage = WGPUTextureUsage_CopyDst | WGPUTextureUsage_CopySrc;
-            td.dimension = WGPUTextureDimension_2D;
-            td.size = {w, h, 1};
-            td.format = g.color_format;
-            td.mipLevelCount = 1;
-            td.sampleCount = 1;
-            g_capture_tex = wgpuDeviceCreateTexture(g.device, &td);
-            g_capture_tex_w = w;
-            g_capture_tex_h = h;
-        }
-        if (g_capture_tex && g.color) {
-            WGPUCommandEncoder ce = wgpuDeviceCreateCommandEncoder(g.device, nullptr);
-            if (ce) {
-                WGPUTexelCopyTextureInfo src = WGPU_TEXEL_COPY_TEXTURE_INFO_INIT;
-                src.texture = g.color;
-                src.mipLevel = 0;
-                src.aspect = WGPUTextureAspect_All;
-                WGPUTexelCopyTextureInfo dst = WGPU_TEXEL_COPY_TEXTURE_INFO_INIT;
-                dst.texture = g_capture_tex;
-                dst.mipLevel = 0;
-                dst.aspect = WGPUTextureAspect_All;
-                WGPUExtent3D sz = {w, h, 1};
-                wgpuCommandEncoderCopyTextureToTexture(ce, &src, &dst, &sz);
-                WGPUCommandBuffer ccb = wgpuCommandEncoderFinish(ce, nullptr);
-                if (ccb) { wgpuQueueSubmit(g.queue, 1, &ccb); wgpuCommandBufferRelease(ccb); }
-                wgpuCommandEncoderRelease(ce);
-                g_capture_w.store(w, std::memory_order_release);
-                g_capture_h.store(h, std::memory_order_release);
-                g_capture_ready.store(1, std::memory_order_release);
-                static uint32_t nrep = 0;
-                if (nrep++ < 3) std::fprintf(stderr, "wgpu: capture copied to persistent texture %ux%u\n", w, h);
-
-            }
-        }
-    }
     WGPUCommandBuffer cb = wgpuCommandEncoderFinish(g.encoder, nullptr);
     wgpuCommandEncoderRelease(g.encoder);
     g.encoder = nullptr;
@@ -2482,127 +2443,8 @@ void end_frame() {
 /* Take the capture NOW, synchronously, from the persistent texture. Called by the
  * replay immediately after end_frame(), on the main thread, outside the render
  * callback -- which is where an async map can actually complete. */
-uint32_t capture_now() {
-    /* Guard on g_capture_ready, NOT on the width: end_frame() sets ready only after
-     * the copy into the persistent texture succeeded, and the width is written in the
-     * same block. Guarding on the width first meant the check ran before the copy and
-     * always saw 0 -- measured: the page reported "capture still empty" on every
-     * attempt while end_frame was in fact copying. */
-    {
-        static uint32_t nq = 0;
-        if (nq++ < 4)
-            std::fprintf(stderr, "wgpu: capture_now: ready %u tex %p w %u h %u\n",
-                         g_capture_ready.load(), (void*)g_capture_tex,
-                         g_capture_w.load(), g_capture_h.load());
-    }
-    if (!g_capture_ready.load(std::memory_order_acquire) || !g_capture_tex) return 0;
-    /* ONE-SHOT: the ready flag is cleared once the pixels are in the buffer, so a
-     * page that calls this repeatedly does not pay a blocking map every time --
-     * measured: the FIFO fell from 103k to 49k methods/s while the capture was
-     * re-taken on every readback attempt. */
-    const uint32_t w = g_capture_w.load(std::memory_order_acquire);
-    const uint32_t h = g_capture_h.load(std::memory_order_acquire);
-    if (!w || !h) return 0;
-    const uint64_t pitch = ((uint64_t(w) * 4) + 255) & ~255ull;
-    WGPUBufferDescriptor bd = WGPU_BUFFER_DESCRIPTOR_INIT;
-    bd.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_MapRead;
-    bd.size = pitch * h;
-    WGPUBuffer rb = wgpuDeviceCreateBuffer(g.device, &bd);
-    if (!rb) return 0;
-    WGPUCommandEncoder ce = wgpuDeviceCreateCommandEncoder(g.device, nullptr);
-    WGPUTexelCopyTextureInfo src = WGPU_TEXEL_COPY_TEXTURE_INFO_INIT;
-    src.texture = g_capture_tex;
-    src.mipLevel = 0;
-    src.aspect = WGPUTextureAspect_All;
-    WGPUTexelCopyBufferInfo dst = WGPU_TEXEL_COPY_BUFFER_INFO_INIT;
-    dst.buffer = rb;
-    dst.layout.bytesPerRow = uint32_t(pitch);
-    dst.layout.rowsPerImage = h;
-    WGPUExtent3D sz = {w, h, 1};
-    wgpuCommandEncoderCopyTextureToBuffer(ce, &src, &dst, &sz);
-    WGPUCommandBuffer ccb = wgpuCommandEncoderFinish(ce, nullptr);
-    if (ccb) { wgpuQueueSubmit(g.queue, 1, &ccb); wgpuCommandBufferRelease(ccb); }
-    wgpuCommandEncoderRelease(ce);
-    bool mapped_ok = false;
-    WGPUBufferMapCallbackInfo mci = WGPU_BUFFER_MAP_CALLBACK_INFO_INIT;
-    mci.mode = WGPUCallbackMode_AllowProcessEvents;
-    mci.callback = [](WGPUMapAsyncStatus status, WGPUStringView, void* u1, void*) {
-        *static_cast<bool*>(u1) = status == WGPUMapAsyncStatus_Success;
-    };
-    mci.userdata1 = &mapped_ok;
-    wgpuBufferMapAsync(rb, WGPUMapMode_Read, 0, bd.size, mci);
-    poll_until(mapped_ok);
-    if (!mapped_ok) { wgpuBufferRelease(rb); return 0; }
-    const uint8_t* mapped = static_cast<const uint8_t*>(wgpuBufferGetConstMappedRange(rb, 0, bd.size));
-    if (!mapped) { wgpuBufferUnmap(rb); wgpuBufferRelease(rb); return 0; }
-    g_capture_rgba.assign(size_t(w) * h * 4, 0);
-    for (uint32_t y = 0; y < h; y++)
-        std::memcpy(g_capture_rgba.data() + size_t(y) * w * 4, mapped + size_t(y) * pitch, size_t(w) * 4);
-    wgpuBufferUnmap(rb);
-    wgpuBufferRelease(rb);
-    g_capture_ready.store(0, std::memory_order_release);   /* one-shot */
-    return 1;
-}
 
-uint32_t capture_request() {
-    g_capture_want.store(1, std::memory_order_release);
-    return g_capture_rgba.empty() ? 0u : 1u;
-}
 
-uint32_t capture_rgba(uint32_t* out_width, uint32_t* out_height) {
-    /* Guard on the BUFFER, not on g_capture_ready: capture_now() clears that flag
-     * when it consumes the pixels (one-shot), so a page that calls capture_now() and
-     * then capture_rgba() -- the intended order -- found the flag already 0 and got
-     * nothing. Measured: "capture_now: ready 0" immediately after a successful copy. */
-    if (g_capture_rgba.empty()) return 0;
-    const uint32_t w = g_capture_w.load(std::memory_order_acquire);
-    const uint32_t h = g_capture_h.load(std::memory_order_acquire);
-    if (!w || !h) return 0;
-    /* Copy and map OUTSIDE the frame callback: the copy is synchronous, the map is
-     * not, and a map started inside the render callback never completed (measured:
-     * "capture requested, encoder 1" then "capture still empty"). */
-    const uint64_t pitch = ((uint64_t(w) * 4) + 255) & ~255ull;
-    WGPUBufferDescriptor bd = WGPU_BUFFER_DESCRIPTOR_INIT;
-    bd.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_MapRead;
-    bd.size = pitch * h;
-    WGPUBuffer rb = wgpuDeviceCreateBuffer(g.device, &bd);
-    if (!rb) return 0;
-    WGPUCommandEncoder ce = wgpuDeviceCreateCommandEncoder(g.device, nullptr);
-    WGPUTexelCopyTextureInfo src = WGPU_TEXEL_COPY_TEXTURE_INFO_INIT;
-    src.texture = g_capture_tex;
-    src.mipLevel = 0;
-    src.aspect = WGPUTextureAspect_All;
-    WGPUTexelCopyBufferInfo dst = WGPU_TEXEL_COPY_BUFFER_INFO_INIT;
-    dst.buffer = rb;
-    dst.layout.offset = 0;
-    dst.layout.bytesPerRow = uint32_t(pitch);
-    dst.layout.rowsPerImage = h;
-    WGPUExtent3D sz = {w, h, 1};
-    wgpuCommandEncoderCopyTextureToBuffer(ce, &src, &dst, &sz);
-    WGPUCommandBuffer ccb = wgpuCommandEncoderFinish(ce, nullptr);
-    if (ccb) { wgpuQueueSubmit(g.queue, 1, &ccb); wgpuCommandBufferRelease(ccb); }
-    wgpuCommandEncoderRelease(ce);
-    bool mapped_ok = false;
-    WGPUBufferMapCallbackInfo mci = WGPU_BUFFER_MAP_CALLBACK_INFO_INIT;
-    mci.mode = WGPUCallbackMode_AllowProcessEvents;
-    mci.callback = [](WGPUMapAsyncStatus status, WGPUStringView, void* u1, void*) {
-        *static_cast<bool*>(u1) = status == WGPUMapAsyncStatus_Success;
-    };
-    mci.userdata1 = &mapped_ok;
-    wgpuBufferMapAsync(rb, WGPUMapMode_Read, 0, bd.size, mci);
-    poll_until(mapped_ok);
-    if (!mapped_ok) { wgpuBufferRelease(rb); return 0; }
-    const uint8_t* mapped = static_cast<const uint8_t*>(wgpuBufferGetConstMappedRange(rb, 0, bd.size));
-    if (!mapped) { wgpuBufferUnmap(rb); wgpuBufferRelease(rb); return 0; }
-    g_capture_rgba.assign(size_t(w) * h * 4, 0);
-    for (uint32_t y = 0; y < h; y++)
-        std::memcpy(g_capture_rgba.data() + size_t(y) * w * 4, mapped + size_t(y) * pitch, size_t(w) * 4);
-    wgpuBufferUnmap(rb);
-    wgpuBufferRelease(rb);
-    if (out_width) *out_width = w;
-    if (out_height) *out_height = h;
-    return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_capture_rgba.data()));
-}
 
 bool capture_ppm(const std::string& path, uint32_t, uint32_t) {
     if (!g.ready) return false;

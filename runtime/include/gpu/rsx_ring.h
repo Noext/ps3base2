@@ -156,6 +156,11 @@ struct Hooks {
     uint8_t* (*guest_ptr)(uint32_t ea);   /* nullptr when unmapped */
     bool (*describe_texture)(const uint32_t regs[9], uint32_t* width, uint32_t* height,
                              uint32_t* pitch, uint32_t* src_size);
+    /* The runtime's own RSX offset -> guest EA translation, so a vertex array or
+     * index block is resolved by the SAME rule the renderer uses. Measured: without
+     * it the producer passed the raw offset (io 0x04650000) and every array was a
+     * geometry miss, which made every draw degenerate. */
+    uint32_t (*rsx_address)(uint32_t offset, uint32_t location);
 };
 void install(const Hooks& hooks);
 /* Binds the three hooks to the runtime (gcm_fifo's io table, the guest map, and
