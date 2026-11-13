@@ -1,9 +1,9 @@
 {
  "status": "running",
  "agent": "P1",
- "task": "addr2line done: fault is lifted libfiber f_360002a0_body+0xe6, not HLE; *NO NAME* only in libfiber/libsre/libspurs_jq",
- "next": "guest thread/lr + last 30 imports",
+ "task": "crash named: lifted libfiber f_360002a0+0xe6 via cellFiberPpuYield/EnterScheduler; *NO NAME* = libfiber default fiber name; last 30 imports captured",
+ "next": "commit + rebase + verify tests then done",
  "branch": "explore/p1",
  "base": "01c5e16",
- "updated": "2026-11-13T10:08:00Z"
+ "updated": "2026-11-13T11:26:00Z"
 }
