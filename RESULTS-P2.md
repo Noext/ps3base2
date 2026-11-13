@@ -229,3 +229,25 @@ r13 because the reporter prints the register, not because the fault reads it.
 This also explains why the r13 window was all zero (M4) and why that told us
 nothing: the reporter dumps the thread pointer's surroundings, and the fault is
 on a stack pointer that has nothing to do with it.
+
+## M10. The full crash stack, resolved to named functions and guest addresses
+addr2line against the same binary names every frame in the brief's dump.
+
+    host frame                                          = guest function
+    #0  ppu::ld64 (ops.h:63)  <- the fault, mov (%r14,%rcx,1) with rcx=0x10
+    #1  f_360002a0_body       libfiber_000.cpp:231-232   the fiber stack switch
+    #2  f_360033dc_body       libfiber_000.cpp:4128      libfiber
+    #3  ppu::call_indirect
+    #4  ppu::ld64             return address, ops.h:63
+    #5  f_00b57c10_body       rdr_115.cpp:17907          the title
+    #6  f_00b58368_body       rdr_115.cpp:18374          the title
+    #7  f_00b58430_body       rdr_115.cpp:18411          the title
+    #8  f_00caf26c_body       rdr_129.cpp:7327           the title
+    #9  f_36001b04_body       libfiber_000.cpp:2251      libfiber
+    #10 f_3600026c_body       libfiber_000.cpp:206       libfiber
+
+Reading the chain: title code (rdr_115/rdr_129) calls into libfiber, libfiber
+switches stacks in f_360002a0, runs a fiber body through call_indirect, and on
+return f_360002a0 reloads the saved back-chain (gpr[9] = ld64(sp+0)) and finds 0.
+The stack is the fiber's, and the missing value is the fiber's own return link.
+Thread recorded by the crash: main_thread 0x1000000.
