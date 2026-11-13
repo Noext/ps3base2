@@ -184,6 +184,44 @@ if(NOT WIN32)
     endif()
 endif()
 
+# The export coverage gate.
+#
+# A module can be in the image table -- loaded, its exports in exports[] -- and
+# still be useless, because the lifter never produced the function its export
+# descriptor points at. resolve() finds the export, the runtime loads the
+# descriptor, and the call lands on a null dispatch slot with no log line
+# connecting it to the missing lift. That is exactly how the RDR fibre crash
+# happened: cellFiber was "fully served LLE, 47/47 exports verified" while the
+# lift was incomplete.
+#
+# So the check runs at CONFIGURE time, before a single object is compiled, and
+# it FAILS the configure listing every missing export. Set
+# -DPS3BASE_EXPORT_GATE=OFF only to diagnose a tree that cannot pass it.
+option(PS3BASE_EXPORT_GATE "Fail configuration when an LLE export has no lifted function" ON)
+if(PS3BASE_EXPORT_GATE)
+    execute_process(
+        COMMAND python3 "${CMAKE_SOURCE_DIR}/tools/check_export_coverage.py"
+                "${PS3BASE_GENERATED_DIR}/table.cpp" --root "${CMAKE_SOURCE_DIR}"
+        RESULT_VARIABLE PS3BASE_EXPORT_GATE_RC
+        OUTPUT_VARIABLE PS3BASE_EXPORT_GATE_OUT
+        ERROR_VARIABLE PS3BASE_EXPORT_GATE_OUT)
+    if(NOT PS3BASE_EXPORT_GATE_RC EQUAL 0)
+        message(FATAL_ERROR
+            "Export coverage gate FAILED (tools/check_export_coverage.py).
+"
+            "Every exported function of every LLE module must have a lifted
+"
+            "function; these do not:
+
+${PS3BASE_EXPORT_GATE_OUT}
+"
+            "Re-lift with the missing addresses as seeds, or remove the module
+"
+            "from the image table. Do not silence the gate.")
+    endif()
+    message(STATUS "Export coverage gate: PASS")
+endif()
+
 file(GLOB PS3BASE_GENERATED_SOURCES CONFIGURE_DEPENDS "${PS3BASE_GENERATED_DIR}/*_[0-9][0-9][0-9].cpp")
 add_library(ps3base_ppu STATIC ${PS3BASE_GENERATED_SOURCES} "${PS3BASE_GENERATED_DIR}/table.cpp")
 target_include_directories(ps3base_ppu PRIVATE "${PS3BASE_GENERATED_DIR}")
@@ -292,6 +330,16 @@ add_test(NAME ppu_seed_forms
 # check, so it is a regression test and not a description.
 add_test(NAME ppu_run_extent_table
          COMMAND python3 "${CMAKE_SOURCE_DIR}/tests/ppu_run_extent_table.py")
+
+# export_coverage: the same gate that runs at configure time, as a test, so a
+# generated tree copied in after configuration is still checked. It is the
+# regression test for the class of bug that produced the RDR fibre crash: a
+# module reported "fully served LLE, 47/47 exports verified" while the lift was
+# incomplete. The gate is deliberately NOT a test-only check -- configure fails
+# on it -- but a test makes it visible in ctest output beside everything else.
+add_test(NAME export_coverage
+         COMMAND python3 "${CMAKE_SOURCE_DIR}/tools/check_export_coverage.py"
+                 "${PS3BASE_GENERATED_DIR}/table.cpp" --root "${CMAKE_SOURCE_DIR}")
 
 add_executable(memory_map tests/memory_map.cpp runtime/src/memory.cpp runtime/src/regions.cpp runtime/src/mem.cpp runtime/src/reservation.cpp runtime/src/codewatch.cpp runtime/src/backtrace_port.cpp runtime/src/host.cpp runtime/src/log.cpp)
 target_include_directories(memory_map PRIVATE runtime/include)

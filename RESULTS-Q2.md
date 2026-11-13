@@ -114,3 +114,89 @@ Case D is the structural blind spot: `check_lle_exports.py` never even parses
 the unnamed rows (its regex requires a non-empty module name, `[^\"]+`), and
 then skips them explicitly with `if not m["module"]: continue`.
 
+
+## Measurement 3 -- why the libfiber lift 'stopped' at 0x36005c80
+
+It did not stop. 0x36005c80 is the highest function the module's own .opd
+names, and the lift covers every one of them. The claim came from comparing two
+different segments' addresses.
+
+libfiber's two PT_LOADs (`out-rdr/gen/reloc/libfiber.elf`):
+
+```
+LOAD vaddr 0x36000000 filesz 0x6558 memsz 0x10000 flags 0x400005  <- R+X  text
+LOAD vaddr 0x36006560 filesz 0x85f0 memsz 0x85f8  flags 0x600006  <- R+W  .opd/.rodata
+```
+
+Every descriptor in the .opd run that names libfiber code (`code` in text,
+`toc` == 0x36016a80):
+
+```
+OPD descriptors naming libfiber code: 87
+unique code addresses: 87
+lowest  0x36000000
+highest 0x36005c80
+lifted entries in libfiber: 89, highest 0x36005c80
+OPD code addresses NOT lifted: none
+lifted entries NOT in the OPD: ['0x3600026c', '0x360002a0']
+```
+
+87 OPD-named functions, all 87 lifted, plus two island entries the .opd does not
+name (0x3600026c and 0x360002a0, the ELFv1 fiber-entry thunk -- the very
+function in the crash backtrace). 89 total, which is the `functions 89` line the
+lift prints for libfiber. **The lift is complete with respect to the module's
+own export descriptors.**
+
+What sits above 0x36005c80 is not functions. The last real function ends at
+0x36005c84 (`li r3,0; blr`); from 0x36005c88 the text is nine 8-instruction
+import trampolines, one per import stub the PRX declares:
+
+```
+  0x36005c88: 39800000  li   r12,0          <- cellLibprof stub 0
+  0x36005c8c: 658c3600  oris r12,r12,0x3600
+  0x36005c90: 818c6560  lwz  r12,0x6560(r12)
+  0x36005c94: f8410028  std  r2,0x28(r1)
+  0x36005c98: 800c0000  lwz  r0,0(r12)
+  0x36005c9c: 804c0004  lwz  r2,4(r12)
+  0x36005ca0: 7c0903a6  mtctr r0
+  0x36005ca4: 4e800420  bctr
+```
+
+with the pointer table at 0x36006560 holding 0x36005c88, 0x36005ca8, ...
+0x36005d88 for the nine stubs. The lifter models a branch into one of these as
+`ppu::call_import` (recomp/ppu/analysis.py:604, `if t in img.stubs`), so they are
+deliberately not lifted as functions. Above them: .opd at 0x36005db4, the export
+name/NID tables, and .rodata. No code.
+
+### The address that was compared against it is in the other segment
+
+```
+  0x3600e930 is in LOAD 0x36000000 + 0xe930 -> CODE (executable)
+  0x3600e930 is in LOAD 0x36006560 + 0x83d0 -> DATA (.opd)
+  its descriptor: code 0x360033dc toc 0x36016a80
+  code 0x360033dc lifted: True
+```
+
+`0x3600e930` is the **.opd slot** of cellFiberPpuYield (table.cpp:78072), i.e.
+a data address in the second LOAD. The first LOAD's `memsz` (0x10000) also
+covers it, but only as zero-fill: its `filesz` is 0x6558. Reading it as a code
+address and asking 'is this inside the lifted text range 0x36000000..0x36006558'
+compares a .opd address with a text bound. The descriptor at that slot says the
+code is 0x360033dc, and 0x360033dc is lifted -- `funcs.h:76714`, `table.cpp:76760`.
+
+### What the runtime does with it
+
+`runtime/src/ppu_runtime.cpp:845-847` (the LLE arm of call_import_inner):
+
+```
+const image::ExportEntry& e = image::exports[st];
+uint32_t code = ld32(base, e.opd);
+ctx.gpr[2]  = ld32(base, e.opd + 4);
+...
+call_indirect(ctx, base, code);
+```
+
+e.opd = 0x3600e930 -> code = 0x360033dc -> `lookup(0x360033dc)` = f_360033dc.
+The lifted Yield runs. The docs' own crash backtrace says the same: RESULTS-P1.md
+frame #2 is `f_360033dc_body+0x1bc (= cellFiberPpuYield, 0x3600345c)`.
+

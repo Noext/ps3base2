@@ -111,11 +111,31 @@ def module_function_exports(elf, prx):
     return out
 
 
+def resolve_image(table_path, root, rel):
+    """The image file a table row names.
+
+    The table stores each image path relative to the tree the lift ran in, which
+    is NOT necessarily the tree being configured: a build in a worktree points
+    PS3BASE_GENERATED_DIR at another checkout, and every row then says
+    "out-rdr/gen/reloc/libfiber.elf" -- correct for the lift tree, absent from
+    the build tree. So try the generated tree first (three levels up from
+    <tree>/<gen>/ppu/table.cpp), then --root. A gate that fails because it
+    looked in the wrong directory is a false failure, and a false failure is
+    how a gate gets switched off.
+    """
+    gen_tree = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(table_path))))
+    for base in (gen_tree, root):
+        p = os.path.join(base, rel)
+        if os.path.exists(p):
+            return p
+    return os.path.join(gen_tree, rel)
+
+
 def main(argv):
     ap = argparse.ArgumentParser()
     ap.add_argument("table")
     ap.add_argument("--root", default=os.getcwd(),
-                    help="tree the image paths are relative to (default: cwd)")
+                    help="source tree for ref/nid_db.json and runtime/src/hle")
     ap.add_argument("--allow", default=None,
                     help="file of 'module NID' lines to report but not fail on")
     ap.add_argument("--imports", action="store_true",
@@ -140,7 +160,7 @@ def main(argv):
     for idx, im in enumerate(imgs):
         if not im["prx"]:
             continue
-        path = os.path.join(args.root, im["file"])
+        path = resolve_image(args.table, args.root, im["file"])
         if not os.path.exists(path):
             failures.append((im["name"], "IMAGE-MISSING", 0, "", 0, 0))
             print("%-14s  image file missing: %s" % (im["name"], path))
