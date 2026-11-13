@@ -156,3 +156,39 @@ With stride 0x474 and TP bias 0x7030:
 (main_thread 0x1000000 + guest threads 0x1000008..0x1000020 = 33). So the last
 threads created have thread pointers at or past the end of the region -- the
 #253 shape, not the #68 shape.
+## M8. THE FAULTING INSTRUCTION RESOLVED: it is a fiber stack link, not a TLS access
+The crash symbols in the brief can be resolved against the same binary
+(build-rdr/ps3base, main HEAD 01c5e16) with addr2line, which turns the four
+anonymous frames into named lifted functions:
+
+    addr2line -f -C -e build-rdr/ps3base 0x17aa2b6 0x17ac22c 0x17bc0fc 0x1682b9d
+      ppu::ld64(unsigned char*, unsigned int)      runtime/include/ppu/ops.h:63
+      f_36000748_body(ppu::Context&, unsigned char*)  libfiber_000.cpp
+      f_360033dc_body(ppu::Context&, unsigned char*)  libfiber_000.cpp:4128
+      ppu::ld64(unsigned char*, unsigned int)
+
+Finer: 0x17aa2b2/0x17aa2b6 are inside f_360002a0_body (libfiber_000.cpp:231/232),
+and objdump gives the exact instruction:
+
+    17aa2b3: add  $0x10,%ecx
+    17aa2b6: mov  (%r14,%rcx,1),%rcx      <- faults, fault addr = guest 0x10
+
+Source line libfiber_000.cpp:231-232:
+    ctx.gpr[9] = uint64_t(ppu::ld64(base, uint32_t(ctx.gpr[1] + 0)));
+    ctx.gpr[0] = uint64_t(ppu::ld64(base, uint32_t(ctx.gpr[9] + 16)));   <- 0x10
+
+So the guest executed a load of the word at (gpr[9] + 0x10) and gpr[9] was 0.
+That is a saved frame/stack back-chain pointer being NULL, i.e. a fiber whose
+stack link was never established. It is NOT an r13-relative access: this
+function does read r13 in the course of the call (libfiber_000.cpp f_360033dc
+line 42 of the listing, ctx.gpr[0] = ctx.gpr[13]), which is why r13 appears in
+the crash register dump -- but the faulting address is built from gpr[9], not
+from r13.
+
+Consequence for the two candidate diagnoses:
+  #253 (block sized by the TLS image / N threads): the TLS arena arithmetic is
+      real and quantified (M5, M7) and 33 is exactly this title's thread count,
+      but it is NOT what this SIGSEGV is. The faulting load never dereferences a
+      TLS block.
+  #68 (reused block not reinitialised): not a known ps3recomp issue (M6), and
+      the measured block for the crash thread is initialised (M3).
