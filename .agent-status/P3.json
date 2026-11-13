@@ -3,6 +3,6 @@
   "status": "running",
   "branch": "explore/p3",
   "worktree": "/root/Dev/wt-P3",
-  "task": "fibres: cellFiber census done -- no fibre ever created, yield returns PERM 24439x; ring buffer built for crash-time dump",
-  "updated": "2026-11-13T10:31:57.462Z"
+  "task": "cellFiber HLE implemented (ucontext host fibres); LLE crash proven, HLE no crash in 198s/4801 flips; measuring crash rate",
+  "updated": "2026-11-13T11:26:25.767Z"
 }

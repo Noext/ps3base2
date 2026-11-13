@@ -184,3 +184,95 @@ The Xvfb size and the swapchain image count change the frame pacing, which
 changes when the title reaches the save-prompt path, which changes whether the
 fibre code runs before the harness stops it. Recorded so that "no crash on :150"
 is never read as "the crash went away".
+## Measurement 5 -- CreateFiber and RunFibers, with their real arguments
+
+The second run of the same instrumented binary on :0 gave the arguments in full
+(it crashed again, EXIT=139):
+
+    fiber: -> _cellFiberPpuAttributeInitialize(0xd00251b0, 0x300000, ...) r1=0xd0025140 lr=0x005332f4
+    fiber: -> cellFiberPpuCreateFiber(0x165d580, 0xd0033100, 0x1385418, 0x73041300,
+                                      0x0, 0xd0025490, 0xdc70, 0xd00251b0) r1=0xd0025140 lr=0x0053334c
+    fiber: -> cellFiberPpuRunFibers(0x165d580, 0x1660000, 0xff00ff, ...) r1=0xd00252e0 lr=0x00533498
+    E  50.185292 crash: signal 11 ... (guest 0x10) thread main_thread
+
+mapped to the signature at refs/rpcs3/.../cellFiber.cpp:156:
+
+    scheduler  fiber      entry      arg        prio eaStack    sizeStack  attr
+    0x165d580  0xd0033100 0x1385418  0x73041300 0x0  0xd0025490 0xdc70    0xd00251b0
+
+The guest stack therefore spans 0xd0025490..0xd0033100. The two r1 values of
+Measurement 4, 0xd0032d60 and 0xd0032d30, are inside it, 0x3a0 and 0x3d0 below its
+top. And entry=0x01385418 is an OPD, not a code address -- its words read
+00b5294c 0139ebb0 (code, TOC). Both facts are used by the HLE module below.
+
+## The HLE implementation, and what it fixes
+
+runtime/src/hle/cellFiber.cpp replaces the lifted libfiber with host fibres
+(ucontext, one host stack per fibre), following
+refs/rpcs3/rpcs3/Emu/Cell/Modules/cellFiber.{h,cpp} for the ABI and
+refs/jdc-ps3recomp/libs/spurs/cellFiber.{h,c} for the structure.
+GOWA_FIBER_HLE=0 restores LLE, so every claim here has an A/B switch.
+
+Two defects found by MEASURING against the title rather than by reading:
+
+1. `_cellFiberPpuSchedulerAttributeInitialize` validated the attribute against
+   the SCHEDULER's 128-byte alignment. The title passes attr=0xd004f950, which
+   is 8-aligned and not 128-aligned, and the title's reaction is immediate and
+   fatal:
+
+       tty: [FATAL] cellFiberPpuSchedulerAttributeInitialize(&attr) failed, code 80760010
+       process: _sys_process_exit(0x1)
+
+   The attribute is alignas(8) (refs/rpcs3/.../cellFiber.h:33), so the check is
+   against 8. With that fixed the title initialises the scheduler and runs.
+
+2. `cellFiberPpuCreateFiber`'s entry was called as a CODE ADDRESS. It is an
+   OPD, and calling it as code aborts:
+
+       F cellFiber: unknown indirect target 0x01385418 -- (no lifted code)
+
+   `guest::call_opd` is the established path here and is what the module uses.
+
+The fibre's guest stack is given a self-referential back chain (r1 written at
+sp, sp = top-0x100). That is the fault of Measurement 4: libfiber's lifted
+epilogue reads the outermost frame's link word and adds 16, so a zero there is
+the read at guest 0x10. An HLE fibre has no caller, so the chain points at itself
+and the read stays inside the fibre's own stack.
+
+## First results of the HLE module
+
+    run                             duration  flips  SIGSEGV
+    LLE libfiber (/tmp/seg.log)      42.9 s     912   yes, guest 0x10
+    LLE + ring (/tmp/p3-fiber4.log)  39.5 s     721   yes, guest 0x10
+    LLE + ring (/tmp/p3-fiber5.log)  50.2 s     ---   yes, guest 0x10
+    HLE (/tmp/p3-hle3.log)         198.4 s    4801   NO
+    HLE (/tmp/p3-hle4.log)         118.4 s    2761   NO
+    HLE (/tmp/p3-hle6.log)         140.0 s     661   NO (stalled after the title)
+
+The HLE build reaches 198 s and 4801 flips with no SIGSEGV. That is the
+criterion the task set, and it is measured, not argued.
+
+## The A/B, same machine, same minute, and what it does NOT show
+
+    $ date -u;  LLE (upstream build-rdr/ps3base) then HLE (wt-P3) back to back
+    Fri Nov 13 11:19:57 UTC 2026   A: LLE   EXIT=124 (alive)  flip 3241
+    Fri Nov 13 11:22:27 UTC 2026   B: HLE   EXIT=124 (alive)  flip 2761
+
+NEITHER side crashed in this pair. The SIGSEGV is INTERMITTENT: it appeared in
+three runs and not in this one, at 39.5 / 42.9 / 50.2 s when it appears at all.
+So the honest statement of the evidence is:
+
+- the fibre switch before the crash is ESTABLISHED (Measurements 2-5, three
+  crashing runs, the ring dump names CreateFiber -> RunFibers -> Yield on the
+  fibre's own stack);
+- the HLE replacement removes the faulting code path entirely (libfiber is no
+  longer loaded: "prx: load ... libfiber.sprx -> 0x23026500 (HLE)");
+- whether the HLE build NEVER crashes cannot be claimed from one long run, and
+  this document does not claim it. What is claimed is that no run of the HLE
+  build has produced the guest-0x10 fault, and every LLE run that reached the
+  same point in the title's save-prompt path did.
+
+The flip counts are not comparable across these runs: the LLE side crashes early
+when it crashes, which sets the count, and both sides are alive here. The
+per-title regression bar is in docs/regress-baseline.md and belongs to
+tools/regress.sh, not to this file.
