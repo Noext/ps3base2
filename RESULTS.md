@@ -2172,3 +2172,379 @@ fresh configure of this worktree **40/40 passed**. The diff adds
 `tools/ms_descriptor_sites.py` and `RESULTS-M1.md` and modifies no source file;
 `RESULTS.md` is append-only here (this section is appended, nothing removed).
 
+
+
+# S2 -- RDR (BLES00680), the "EXODUS IN AMERICA" loading screen: three 900-second runs
+
+**Headline: the game does not crash during the "EXODUS IN AMERICA" loading screen
+in any of the three runs. All three ran the full 900 s and were stopped by my
+own timeout. The screen does not stay on the chapter card either: 137 / 175 /
+165 s after the card appears (runs 1 / 2 / 3) it is replaced by the solid green
+clear colour and the frame rate collapses from 36 fps to 1-2 fps, and the title
+then spins in `cellFiberPpuYield` until the timeout. There is therefore no crash
+site to report, and the "barrel freezes before the crash" question has no crash
+to attach to.**
+
+Every claim below is a command and its output. Run directories:
+`/tmp/rdr-crash-s2/run{1,2,3}`. Binary: `build-rdr/ps3base`, 695 801 688 bytes,
+mtime 2026-11-13 13:53:23 UTC, HEAD `b6ed791`.
+
+---
+
+## 0. How the measurement was made
+
+Harness (mine, under `/tmp/rdr-crash-s2/`):
+
+* `run.sh <id>` -- empties `savedata`, starts its own `Xvfb :57`, starts
+  `tools/drive_rdr.py ... --branch cross --cwd /root/Dev/ps3base2` with
+  `max_seconds=900`, and separately runs the capture loop. It refuses to start
+  if a game is already running. It deletes its own output directory first, so a
+  previous aborted attempt cannot leave screenshots behind that a later run's
+  timeline is read from.
+* `shots.py` -- one `import -window root <out>/shots/sec-NNNN.png` per second on
+  the same `DISPLAY` as the game, with `manifest.csv` recording the wall-clock
+  epoch, ISO timestamp and file size of each. 902 frames per run.
+* Every run was launched as
+  `tools/machine_lock.sh run "<reason>" -- /tmp/rdr-crash-s2/run.sh <id>`,
+  i.e. under `/var/lock/ps3-machine.lock`, one at a time. Before each run
+  `machine_lock.sh status` was `free` and no `ps3base` was running.
+
+Load average before each run (recorded in each `wrapper.log`), because this
+machine is shared and another project (t-T1) was compiling during run 1:
+
+| run | loadavg before | loadavg after |
+|-----|----------------|---------------|
+| 1 | 4.37 5.61 8.62 | 10.93 13.67 12.95 |
+| 2 | 4.13 7.61 10.04 | 18.16 16.87 14.26 |
+| 3 | 11.61 15.23 13.85 | 18.32 18.13 16.42 |
+
+**Two runs were voided before the three reported here, and both were my fault,
+not the game's.** They are recorded because a measurement report that hides its
+own failures is not a measurement:
+
+* Attempt A of run 2 set `PS3BASE_IMPORT_NAME=main_thread` to capture the
+  per-import history. That emitted **15 513 016 `impthr` lines / 198 MB in
+  400 s** (`awk '{print $4}' drv/run.log | sort | uniq -c | sort -rn | head`),
+  starved the guest and was killed by me at 399 s (driver rc 143). Void.
+* Attempt B of run 2 was started into the same output directory and its
+  screenshot timeline was contaminated by the previous attempt's files. Killed
+  by me, directory deleted, harness changed to `rm -rf "$OUT"` first. Void.
+
+None of the three reported runs has per-import logging. Run 1 additionally had
+the buffered import event trace enabled (`GOWA_EVTRACE=import`); runs 2 and 3
+have only `PS3BASE_LOG=info`, so the trace is a difference between run 1 and the
+other two and is called out where it matters (section 1f).
+
+---
+
+## 1. The three runs
+
+### Run 1 -- 2026-11-13T15:31:09Z to 15:46:12Z
+
+(a) **Loading screen first appeared: 2026-11-13T15:33:36.643Z**
+    (`LOADING` at t=136.63 s, `CHAPTER`/"EXODUS IN AMERICA" at t=145.82 s after
+    driver start 1794583870.824). From `drv/validation.json`:
+    `CHAPTER first t=145.82 -> 1794584016.644`.
+
+(b) **The process did not end by itself. It was killed by my timeout.**
+    `driver.rc = 1`, `validation.json exit=None elapsed=900.9`, and the last
+    guest log line is at t=901.117 s. The driver's own contract is
+    `exit 1 = the driver hit max-seconds`, so this run is **a failed
+    measurement with respect to the crash question**: it is not evidence that
+    the game does not crash, only that it had not crashed by 900 s.
+
+(c) **Duration after the loading screen: 755.5 s** (wall clock, card first seen
+    15:33:36.643Z, run ended 15:46:12.132Z). Of that, 618.3 s were spent on the
+    green screen (first green frame 15:35:53.843Z).
+
+(d) **Crash site: none.** `grep -c 'crash: signal' drv/run.log` = **0**. No
+    "crash: signal" line, no stack frames, nothing to resolve with addr2line.
+
+(e) **Guest lr / registers: not printed**, because no crash report was produced.
+
+(f) **Last 50 imports: not available from the log.** The log carries no
+    per-import lines at all (`per-import log lines 0`). Run 1 did carry a
+    buffered import event trace (`GOWA_EVTRACE=import`, 2 475 002 280 bytes,
+    44 196 469 records), and the last 50 imports of thread 1 (`PPU
+    main_thread`) from it are all the same call, repeating to the last record:
+
+    ```
+    900.967501 cellFiber::cellFiberPpuYield (0x0,0x1e,0x0) = 0xffffffff80760009 lr 0x0053339c 0us
+    ```
+
+    (The 2.4 GB trace file was deleted after this extraction to free disk; the
+    numbers above are its extracted output, reproducible with
+    `python3 trace_tail.py <trace.bin> main_thread` after regenerating the trace
+    with `TRACE=1`.)
+
+    `0x80760009` is `FIBER_ERROR(0x09)` = `CELL_FIBER_ERROR_PERM`
+    (`runtime/src/hle/cellFiber.cpp:60-65`). So at the moment the run was
+    stopped, the main thread was spinning in `cellFiberPpuYield` and being told
+    PERM on every call. This is the state the title is stuck in, not a crash.
+
+(g) **The barrel: it animates continuously and never freezes.** Method and
+    numbers in section 2. Last movement 2026-11-13T15:35:52.843Z; the card is
+    gone one second later.
+
+(h) See section 3.
+
+### Run 2 -- 2026-11-13T16:03:56Z to 16:18:58Z
+
+(a) **Loading screen first appeared: 2026-11-13T16:06:35.656Z**
+    (`LOADING` t=139.72 s, `CHAPTER` t=158.35 s after driver start
+    1794585837.307).
+
+(b) **Killed by my timeout, not a crash.** `driver.rc = 1`,
+    `exit=None elapsed=900.1`, last log line t=900.275 s.
+
+(c) **Duration after the loading screen: 743.0 s** (16:06:35.656Z ->
+    16:18:58.626Z), of which 568.3 s were on the green screen.
+
+(d) **Crash site: none.** `crash lines 0`.
+
+(e) **Guest lr / registers: not printed** (no crash report).
+
+(f) **Last 50 imports: not available.** No per-import logging in this run and
+    no event trace (the trace was deliberately dropped after run 1's 2.4 GB and
+    because it is a confound). The log does carry the HLE return values of the
+    imports it names, e.g. `cellNetCtl: GetInfo(code=0x4) -> 0x80130108` and
+    `sceNp: ManagerGetStatus -> -1`, repeating at the end.
+
+(g) **The barrel animates continuously and never freezes.** Last movement
+    2026-11-13T16:09:29.332Z, card gone one second later.
+
+### Run 3 -- 2026-11-13T16:19:55Z to 16:34:56Z
+
+(a) **Loading screen first appeared: 2026-11-13T16:22:31.430Z**
+    (`LOADING` t=144.26 s, `CHAPTER` t=156.33 s after driver start
+    1794586795.100).
+
+(b) **Killed by my timeout, not a crash.** `driver.rc = 1`,
+    `exit=None elapsed=900.9`, last log line t=901.195 s.
+
+(c) **Duration after the loading screen: 745.0 s** (16:22:31.430Z ->
+    16:34:56.424Z), of which 580.3 s were on the green screen.
+
+(d) **Crash site: none.** `crash lines 0`.
+
+(e) **Guest lr / registers: not printed** (no crash report).
+
+(f) **Last 50 imports: not available** (no per-import logging, no trace). The
+    last log lines are `cellFiber: HLE CreateFiber #5419..#5421 entry=0x01385418
+    ... -> CELL_OK`.
+
+(g) **The barrel animates continuously and never freezes.** Last movement
+    2026-11-13T16:25:15.124Z, card gone one second later.
+
+---
+
+## 2. THE BARREL -- method and numbers
+
+The film-reel indicator sits at a fixed place on the chapter card. Its bounding
+box was **measured from a capture, not guessed**: red-dominant pixels in the
+lower-left quadrant span x 128..239, y 584..646 (`bbox2.py`). The comparison
+region is a margin around that, **(110,570)-(250,660)**, 140x90 px.
+
+For each consecutive pair of one-per-second frames the **mean absolute
+difference (MAD)** of the greyscale crop is computed. A pair is only *measured*
+if both frames actually show the card: the crop must have content
+(`max grey > 40`, `mean > 2.0`) and be less than 80 % green. That gate matters
+and was added after the first pass reported "frozen" pairs that were really two
+identical **black** frames during a scene transition (run 1 shots 275-279, 371-372)
+and two identical **green** frames. Two identical black frames give MAD 0.0000
+and are not a frozen barrel.
+
+Two frames are "the same picture" when MAD <= 0.02; the animation gives MAD
+1.3-7.9 per second, so the separation is two orders of magnitude, not a
+judgement call.
+
+Result, over the whole chapter window of each run:
+
+| run | pairs measured | moving | frozen | last movement | first green frame |
+|-----|----------------|--------|--------|---------------|-------------------|
+| 1 | 75 | **75** | **0** | 2026-11-13T15:35:52.843Z (MAD 7.7837) | 15:35:53.843Z |
+| 2 | 74 | **74** | **0** | 2026-11-13T16:09:29.332Z (MAD 7.8906) | 16:09:30.332Z |
+| 3 | 73 | **73** | **0** | 2026-11-13T16:25:15.124Z (MAD 7.2750) | 16:25:16.124Z |
+
+Command: `python3 barrel3.py run1 200 284` (and `run2 250 334`, `run3 240 322`).
+Last three lines of each:
+
+```
+run1: pairs measured 75  moving 75  frozen 0
+      LAST MOVEMENT shot 283 2026-11-13T15:35:52.843Z MAD 7.7837
+      FIRST GREEN shot 284 2026-11-13T15:35:53.843Z   gap 1.000 s
+run2: pairs measured 74  moving 74  frozen 0
+      LAST MOVEMENT shot 333 2026-11-13T16:09:29.332Z MAD 7.8906
+      FIRST GREEN shot 334 2026-11-13T16:09:30.332Z   gap 1.000 s
+run3: pairs measured 73  moving 73  frozen 0
+      LAST MOVEMENT shot 321 2026-11-13T16:25:15.124Z MAD 7.2750
+      FIRST GREEN shot 322 2026-11-13T16:25:16.124Z   gap 1.000 s
+```
+
+**The barrel never freezes.** It is still changing in the last frame before the
+card disappears, and the gap between its last change and the disappearance of
+the card is **1.000 s**, which is exactly one capture interval -- i.e. the
+animation was live right up to the moment the screen changed. There is no
+freeze-then-crash sequence, because there is no crash: the card is replaced by
+the green clear colour and the title keeps running.
+
+---
+
+## 3. What actually happens: 36 fps -> green screen -> 1-2 fps spin
+
+This is not the crash the task asked about, but it is what the loading screen
+does, and it is why previous runs were killed by their own timeouts.
+
+The runtime draws an FPS OSD at the top-left. OCR of that strip
+(`fps_osd.py`, `convert -crop 200x24+30+18 ... tesseract --psm 7`) gives:
+
+```
+run1: 268  36 fPs 33.4 ms
+      272  36 fPs 33.4 ms
+      276   4 fPs 225.8 ms
+      280   2 fPs 586.4 ms
+      284   1 fPs 783.6 ms      <- first green frame
+      300   1 fPs 793.4 ms
+      900   2 fPs 578.6 ms
+run2: 268  36 fPs 33.3 ms
+      271   4 fPs 263.0 ms
+      283   1 fPs 668.6 ms
+      340   2 fPs 639.7 ms
+```
+
+The frame rate falls from 36 fps to 1-2 fps at the same instant the card is
+replaced by the green clear colour, and stays there for the rest of the run.
+`rsx: flip` slows to match: run 1 reports flip 6601 at t=273.7 s and flip 7381
+at t=865.8 s, i.e. **780 flips in 592.1 s = 1.32 fps**, consistent with the OSD.
+
+The guest main thread is not dead. It is spinning in `cellFiberPpuYield` and
+getting `CELL_FIBER_ERROR_PERM` (0x80760009) back on every call (section 1f),
+while `cellFiber: HLE CreateFiber / RunFibers / JoinFiber` continue at **5 516
+calls between t=280 s and t=880 s** and `sceNp: ManagerGetStatus -> -1` and
+`cellNetCtl: GetInfo -> 0x80130108` repeat. The RSX keeps working: the last
+`rsx: fifo 5s` line (t=898.7 s) reports `busy 8.4%, idle 91.6%, semaphore wait
+0.0% (0/s), methods 3.2% (518k/s)`, and the last surface line (t=901.1 s) reports
+`surfaces 269 (51 MB), retired 0`.
+
+So the title is **alive and looping**, not crashed and not hung on a lock.
+
+---
+
+## 4. (h) Did the three runs crash at the same site?
+
+**No run crashed, so there is no site to compare.** All three:
+
+* `crash lines 0` in `drv/run.log`;
+* `driver.rc = 1` and `validation.json exit = None`, i.e. the driver hit its
+  900 s bound and SIGKILLed the game itself;
+* the last guest log line is at t ~= 900-901 s, i.e. the game was logging right
+  up to the kill.
+
+The three runs *are* highly reproducible in every other respect: they reach
+TITLE, MENU, ALERT, WARNING, LOADING and CHAPTER in the same order, reach the
+chapter card at 145.8 / 158.4 / 156.3 s, and all three go green at
+284 / 334 / 322 s (i.e. 138 / 176 / 166 s after the card appeared). The
+variance is startup time, which this tree's own driver documents as load
+dependent.
+
+---
+
+## 5. The earlier crash logs do not resolve against this binary, and were not on the chapter card
+
+This matters for anyone comparing my runs to the crashes in
+`/tmp/rdr-ab-ref-vs-cand-{A,B}`.
+
+```
+$ python3 textcheck.py
+current .text: 0xafb6f0 .. 0xa1429b2
+  exe+0x9634e6    in .text? False
+  exe+0x96545c    in .text? False
+  exe+0x97532c    in .text? False
+  exe+0x83ee7d    in .text? False
+  exe+0x77f6e8    in .text? False
+  exe+0xc3d3f1    in .text? True
+  exe+0x17aa2b6   in .text? True
+```
+
+The top frames of the 14:54 crash (`exe+0x9634e6`, `exe+0x96545c`,
+`exe+0x97532c`, `exe+0x83ee7d`, `exe+0x77f6e8`) are **below `.text`**, so they
+are not code addresses in `build-rdr/ps3base` at HEAD and `addr2line` returns
+`?? ??:0` for them. The two that do resolve are runtime frames:
+
+```
+$ addr2line -f -C -e build-rdr/ps3base 0xc3d3f1
+ppu::call_import_inner(...) runtime/src/ppu_runtime.cpp:914
+$ addr2line -f -C -e build-rdr/ps3base 0x17aa2b6
+f_00101980_body(ppu::Context&, unsigned char*) runtime/include/ppu/ops.h:194
+```
+
+**Caveat I checked and must state:** the debug info in `build-rdr/ps3base` mixes
+compile directories (`readelf --debug-dump=info | grep DW_AT_comp_dir`:
+379 `/root/Dev/ps3base2/build-rdr`, 38 `wt-Y1/build-40`, 33 `wt-P3/build-rdr`,
+23 `wt-L3/build-52`, 15 `wt-Y3/build-42`, 6 `wt-L4/build-rdr`). So a resolved
+path naming `wt-P3` is **not** evidence that the binary came from another tree;
+it is how this build records some translation units. The conclusion rests on the
+`.text` bound above, which is a property of this ELF and not of a path string.
+
+The earlier crashes also **did not happen on the chapter card**. Neither
+validation journal contains a `CHAPTER` state at all:
+
+```
+run A states {'OTHER': 216, 'TITLE': 10, 'MENU': 27, 'ALERT': 21, 'WARNING': 21, 'LOADING': 6}
+run B states {'OTHER': 215, 'TITLE': 13, 'MENU': 26, 'ALERT': 22, 'WARNING': 22, 'LOADING': 6}
+```
+
+Run A's journal ends at `t=220.37 OTHER`, run B's at `t=219.76 LOADING`. Both
+crashed on the `Loading...` screen *before* the chapter card appeared, at 220.3 s
+and 228.4 s. So the earlier crash and the chapter card are different states, and
+those logs cannot be used as a baseline for what happens on the card.
+
+## 6. Summary table
+
+| | run 1 | run 2 | run 3 |
+|---|---|---|---|
+| driver start (UTC) | 15:31:10.823 | 16:03:57.307 | 16:19:55.100 |
+| LOADING first | 15:33:27.453 | 16:06:17.026 | 16:22:19.360 |
+| **EXODUS IN AMERICA first** | **15:33:36.643** | **16:06:35.656** | **16:22:31.430** |
+| instant of end | 15:46:12.132 | 16:18:58.626 | 16:34:56.424 |
+| **how it ended** | **killed by my timeout** (rc 1, exit None, elapsed 900.9) | **killed by my timeout** (rc 1, exit None, elapsed 900.1) | **killed by my timeout** (rc 1, exit None, elapsed 900.9) |
+| duration after loading screen | 755.5 s | 743.0 s | 745.0 s |
+| **crash site** | **none** | **none** | **none** |
+| guest lr / regs | not printed (no crash) | not printed | not printed |
+| last 50 imports | `cellFiberPpuYield = 0x80760009` (PERM), repeating | not available | not available |
+| **barrel last changed** | 15:35:52.843 | 16:09:29.332 | 16:25:15.124 |
+| **barrel froze?** | **no** -- 75/75 pairs moving | **no** -- 74/74 | **no** -- 73/73 |
+| gap barrel-last-change -> card gone | 1.000 s | 1.000 s | 1.000 s |
+| first green frame | 15:35:53.843 | 16:09:30.332 | 16:25:16.124 |
+| fps after green | 1-2 | 1-2 | 1-2 |
+
+## 7. Reproducibility and inconclusive runs
+
+* **The crash is not reproducible, because it did not happen.** Three runs of
+  900 s each, on the binary at HEAD, under the machine lock, one at a time, all
+  ended by my timeout with zero crash lines. This is a finding, not a failure to
+  look hard enough: the game was alive and logging at t=901 s in all three.
+* **All three runs are inconclusive with respect to the crash site**, in the
+  precise sense the task defines: each was killed by its own timeout (exit 124
+  semantics, reported here as driver `rc=1` / `exit=None`), so none of them is
+  evidence about a crash. What they *are* evidence about is the state the title
+  reaches: the chapter card, then a solid green screen at 1-2 fps with the main
+  thread looping in `cellFiberPpuYield` returning PERM.
+* Two further attempts (run 2 attempt A and B) were **voided by my own
+  instrumentation** -- 15.5 M log lines and stale screenshots respectively -- and
+  are reported in section 0 rather than hidden.
+* The earlier crash logs in `/tmp/rdr-ab-ref-vs-cand-{A,B}` crash on the
+  `Loading...` screen *before* the chapter card (neither journal has a `CHAPTER`
+  state), and their top frames are **below `.text`** in the current binary, so
+  they do not resolve against it (section 5). They are not a baseline for the
+  chapter-card question.
+
+## 8. If this is to be pushed further
+
+The measurable next step is not "let it run longer" -- 900 s is already 5.7x the
+time to the card and the state is stable. It is to find why the main thread gets
+`CELL_FIBER_ERROR_PERM` from `cellFiberPpuYield` forever: the HLE arm returns
+PERM when `!st || !st->initialized || st->current < 0`
+(`runtime/src/hle/cellFiber.cpp:392-394`), i.e. the title is yielding outside a
+fiber, or after the scheduler state was torn down. That is a diagnosis, not a
+measurement, and it is outside this task's scope ("measuring, not fixing").
