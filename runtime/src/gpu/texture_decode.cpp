@@ -268,6 +268,7 @@ bool describe_texture(const TextureRegs& regs, TextureLayout& out) {
     out.height = h;
     out.depth = depth;
     out.format = f->vk;
+    out.out_bytes = f->out_bytes;
     out.is_depth = code >= 0x90 && code <= 0x93;
     uint32_t gamma = (regs.address >> 20) & 0xF;
     if ((gamma & 7) == 7) {

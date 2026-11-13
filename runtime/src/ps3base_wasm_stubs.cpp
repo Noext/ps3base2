@@ -1,3 +1,7 @@
+#include <cstdint>
+#include <cstddef>
+#include <cstdio>
+
 /* One symbol the generic ps3base runtime needs and no God of War module provides.
  *
  * spu/thread.cpp reads edge::gpu::g_active before routing a DMA transfer through
@@ -12,11 +16,16 @@
  * false means the transfer takes the ordinary path, which is what this title
  * wants -- it has no edge GPU to accelerate anything with.
  */
+/* The WASM build only. On a native build spu/edge/edge_gpu.cpp defines
+ * g_active (as `const bool`), so defining it here as well is a duplicate
+ * symbol and a type mismatch; under emscripten that file is not compiled. */
+#if defined(__wasm__) || defined(__EMSCRIPTEN__)
 namespace edge {
 namespace gpu {
 bool g_active = false;
 }  // namespace gpu
 }  // namespace edge
+#endif
 
 /* Diagnostic only: counts the first reads of an address that no mapped region
  * covers. Built with -DPS3BASE_LD_TRAP=1; never enabled in a release build. */
@@ -108,7 +117,7 @@ extern "C" void ps3base_bt_report() {
 /* Every guest store goes through rsv::store_range. Watching one address there says
  * whether anything at all writes it -- which is the last open question about the
  * null field at 0x00d72800. */
-extern "C" void ps3base_store_probe(uint32_t ea, const void* data, size_t size) {
+__attribute__((weak)) extern "C" void ps3base_store_probe(uint32_t ea, const void* data, size_t size) {
     /* The GCM context at 0xd72800 has callback filled but begin/end/current null.
      * Watch the three null fields specifically: knowing whether anything writes
      * them separates "the code was never lifted" from "our runtime provides no
@@ -138,7 +147,19 @@ extern "C" void ps3base_store_probe(uint32_t ea, const void* data, size_t size) 
  * docs/webassembly. These are God-of-War-only hooks the Minecraft port links but
  * never calls usefully; provide inert definitions so a missing one cannot abort.
  * Signature-agnostic where the type does not matter. */
-#include <cstdint>
+/* ppu::Context is named in the signatures below, so its header has to be
+ * included rather than assumed: without it the native build fails with
+ * "use of undeclared identifier ppu" on every hook. */
+#include "ppu/context.h"
+/* WASM ONLY. On a native build jobsys/edge_consumer.cpp, jobsys/sched.cpp,
+ * jobsys/wws.cpp, jobsys/jobs_graph.cpp and jobsys/jobs_inplace.cpp define
+ * every symbol below, so defining them here as well is a duplicate symbol at
+ * link time. Under emscripten those files are not compiled and these inert
+ * definitions are the only ones -- which is the whole point of this file,
+ * and the reason the linker otherwise turns each missing symbol into an
+ * aborting trampoline.
+ */
+#if defined(__wasm__) || defined(__EMSCRIPTEN__)
 namespace jsedge {
 bool enabled() { return false; }
 /* Arrow points the SPU reader at this hook; returning false means "no work was
@@ -163,6 +184,13 @@ using installer = void (*)(unsigned, ppu_hook);
 void install(installer) {}
 void install_inplace() {}
 }  // namespace wj
+#endif
+/* Native builds already have these: spu/edge/edge_gpu.cpp defines
+ * edge::gpu::on_put and runtime/src/crash_posix.cpp defines the crash
+ * hooks, so defining them here as well is a duplicate symbol. Under
+ * emscripten those two files are not linked and the stubs are the only
+ * definitions -- which is what this file is for. */
+#if defined(__wasm__) || defined(__EMSCRIPTEN__)
 namespace edge {
 namespace gpu { void on_put(unsigned char*, unsigned, unsigned, unsigned) {} }
 namespace ovl {
@@ -174,5 +202,6 @@ namespace crash {
 void profile_thread(void*, const char*) {}
 void log_here(const char*) {}
 }  // namespace crash
+#endif
 extern "C" {
 }

@@ -132,11 +132,19 @@ public:
         return assemble(body.str());
     }
 
+    /* Turn on the separate texture + sampler emission. Called once, before
+     * run(), by the WebGPU entry point. */
+    void set_wgpu_target(bool on) { wgpu_target_ = on; }
+
     uint32_t texture_mask() const { return used_tex_; }
 
 private:
     const FpWordReader& read_;
     FragmentProgramKey key_;
+    /* True when the GLSL is destined for the WebGPU backend: samplers are
+     * then emitted as separate texture + sampler bindings. Off for Vulkan,
+     * which keeps the combined form it has always used. */
+    bool wgpu_target_ = false;
     const Layout& l_;
     uint32_t current_literal_ = 0;
     uint32_t used_tex_ = 0;
@@ -187,6 +195,16 @@ private:
     }
 
     uint32_t dim(uint32_t unit) const { return (key_.texture_dims >> (unit * 2)) & 3; }
+
+    /* The value passed to texture()/textureLod()/textureGrad(). On the Vulkan
+     * target it is the combined sampler; on the WebGPU target it is the
+     * texture/sampler pair combined at the call, which is what keeps the
+     * resulting SPIR-V free of OpTypeSampledImage variables. */
+    std::string sampler(uint32_t unit) const {
+        if (!wgpu_target_) return "tex" + std::to_string(unit);
+        static const char* fns[4] = {"sampler1D", "sampler2D", "samplerCube", "sampler3D"};
+        return std::string(fns[dim(unit)]) + "(tex" + std::to_string(unit) + ", tex" + std::to_string(unit) + "_samp)";
+    }
 
     std::string input(uint32_t attr) {
         switch (attr) {
@@ -240,7 +258,7 @@ private:
     std::string tex(const Slot& sl, uint32_t op) {
         uint32_t unit = (sl.w[0] >> 17) & 0xF;
         used_tex_ |= 1u << unit;
-        std::string s = "tex" + std::to_string(unit);
+        std::string s = sampler(unit);
         std::string a = src(sl, 0);
         std::string r;
         if (((key_.shadow >> unit) & 1) && dim(unit) == 1) {
@@ -428,8 +446,19 @@ private:
         for (uint32_t u = 0; u < 16; u++) {
             if (!(used_tex_ & (1u << u))) continue;
             static const char* types[4] = {"sampler1D", "sampler2D", "samplerCube", "sampler3D"};
+            /* The WebGPU target takes texture and sampler as SEPARATE bindings:
+             * a combined sampler becomes one OpTypeSampledImage variable, and
+             * naga rejects that ("invalid id"). The texture keeps the binding the
+             * Vulkan path uses, and the sampler goes 64 above it, which is the
+             * layout wgpu_backend.cpp creates. The Vulkan target is untouched. */
+            static const char* tex_types[4] = {"texture1D", "texture2D", "textureCube", "texture3D"};
             bool shadow = ((key_.shadow >> u) & 1) && dim(u) == 1;
-            s << "layout(set = 0, binding = " << (32 + u) << ") uniform " << (shadow ? "sampler2DShadow" : types[dim(u)]) << " tex" << u << ";\n";
+            if (wgpu_target_) {
+                s << "layout(set = 0, binding = " << (32 + u) << ") uniform " << tex_types[dim(u)] << " tex" << u << ";\n";
+                s << "layout(set = 0, binding = " << (32 + u + 64) << ") uniform sampler tex" << u << "_samp;\n";
+            } else {
+                s << "layout(set = 0, binding = " << (32 + u) << ") uniform " << (shadow ? "sampler2DShadow" : types[dim(u)]) << " tex" << u << ";\n";
+            }
         }
         uint32_t mrt = key_.mrt_count > 4 ? 4 : key_.mrt_count;
         for (uint32_t m = 0; m < (mrt ? mrt : 1); m++) s << "layout(location = " << m << ") out vec4 out_color" << m << ";\n";
@@ -526,11 +555,12 @@ FragmentProgramInfo analyse_fragment_program(const FpWordReader& read) {
     return info;
 }
 
-FragmentProgramInfo decompile_fragment_program(const FpWordReader& read, const FragmentProgramKey& key) {
+static FragmentProgramInfo decompile_impl(const FpWordReader& read, const FragmentProgramKey& key, bool wgpu_target) {
     Layout l = layout(read);
     FragmentProgramInfo info;
     if (!l.valid) return info;
     Decompiler d(read, key, l);
+    d.set_wgpu_target(wgpu_target);
     info.glsl = d.run();
     info.literal_slots = l.literal_slots;
     info.texture_mask = d.texture_mask();
@@ -541,4 +571,12 @@ FragmentProgramInfo decompile_fragment_program(const FpWordReader& read, const F
     return info;
 }
 
+FragmentProgramInfo decompile_fragment_program(const FpWordReader& read, const FragmentProgramKey& key) {
+    return decompile_impl(read, key, false);
 }
+
+FragmentProgramInfo decompile_fragment_program_wgpu(const FpWordReader& read, const FragmentProgramKey& key) {
+    return decompile_impl(read, key, true);
+}
+
+}  // namespace gpu

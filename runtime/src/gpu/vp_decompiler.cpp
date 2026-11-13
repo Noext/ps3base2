@@ -44,6 +44,7 @@ const char* lane(uint32_t i) {
 
 class Decompiler {
 public:
+    void set_wgpu_target(bool on) { wgpu_target_ = on; }
     Decompiler(const uint32_t* ucode, uint32_t start) : code_(ucode), start_(start) {}
 
     VertexProgramInfo run() {
@@ -70,7 +71,17 @@ public:
         src << "layout(std140, set = 0, binding = 0) uniform VertexConstants { vec4 c[468]; };\n";
         src << "layout(std140, set = 0, binding = 1) uniform VertexState { vec4 vp_scale; vec4 vp_offset; vec4 surface; uvec4 flags; };\n";
         for (uint32_t t = 0; t < 4; t++) {
-            if (textures_ & (1u << t)) src << "layout(set = 0, binding = " << (16 + t) << ") uniform sampler2D vtex" << t << ";\n";
+            if (!(textures_ & (1u << t))) continue;
+            /* WebGPU takes texture and sampler as SEPARATE bindings: a combined
+             * sampler2D becomes one OpTypeSampledImage variable, and naga rejects
+             * it with "invalid id". The texture keeps binding 16+t; the sampler
+             * goes 64 above, which is the layout wgpu_backend.cpp builds. */
+            if (wgpu_target_) {
+                src << "layout(set = 0, binding = " << (16 + t) << ") uniform texture2D vtex" << t << ";\n";
+                src << "layout(set = 0, binding = " << (16 + t + 64) << ") uniform sampler vtex" << t << "_samp;\n";
+            } else {
+                src << "layout(set = 0, binding = " << (16 + t) << ") uniform sampler2D vtex" << t << ";\n";
+            }
         }
         src << "layout(location = 1) out vec4 out_col0;\nlayout(location = 2) out vec4 out_col1;\nlayout(location = 3) out vec4 out_fog;\n";
         for (uint32_t i = 0; i < 8; i++) src << "layout(location = " << (4 + i) << ") out vec4 out_tex" << i << ";\n";
@@ -104,7 +115,13 @@ public:
         src << "    gl_PointSize = (omask & 32u) != 0u ? o[6].x : uintBitsToFloat(flags.z);\n";
         src << "    vec4 p = o[0];\n";
         src << "    vec2 xy = (vp_scale.xy * p.xy + (vp_offset.xy - surface.xy * 0.5) * p.w) * surface.zw * 2.0;\n";
-        src << "    gl_Position = vec4(xy, vp_scale.z * p.z + vp_offset.z * p.w, p.w);\n";
+        /* The NDC Y axis points the other way in WebGPU. Vulkan's clip space has
+         * +Y DOWN the target, WebGPU's has +Y UP it, so the SAME xy puts the
+         * scene upside down on the second device. Measured: comparing the two
+         * images of one frame, flipping the mirror vertically took the RMS from
+         * 59.73 to 32.92. The Vulkan form keeps the axis it has always had. */
+        if (wgpu_target_) src << "    gl_Position = vec4(xy.x, -xy.y, vp_scale.z * p.z + vp_offset.z * p.w, p.w);\n";
+        else src << "    gl_Position = vec4(xy, vp_scale.z * p.z + vp_offset.z * p.w, p.w);\n";
         src << "}\n";
         info.glsl = src.str();
         info.input_mask = inputs_;
@@ -114,6 +131,9 @@ public:
     }
 
 private:
+    /* True when this GLSL is for the WebGPU backend: samplers become
+     * separate texture + sampler bindings, which is the form naga accepts. */
+    bool wgpu_target_ = false;
     const uint32_t* code_;
     uint32_t start_;
     std::set<uint32_t> slots_;
@@ -207,7 +227,9 @@ private:
         case 0x19: {
             uint32_t t = (i.d2 >> 8) & 3;
             textures_ |= 1u << t;
-            return "textureLod(vtex" + std::to_string(t) + ", " + src(i, 0) + ".xy, 0.0)";
+            const std::string s2 = wgpu_target_ ? ("sampler2D(vtex" + std::to_string(t) + ", vtex" + std::to_string(t) + "_samp)")
+                                                : ("vtex" + std::to_string(t));
+            return "textureLod(" + s2 + ", " + src(i, 0) + ".xy, 0.0)";
         }
         default: return "";
         }
@@ -358,4 +380,18 @@ VertexProgramInfo decompile_vertex_program(const uint32_t* ucode, uint32_t start
     }
 }
 
+/* The same program written for the WebGPU backend: samplers are separate
+ * texture + sampler bindings. The Vulkan entry point above is unchanged. */
+VertexProgramInfo decompile_vertex_program_wgpu(const uint32_t* ucode, uint32_t start_slot) {
+    VertexProgramInfo info = decompile_vertex_program(ucode, start_slot);
+    if (!info.valid) return info;
+    try {
+        Decompiler d(ucode, start_slot);
+        d.set_wgpu_target(true);
+        return d.run();
+    } catch (...) {
+        return info;
+    }
 }
+
+}  // namespace gpu
