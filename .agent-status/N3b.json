@@ -1,9 +1,0 @@
-{
-  "agent": "N3b",
-  "status": "done",
-  "task": "SPU channel audit: every rdch/wrch/rchcnt of the MultiStream/SPURS threads vs RPCS3 SPUThread.cpp",
-  "branch": "explore/n3b",
-  "worktree": "/root/Dev/wt-N3b",
-  "result": "All-channel tracing + per-channel distinct-value table added (PS3BASE_SPU_CH_TABLE, PS3BASE_SPU_CH_TRACE). Channel conformance table vs RPCS3: 26 channels, 24 match, 2 benign divergences (ch9, ch13 isolated bit), plus a REAL defect found and fixed: the TM decrementer event used 'elapsed > dec_value' and re-armed to now instead of RPCS3's 32-bit underflow + period re-arm. Audio silence is NOT a lost event: guest only ever masks EV_LR (ch1 = 0x400 in all 3758 writes), ch7 WrDec absent from all 6 threads, and 3814-3860 PUTs into port 0 are all-zero payloads from the SPURS kernel. 40/40 ctest, 104 channel checks, mc+gta PASS via tools/regress.sh, RDR 601 flips / abort 23 s unchanged.",
-  "updated": "2026-11-13T08:56Z"
-}

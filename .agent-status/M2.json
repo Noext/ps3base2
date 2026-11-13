@@ -1,9 +1,0 @@
-{
- "status": "done",
- "agent": "M2",
- "task": "cellAudio against RPCS3: every cellAudio*/cellAudioOut* call of the RDR boot logged; the port buffer mapped and its read index advancing, measured; unit tests per structure",
- "branch": "explore/m2",
- "worktree": "/root/Dev/wt-M2",
- "result": "runtime/src/hle/cellAudio.cpp rewritten on top of runtime/src/hle/audio_hle.h (the state machine RPCS3 defines, one function per entry point with its cited line range): exact error-code order NOT_INIT>PARAM>PORT_*, CellAudioPortConfig written field by field as the 32-byte guest layout (readIndexAddr 0 / status 4 / nChannel 8 / nBlock 16 / portSize 24 / portAddr 28 -- status at 4 because a vm pointer is u32), portSize EXACTLY max(1,ch)*blocks*256*4, mapper-sized buffer, port-count and queue-depth from the process SDK version, port start zeroing the buffer, the per-period mixer step publishing every started port's read index as a be u64 and sending one CELL_AUDIO_EVENT_MIX per registered notify queue (BEFOREMIX/NOMIX/DECIMATE_2/DECIMATE_4, source word (pid<<32)+0x0e000000+key_count*0x100). CreateNotifyEventQueue/Set/Remove, GetPortTimestamp, GetPortBlockTag, SetPortLevel and the Add*Data family are implemented too (gta-sa imports AddData; RDR imports only the seven). tests/cellAudio.cpp: 214 checks PASS. Measured live: 598 guest loads of readIndexAddr 0x12180010/14 from [RAGE Audio] Multistream (lr 0x60a724) in a 40 s trap run, 1543 writes by hle::audio::step on the same page; RDR port1 16/16 blocks filled, gta-sa both ports 16/16; A/B vs the origin/main binary in the same minute: 601 flips / abort 23.09 s both. ctest 40/40 post-rebase on 4a5a132. RDR port0 stays 0/8 filled -- the SPU multistream writes zeros that early; stated as open, not as green.",
- "updated": "2026-11-12T22:35:00.000Z"
-}

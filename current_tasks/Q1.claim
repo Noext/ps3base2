@@ -1,5 +1,0 @@
-agent: Q1
-branch: explore/q1
-worktree: /root/Dev/wt-Q1
-task: lift gap at rdr+0xad5618 (unknown indirect target 0x00ae5818, lr 0x00adc030)
-status: running
