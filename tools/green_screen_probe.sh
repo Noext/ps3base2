@@ -60,7 +60,10 @@ while kill -0 "$DRV" 2>/dev/null; do
     echo "green at sample $i"
     break
   fi
-  if [ "$i" -ge 600 ]; then break; fi
+  # Bound by TIME, not by sample count. MEASURED: 600 samples is ~69 s, but the
+  # title reaches the chapter card at ~167 s, so a sample-count bound killed the
+  # driver during loading and the probe never saw the screen it exists to find.
+  if [ "$i" -ge "${MAX_SAMPLES:-900}" ]; then break; fi
 done
 
 # SIGKILL the driver: its finally block would SIGKILL the guest.

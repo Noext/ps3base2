@@ -30,7 +30,8 @@ run_one() {
     if [ -f "$S" ] && python3 "$ROOT/tools/is_green.py" "$S" >/dev/null 2>&1; then
       GREEN=$i; echo "green at $i"; break
     fi
-    [ "$i" -ge 500 ] && break
+    # Time-bounded, not sample-bounded: the card arrives at ~167 s.
+    [ "$i" -ge "${MAX_SAMPLES:-900}" ] && break
   done
   # hold 90 s on the green
   j=0

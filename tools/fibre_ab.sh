@@ -33,7 +33,8 @@ while kill -0 "$DRV" 2>/dev/null; do
   if [ -f "$S" ] && python3 "$ROOT/tools/is_green.py" "$S" >/dev/null 2>&1; then
     echo "green at $i"; GREEN_AT=$i; break
   fi
-  [ "$i" -ge 500 ] && break
+  # Time-bounded, not sample-bounded: the card arrives at ~167 s.
+  [ "$i" -ge "${MAX_SAMPLES:-900}" ] && break
 done
 # hold 120 s on the green, sampling RSS and the flip counter
 HOLD=120; j=0
