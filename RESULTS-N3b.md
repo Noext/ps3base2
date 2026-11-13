@@ -316,3 +316,50 @@ at pc 0x941c/0x943c in measurement 2 are issued from inside those dispatches.
 What measurement 2 got right and is unaffected: the channel tables (they are
 counted per thread access, independent of dispatch accounting), the absent ch7,
 the ch1 = 0x400-only mask, and the 3814 all-zero PUTs -- all re-verified below.
+## Final verification (post-rebase, branch explore/n3b @ origin/main)
+
+Rebased onto origin/main (N5b's audio work had landed) before declaring done:
+
+    $ git fetch /root/Dev/ps3base2 main:refs/remotes/origin/main -f && git rebase origin/main
+    Current branch explore/n3b is up to date.
+    $ git diff origin/main --stat
+     .agent-status/N3b.json              |   8 +
+     RESULTS-N3b.md                      | 318 +++++++++++++++++++++++++
+     current_tasks/N3b.claim             |   6 +
+     runtime/include/spu/channel_state.h | 116 +++++++++++++
+     runtime/src/spu/thread.cpp          | 252 +++++++++++++++++++++----
+     runtime/src/spu/thread.h            |  46 +++++-
+     tests/spu_channel_conformance.cpp   | 104 ++++++++++++
+     7 files changed, 815 insertions(+), 35 deletions(-)
+    $ git diff origin/main --diff-filter=D --name-only
+    (empty)   <- deletes nothing it did not create
+
+### ctest
+
+    $ ctest --test-dir build-rdr -j 8
+    100% tests passed, 0 tests failed out of 40
+
+Run four consecutive times after the rebase, all 40/40. One earlier ctest
+invocation in this session reported 'Errors while running CTest' with no failing
+test named and no failure in LastTest.log; it was taken at loadavg 17.18, and
+the four clean runs afterwards were at loadavg ~13-17. Recorded rather than
+hidden: the one bad invocation is not attributable to this branch's tests
+(spu_channel_conformance passes standalone at 104 checks in every run), but a
+single green result would not have proved that.
+
+### RDR after the rebase, same minute
+
+    main    exit 12, rsx: flip 601, 'The SPURS is aborted.' at 22.73 s
+    branch  exit 12, rsx: flip 601, 'The SPURS is aborted.' at 23.41 s
+
+### The audio PUT finding, re-verified on a third independent run
+
+    $ PS3BASE_DMA_RANGE... GOWA_SPU_DMA=12190000-121a0000  (35 s budget)
+    total PUT/GET lines: 3860
+    non-zero first-64B payloads: 0
+    sizes seen: {'2000': 3860}
+
+Consistent with measurement 2 (3814 on a different run, same shape) and with
+cellAudio's own full-range scan from the other side ('port0 0/8 filled' after
+3751 index writes). cellAudio tests EVERY byte of every block, so '0/8 filled'
+is a whole-payload statement, not a first-64-bytes one.
