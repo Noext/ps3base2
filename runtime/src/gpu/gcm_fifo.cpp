@@ -1,5 +1,6 @@
 #include "gpu/gcm_fifo.h"
 
+#include "gpu/rsx_ring.h"
 #include "runtime/log.h"
 #include "runtime/memory.h"
 #include "runtime/regions.h"
@@ -103,6 +104,11 @@ std::atomic<uint64_t> g_idle_selfjumps{0};
 std::atomic<uint32_t> g_sema_timeouts{0};
 std::atomic<uint32_t> g_unmapped_stops{0};
 std::atomic<bool> g_logged_first_release{false};
+/* H4: where in the GUEST's own ring the method being executed was found, so a
+ * record the page consumes can name the packet that produced it instead of a
+ * position this runtime invented. drain() sets it before each packet's args are
+ * dispatched; execute() forwards it. */
+uint32_t g_cur_io = 0;
 
 inline uint32_t label_base() { return g_ctx ? g_ctx + kReportsOffset : 0; }
 
@@ -206,6 +212,10 @@ void execute(uint32_t method, uint32_t arg) {
     /* Record the method number BEFORE dispatching, so the histogram is the stream
      * as decoded, not as classified. */
     g_method_hist[(method >> 2) & 2047].fetch_add(1, std::memory_order_relaxed);
+    /* H4: hand EVERY method to the ring producer, before the switch interprets it.
+     * The producer classifies and copies payloads; it never writes guest memory.
+     * This one line is the whole seam -- the decode above stays the authority. */
+    gpu::rsxring::on_method(method, arg, g_cur_io);
     switch (method) {
     case 0x0050: /* NV406E_SET_REFERENCE */
         g_regs.last_reference = arg;
@@ -325,6 +335,9 @@ void init(uint32_t context_ea, uint32_t fifo_ea, uint32_t fifo_size) {
      * value the release never produces. Measured: "semaphore acquire never
      * satisfied: 0x00e00030 == 0x1 (now 0x0)". */
     vm::write32(g_ctx + 0x30, 1);
+    /* H4: bind the ring producer's hooks to this runtime now that the io table and
+     * the context exist. Idempotent; the producer keeps no guest state itself. */
+    gpu::rsxring::install_runtime_hooks();
     LOG_INFO("gcmfifo", "reader armed: context=0x%08x control=0x%08x ring=0x%08x size=0x%x put=get=0x%x",
              g_ctx, g_ctx + kControlOffset, g_fifo, g_fifo_size, kRingStart);
 }
@@ -414,7 +427,13 @@ void drain() {
             get = kRingStart;
             ctrl_set_get(get);
         }
-        if (get == put) return;
+        if (get == put) {
+            /* H4: the walk ended, so the last state batch is flushed here rather
+             * than waiting for the next drain -- the page must not see state one
+             * frame late. */
+            gpu::rsxring::on_drain_end();
+            return;
+        }
         const uint32_t ea = io_to_ea_impl(get);
         if (!ea) {
             static std::atomic<int> n{0};
@@ -436,6 +455,7 @@ void drain() {
             return;
         }
         const uint32_t cmd = vm::read32(ea);
+        g_cur_io = get;   /* H4: the packet's own io offset, for the record */
 
         {
             /* Z-DUMP: histogram of the 20 most frequent get offsets over the run. */
