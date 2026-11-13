@@ -4,6 +4,7 @@
 #include "runtime/stacks.h"
 #include "runtime/thread.h"
 #include "runtime/kernel.h"
+#include "runtime/loader.h"
 #include "runtime/log.h"
 #include "runtime/memory.h"
 #include "ppu/ops.h"
@@ -12,6 +13,7 @@
 #include <cstring>
 #include <map>
 #include <string>
+#include <vector>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -98,6 +100,64 @@ void body(std::shared_ptr<Thread> t) {
 }
 
 Thread* current() { return t_current; }
+
+/* The TLS block table, read out of the live VM.
+ *
+ * The PS3 thread pointer is not the block: RPCS3's sys_initialize_tls
+ * (refs/rpcs3 .../sys_ppu_thread_.cpp:90) sets gpr[13] = block + 0x7000 + 0x30
+ * and one thread's block is 0x30 (system area) + tls_memsz. So the block behind
+ * an r13 is r13 - 0x7030, the .tdata image begins at block + 0x30, and the
+ * .tbss tail is everything after the image up to memsz. Printing all three per
+ * thread is what separates "the block is null" from "the block was reused" from
+ * "the block is fine and the pointer is wrong", which are three different bugs
+ * that all present as a fault near a TLS access. */
+void tls_census(const char* why) {
+    const loader::ProcessInfo& pi = loader::g_process;
+    const uint32_t img = pi.tls_vaddr, file = pi.tls_filesz, mem = pi.tls_memsz;
+    const uint32_t block_size = mem + 0x30;
+    LOG_INFO("tls", "census (%s): image 0x%08x file 0x%x mem 0x%x -> block 0x%x (tbss 0x%x)", why ? why : "?", img, file, mem, block_size,
+             mem > file ? mem - file : 0);
+    const bool have_image = img && file && vm::range_mapped(img, file);
+    std::vector<uint8_t> tmpl(have_image ? file : 0);
+    if (have_image) std::memcpy(tmpl.data(), vm::ptr(img), file);
+    std::lock_guard lk(g_lock);
+    LOG_INFO("tls", "census: %zu thread(s) registered", g_threads.size());
+    std::map<uint32_t, std::vector<uint32_t>> owners;
+    int alive = 0, null_tp = 0, tdata_ok = 0, tdata_bad = 0, tbss_ok = 0, tbss_bad = 0;
+    for (auto& [id, t] : g_threads) {
+        const uint32_t tp = static_cast<uint32_t>(t->ctx.gpr[13]);
+        if (!t->exited) alive++;
+        if (!tp) {
+            null_tp++;
+            LOG_INFO("tls", "  0x%08x '%-28s' r13=00000000 -- NO TLS BLOCK", id, t->name.c_str());
+            continue;
+        }
+        const uint32_t blk = tp - 0x7030;
+        const bool mapped = vm::range_mapped(blk, block_size);
+        owners[blk].push_back(id);
+        bool d_ok = false, b_ok = false;
+        if (mapped && have_image && vm::range_mapped(blk + 0x30, mem)) {
+            d_ok = std::memcmp(vm::ptr(blk + 0x30), tmpl.data(), file) == 0;
+            bool zero = true;
+            const uint8_t* p = vm::ptr(blk + 0x30 + file);
+            for (uint32_t i = 0; i < mem - file; i++) {
+                if (p[i]) { zero = false; break; }
+            }
+            b_ok = zero;
+        }
+        (d_ok ? tdata_ok : tdata_bad)++;
+        (b_ok ? tbss_ok : tbss_bad)++;
+        LOG_INFO("tls", "  0x%08x '%-28s' r13=%08x block=%08x mapped=%d tdata=%s tbss=%s %s", id, t->name.c_str(), tp, blk,
+                 mapped ? 1 : 0, d_ok ? "copied" : "NOT-COPIED", b_ok ? "zeroed" : "NOT-ZEROED", t->exited ? "exited" : "");
+    }
+    LOG_INFO("tls", "census: alive %d, null thread-pointer %d, tdata copied %d/not %d, tbss zeroed %d/not %d", alive, null_tp, tdata_ok,
+             tdata_bad, tbss_ok, tbss_bad);
+    for (auto& [blk, ids] : owners) {
+        if (ids.size() < 2) continue;
+        LOG_WARN("tls", "census: block 0x%08x SHARED by %zu threads:", blk, ids.size());
+        for (uint32_t i : ids) LOG_WARN("tls", "    shared with 0x%08x", i);
+    }
+}
 
 void status_dump() {
     stacks::dump();

@@ -66,6 +66,11 @@ std::shared_ptr<Thread> spawn_host(const std::string& name, int32_t prio, uint32
 void join_host(const std::shared_ptr<Thread>& t);
 void remove(uint32_t id);
 void status_dump();
+/* Print the per-thread TLS block table: for every thread, the block its thread
+ * pointer (r13) names, whether the .tdata image was copied into it, whether the
+ * .tbss tail is zero, and whether two threads share one block. Derived entirely
+ * from live state, so it is a measurement rather than a restatement of intent. */
+void tls_census(const char* why);
 void call_opd(ppu::Context& ctx, uint8_t* base, uint32_t opd);
 
 }

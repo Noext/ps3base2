@@ -64,3 +64,52 @@ only 0x120 from the end.
 ### E6. Thread count at the crash (from the run log, ids 0x1000000..0x1000020)
 33 PPU threads: main_thread + 32 guest-created. Not 100s, so a plain "runner out
 of blocks" is not the shape; a TP landing in another thread's block is.
+## MEASURED (gdb, 2026-11-13 10:20-10:26, main HEAD 01c5e16, build-rdr in ps3base2)
+
+Measurement method: break in runtime/src/crash_posix.cpp:354 (the fatal branch,
+after the `once` gate), read the live VM through gdb. Command:
+
+    cd /root/Dev/ps3base2 && ulimit -s unlimited && DISPLAY=:0 \
+      PS3BASE_DISC_DIR=/root/Dev/rdr-port/vfs/dev_bdvd \
+      GOWA_FLASH_DIR=/root/Dev/devflash-out/dev_flash \
+      gdb -q -batch -x /tmp/p2h.gdb --args ./build-rdr/ps3base --no-launcher
+
+### M1. The TLS image and the per-thread block size, from live state
+    P2TLSIMG vaddr=0x1397654 filesz=0x54 memsz=0x444 blocksize=0x474 tbss=0x3f0
+    P2TPLMATCH True            <- guest copy of .tdata at 0x1397654 equals the file
+From loader::g_process in the live process, and the .tdata template read back out
+of guest memory byte-for-byte (bin/rdr/EBOOT.elf ph5).
+
+### M2. r13=0x10007060 is block 0's thread pointer, exactly
+    block = r13 - 0x7030 = 0x10000030
+    .tdata for that thread = block+0x30 = 0x10000060 and r13-0x7000 == 0x10000060
+Both identities hold: (0x10007060-0x7000-0x30) == 0x10000030 -> True.
+So the crash thread's thread pointer names the right block. Not a null block, and
+not another thread's block by the runtime's own bookkeeping.
+
+### M3. The block that r13 names IS initialised (raw bytes at the fault)
+    BLK0+0x30 (0x10000060): 00000000 00000000 00000000 00000000 00000000 00000000
+    01000000 00000002 00000000 00000000 705621d0 705622c0 00000037 ... 1671dafd 011807c0
+    .tdata template (ph5):  00000000 ... 00000000 ffffffff 00000003 00000000 ...
+                                      ... 00000000 00000001 011807c0
+The image was copied, then the guest wrote its own TLS variables (words 6-7 and
+19 differ; 0x011807c0 and 0x1671dafd are the untouched shared values). This is a
+live, initialised TLS block, not a zeroed one.
+
+### M4. THE WINDOW THE CRASH REPORTER PRINTS IS NOT TLS DATA
+crash_posix.cpp:378-390 dumps r13-64 .. r13+64. Measured at the fault:
+    P2CRASHWIN_LO 0x10007020: 96 zero bytes
+    P2CRASHWIN_HI 0x100070a0: 96 bytes, one nonzero 0x1a at offset 0x13
+So "all zero" is true of that window and is EXPECTED: the 0x7000 bytes above a
+thread's .tdata are the unused gap between the thread pointer and its own block.
+TLS data for a thread is at TP-0x7000, never at TP. The reporter's window cannot
+see TLS, so its "all zero" says nothing about the block -- this is a diagnostic
+artifact, not a finding.
+
+### M5. The arithmetic that explains why the gap exists at all
+Blocks are 0x474 apart; every thread pointer is block+0x7030. 0x7030/0x474 =
+15.06, so a thread's TP window physically overlaps block 25 of the arena:
+r13=0x10007060 lies inside block index (0x10006f84..0x100073f7). Unused gap for
+thread 0, live storage for thread 25 - which is exactly RPCS3's layout
+(sys_ppu_thread_.cpp:79-90: s_tls_area of 0x40000, s_tls_size=memsz+0x30,
+TP=block+0x7000+0x30) and is only safe while nothing reads the gap.

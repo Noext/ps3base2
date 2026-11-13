@@ -374,6 +374,11 @@ void fault_handler(int sig, siginfo_t* si, void* ctx) {
             off += std::snprintf(regs + off, sizeof regs - off, " r%d=0x%llx", i,
                                  static_cast<unsigned long long>(c.gpr[i]));
         LOG_ERROR("crash", "  guest regs:%s", regs);
+        /* The whole TLS block table, not just this thread's window. A crash at
+         * a small guest offset is a TLS fault until proven otherwise, and the
+         * question is which thread's block the pointer names -- which the one
+         * window cannot answer. */
+        guest::tls_census("crash");
         {
             /* r13 is the thread control block; the liblv2 accessor reads a field
              * from it. Dump it whenever it is mapped. */
