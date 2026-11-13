@@ -243,3 +243,55 @@ same null+0x10 SIGSEGV at guest 0x10 inside f_0053338c.
 
 Evidence: docs/evidence/rdr-p4-warning-new-save.png (the new-save warning),
 and /tmp/p4drive_loopE/caps/LOADING-0084.png (the loading after it).
+### M8 -- the driver is now a repo tool, and it reports ALERT, WARNING, LOADING as three states
+
+Added tools/drive_rdr.py (source, not just a transcript): grab -> OCR two bands
+-> classify -> press, journaled. It encodes the four things this task cost to
+learn:
+
+1. CLOSED LOOP, because start-up is not a fixed cost. Measured on this machine,
+   time-to-title for the SAME binary and VFS:
+
+       load 12 : 23.67 s      (run /tmp/p4tool)
+       load 30 : 42.57 s      (run loopD)
+       load >30: 56.55 s      (run /tmp/p4tool2)
+
+   A fixed schedule that presses START at t=40 s therefore hits the title on one
+   run and the intro on the next. That is why three earlier runs pressed into a
+   black frame.
+
+2. TWO OCR BANDS, centre tested first. RDR draws its dialogues over a
+   transparent red frame and the main menu's rows stay legible underneath, so a
+   single wide band reads 'Single Player' on the ALERT and calls it a menu --
+   measured, and it cost a run (M3's journal labels the ALERT as MENU).
+
+3. ALERT and WARNING are DISTINCT states. Both are the same red panel; only the
+   body text separates them. Folding them together (which my first tool version
+   did) means the driver cannot report having seen the screen it was asked for.
+
+4. An empty savedata/ is a precondition, and the tool REFUSES to run otherwise:
+
+       $ tools/drive_rdr.py rdrx :145 vfs-clean /tmp/x
+       drive_rdr: .../dev_hdd0/home/00000001/savedata is not empty; RDR will
+                  load a save instead of prompting.
+       exit 2
+
+   This guard earned itself immediately: my own earlier runs had written saves
+   back into the VFS, so the next run would have silently tested the wrong path.
+
+Verified end to end, run /tmp/p4tool2 (the committed tool, unmodified):
+
+     56.55 STATE TITLE     Press START
+     62.87 STATE MENU      Online Multiplayer / Downloadable Content / Single Player
+     88.62 STATE ALERT     A Red Dead Redemption single player save could not be found.
+     88.62 -> square (alert action 1 of 2)
+     89.94 -> cross (alert action 2 of 2)
+     91.39 STATE WARNING   Autosave has been disabled. You may enable autosave in the options menu.
+     92.53 STATE LOADING   Loading...
+     exit -11 elapsed 95.4
+
+   states {"OTHER":58,"TITLE":3,"MENU":9,"ALERT":2,"WARNING":1,"LOADING":1}
+
+The WARNING frame from that run is committed as
+docs/evidence/rdr-p4-warning-tool.png -- produced by the committed tool, so the
+evidence and the tool cannot drift apart.
