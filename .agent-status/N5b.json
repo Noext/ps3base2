@@ -4,6 +4,8 @@
   "branch": "explore/N5b",
   "worktree": "/root/Dev/wt-N5b",
   "results": "/root/Dev/wt-N5b/RESULTS-N5b.md",
-  "base": "202e9efa43360e3261ccd31b4d7ab84304609dc1",
-  "updated": "2026-11-13T07:22:00Z"
+  "base": "202e9ef",
+  "last_measurement": 1,
+  "finding": "RDR calls no notify-queue function at all; mixer clock 187.4 periods/s (5.337ms)",
+  "updated": "2026-11-13T07:33:08.690004Z"
 }
